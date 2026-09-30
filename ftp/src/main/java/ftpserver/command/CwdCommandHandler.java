@@ -1,0 +1,34 @@
+package ftpserver.command;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import ftpserver.core.ClientSession;
+import ftpserver.core.CommandHandler;
+import ftpserver.core.FtpReply;
+
+public final class CwdCommandHandler implements CommandHandler {
+
+    @Override public boolean requiresAuth()  { return true; }
+    @Override public boolean requiresWrite() { return false; }
+
+    @Override
+    public void handle(ClientSession session, String arg) {
+        if (arg == null || arg.isBlank()) {
+            session.reply(FtpReply.SYNTAX_ERROR_PARAMS, "Missing directory name");
+            return;
+        }
+        try {
+            Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
+            if (!Files.isDirectory(target)) {
+                session.reply(FtpReply.FILE_UNAVAILABLE, "Directory not found");
+                return;
+            }
+            session.setCurrentDir(target);
+            session.reply(FtpReply.FILE_ACTION_OK, "Directory changed to "
+                    + session.pathResolver().toVirtualPath(target));
+        } catch (SecurityException e) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
+        }
+    }
+}
