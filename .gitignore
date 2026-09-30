@@ -1,0 +1,43 @@
+# Maven / Java build output
+target/
+*.class
+*.jar
+*.war
+*.log
+hs_err_pid*
+!.mvn/wrapper/maven-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Eclipse / NetBeans
+.classpath
+.project
+.settings/
+.apt_generated
+.factorypath
+/nbproject/private/
+/nbbuild/
+/dist/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python (scripts kiểm thử)
+__pycache__/
+*.pyc
+.venv/
+
+# File tạm khi test upload/download FTP
+ftp/ftproot/*
+!ftp/ftproot/readme.txt
+!ftp/ftproot/docs/
+!ftp/ftproot/docs/sample.txt
