@@ -3,6 +3,7 @@ package ftpserver;
 import java.nio.file.Path;
 
 import ftpserver.auth.UserManager;
+import ftpserver.bin.BinaryServer;
 import ftpserver.config.Config;
 import ftpserver.core.CommandRegistrations;
 import ftpserver.core.CommandRegistry;
@@ -38,6 +39,12 @@ public final class Main {
 
         FtpServer server = new FtpServer(config, userManager, pathResolver, registry);
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
+
+        if (config.binPort() > 0) {
+            BinaryServer binary = new BinaryServer(config, userManager, pathResolver);
+            Runtime.getRuntime().addShutdownHook(new Thread(binary::stop));
+            binary.start();
+        }
 
         server.start();
     }

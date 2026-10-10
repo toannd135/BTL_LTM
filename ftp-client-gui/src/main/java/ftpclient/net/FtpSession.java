@@ -1,7 +1,6 @@
 package ftpclient.net;
 
 import java.io.BufferedReader;
-import java.io.Closeable;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -11,6 +10,8 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,11 +23,7 @@ import java.util.regex.Pattern;
  * Lop thuan Java, KHONG import javafx.* — tach hoan toan logic mang khoi giao dien,
  * de test duoc bang JUnit / chay tay ma khong can mo cua so nao ca.
  */
-public class FtpSession implements Closeable {
-
-    public interface LogListener {
-        void onLine(String direction, String line); // direction: "SEND" hoac "RECV"
-    }
+public class FtpSession implements RemoteSession {
 
     private static final Pattern PASV_PATTERN = Pattern.compile("\\((\\d+,\\d+,\\d+,\\d+,\\d+,\\d+)\\)");
 
@@ -36,10 +33,12 @@ public class FtpSession implements Closeable {
     private LogListener logListener = (dir, line) -> {
     };
 
+    @Override
     public void setLogListener(LogListener listener) {
         this.logListener = listener;
     }
 
+    @Override
     public void connect(String host, int port) throws IOException {
         control = new Socket();
         control.connect(new InetSocketAddress(host, port), 5000);
@@ -79,11 +78,14 @@ public class FtpSession implements Closeable {
         throw new FtpException(code, reply.length() > 4 ? reply.substring(4) : reply);
     }
 
-    public void login(String user, String pass) throws IOException, FtpException {
+    @Override
+    public String login(String user, String pass) throws IOException, FtpException {
         requireOk(sendAndRead("USER " + user), 331, 230);
         requireOk(sendAndRead("PASS " + pass), 230);
+        return "ftp";
     }
 
+    @Override
     public String pwd() throws IOException, FtpException {
         String reply = requireOk(sendAndRead("PWD"), 257);
         int start = reply.indexOf('"');
@@ -91,22 +93,27 @@ public class FtpSession implements Closeable {
         return reply.substring(start + 1, end);
     }
 
+    @Override
     public void cwd(String path) throws IOException, FtpException {
         requireOk(sendAndRead("CWD " + path), 250);
     }
 
+    @Override
     public void cdup() throws IOException, FtpException {
         requireOk(sendAndRead("CDUP"), 250);
     }
 
+    @Override
     public void mkd(String name) throws IOException, FtpException {
         requireOk(sendAndRead("MKD " + name), 257);
     }
 
+    @Override
     public void rmd(String name) throws IOException, FtpException {
         requireOk(sendAndRead("RMD " + name), 250);
     }
 
+    @Override
     public void dele(String name) throws IOException, FtpException {
         requireOk(sendAndRead("DELE " + name), 250);
     }
@@ -115,7 +122,7 @@ public class FtpSession implements Closeable {
         String reply = requireOk(sendAndRead("PASV"), 227);
         Matcher m = PASV_PATTERN.matcher(reply);
         if (!m.find()) {
-            throw new FtpException(500, "Khong doc duoc dia chi PASV: " + reply);
+            throw new FtpException(500, "Không đọc được địa chỉ PASV: " + reply);
         }
         String[] p = m.group(1).split(",");
         String ip = p[0] + "." + p[1] + "." + p[2] + "." + p[3];
@@ -125,6 +132,7 @@ public class FtpSession implements Closeable {
         return data;
     }
 
+    @Override
     public List<RemoteFile> list() throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("LIST"), 150, 125);
@@ -198,6 +206,7 @@ public class FtpSession implements Closeable {
         requireOk(readReply(), 226);
     }
 
+    @Override
     public void quit() {
         try {
             if (writer != null) {
@@ -215,5 +224,42 @@ public class FtpSession implements Closeable {
             }
         } catch (IOException ignored) {
         }
+    }
+
+    @Override
+    public String download(String name, Path dest, long expectedSize, Progress progress)
+            throws IOException, FtpException {
+        try (OutputStream out = Files.newOutputStream(dest)) {
+            retr(name, out, bytes -> progress.update(bytes, Math.max(expectedSize, 1)));
+        }
+        return "FTP chuẩn (không có kiểm tra checksum)";
+    }
+
+    @Override
+    public String upload(String name, Path src, Progress progress) throws IOException, FtpException {
+        long total = Math.max(Files.size(src), 1);
+        try (InputStream in = Files.newInputStream(src)) {
+            stor(name, in, bytes -> progress.update(bytes, total));
+        }
+        return "FTP chuẩn (không có kiểm tra checksum)";
+    }
+
+    @Override
+    public boolean canWrite() {
+        return true;
+    }
+
+    @Override
+    public boolean canDelete() {
+        return true;
+    }
+
+    @Override
+    public boolean supportsResume() {
+        return false;
+    }
+
+    @Override
+    public void cancelTransfer() {
     }
 }
