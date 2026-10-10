@@ -13,7 +13,10 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 import ftpserver.auth.User;
@@ -26,6 +29,10 @@ class BinaryClientHandler implements Runnable {
 
     private static final int CHUNK = 32 * 1024;
     private static final int MAX_AUTH_FAILURES = 3;
+    /** PUT ghi vao "<ten>.part", xong moi doi ten; resume dua tren kich thuoc file .part. */
+    static final String PART_SUFFIX = ".part";
+    /** File dich dang duoc PUT; chan hai client cung ghi mot file. */
+    private static final Set<Path> UPLOADS_IN_PROGRESS = ConcurrentHashMap.newKeySet();
 
     /** Loi nghiep vu: gui ERROR cho client nhung giu nguyen ket noi. */
     private static final class RequestException extends Exception {
@@ -77,6 +84,10 @@ class BinaryClientHandler implements Runnable {
                     }
                 } catch (RequestException e) {
                     sendError(e.code, e.getMessage());
+                    if (authFailures >= MAX_AUTH_FAILURES) {
+                        System.out.println("[bftp] too many auth failures, closing " + peer);
+                        break;
+                    }
                 } catch (SecurityException e) {
                     sendError(Frame.E_FORBIDDEN, "Duong dan ngoai thu muc goc");
                 }
@@ -95,8 +106,8 @@ class BinaryClientHandler implements Runnable {
     private boolean dispatch(Frame f) throws IOException, RequestException {
         DataInputStream r = f.reader();
         if (f.type() == Frame.AUTH) {
-            handleAuth(r);
-            return authFailures < MAX_AUTH_FAILURES;
+            handleAuth(r); // sai mat khau -> nem RequestException, vong lap o run() dem va ngat ket noi
+            return true;
         }
         if (f.type() == Frame.QUIT) {
             reply(Frame.OK, new byte[0]);
@@ -249,7 +260,8 @@ class BinaryClientHandler implements Runnable {
             while (!aborted && (n = raf.read(buf)) > 0) {
                 byte[] chunk = n == buf.length ? buf : java.util.Arrays.copyOf(buf, n);
                 Frame.write(out, Frame.DATA, chunk);
-                // client co the chen DATA_ABORT giua luc dang nhan
+                // client co the chen DATA_ABORT giua luc dang nhan. available() chi thay khung da
+                // nam trong buffer; DATA_ABORT den sau DATA_END duoc dispatch() bo qua.
                 if (in.available() > 0) {
                     Frame next = Frame.read(in);
                     if (next.type() != Frame.DATA_ABORT) {
@@ -272,15 +284,27 @@ class BinaryClientHandler implements Runnable {
         if (p.getParent() == null || !Files.isDirectory(p.getParent())) {
             throw new RequestException(Frame.E_NOT_FOUND, "Thu muc cha khong ton tai");
         }
-        long existing = Files.exists(p) ? Files.size(p) : 0;
+        if (!UPLOADS_IN_PROGRESS.add(p)) {
+            throw new RequestException(Frame.E_CONFLICT, "File dang duoc client khac tai len");
+        }
+        try {
+            receivePut(path, p, offset);
+        } finally {
+            UPLOADS_IN_PROGRESS.remove(p);
+        }
+    }
+
+    private void receivePut(String path, Path p, long offset) throws IOException, RequestException {
+        Path part = p.resolveSibling(p.getFileName() + PART_SUFFIX);
+        long existing = Files.exists(part) ? Files.size(part) : 0;
         if (offset < 0 || offset > existing) {
             throw new RequestException(Frame.E_CONFLICT,
-                    "Offset " + offset + " vuot do dai file tren server " + existing);
+                    "Offset " + offset + " vuot do dai file .part tren server " + existing);
         }
         reply(Frame.OK, new byte[0]);
 
         boolean aborted = false;
-        try (RandomAccessFile raf = new RandomAccessFile(p.toFile(), "rw")) {
+        try (RandomAccessFile raf = new RandomAccessFile(part.toFile(), "rw")) {
             raf.setLength(offset);
             raf.seek(offset);
             while (true) {
@@ -298,10 +322,11 @@ class BinaryClientHandler implements Runnable {
             }
         }
         if (aborted) {
-            // giu lai phan da nhan de client resume
-            sendError(Frame.E_ABORTED, "Da huy; giu " + Files.size(p) + " byte");
+            // giu lai file .part de client resume; file dich cu khong bi dong toi
+            sendError(Frame.E_ABORTED, "Da huy; giu " + Files.size(part) + " byte");
             return;
         }
+        Files.move(part, p, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         long total = Files.size(p);
         byte[] hash = Hashing.sha256(p, -1);
         System.out.println("[bftp] PUT " + path + " from " + offset + " total=" + total + " " + peer);
