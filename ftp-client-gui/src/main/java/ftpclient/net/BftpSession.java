@@ -295,8 +295,10 @@ public class BftpSession implements RemoteSession {
         String path = abs(name);
         long total = Files.size(src);
 
-        DataInputStream st = request(BftpFrame.STAT, "STAT " + path,
-                BftpFrame.pack(d -> d.writeUTF(path)), BftpFrame.STAT_RESP).reader();
+        // server ghi vao "<ten>.part" va chi doi ten khi xong, nen resume dua tren file .part
+        String part = path + BftpFrame.PART_SUFFIX;
+        DataInputStream st = request(BftpFrame.STAT, "STAT " + part,
+                BftpFrame.pack(d -> d.writeUTF(part)), BftpFrame.STAT_RESP).reader();
         boolean exists = st.readBoolean();
         boolean isDir = st.readBoolean();
         long remote = st.readLong();
@@ -304,7 +306,7 @@ public class BftpSession implements RemoteSession {
         long offset = 0;
         String note = "";
         if (exists && !isDir && remote > 0 && remote <= total
-                && Arrays.equals(localHash(src, remote), remoteHash(path, remote))) {
+                && Arrays.equals(localHash(src, remote), remoteHash(part, remote))) {
             offset = remote;
             note = "tiếp tục từ " + remote + " byte; ";
         }

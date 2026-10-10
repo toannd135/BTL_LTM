@@ -2,6 +2,7 @@ package ftpserver.bin;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.DataInputStream;
@@ -139,12 +140,13 @@ class BinaryServerTest {
             Frame.write(c.out, Frame.DATA_ABORT, new byte[0]);
             assertEquals(499, c.errorCode(Frame.read(c.in)));
         }
-        assertEquals(half, Files.size(root.resolve("big.bin")));
+        assertEquals(half, Files.size(root.resolve("big.bin.part")));
+        assertTrue(Files.notExists(root.resolve("big.bin")));
 
         try (Conn c = new Conn(server.port())) {
             c.login("ed", "e");
             // client xac minh prefix bang HASH roi moi resume
-            Frame h = c.call(Frame.HASH, d -> { d.writeUTF("/big.bin"); d.writeLong(half); });
+            Frame h = c.call(Frame.HASH, d -> { d.writeUTF("/big.bin.part"); d.writeLong(half); });
             assertArrayEquals(sha(data, half), h.payload());
 
             assertEquals(Frame.OK, c.call(Frame.PUT, d -> { d.writeUTF("/big.bin"); d.writeLong(half); }).type());
@@ -158,6 +160,45 @@ class BinaryServerTest {
             assertArrayEquals(sha(data, data.length), hash);
         }
         assertArrayEquals(data, Files.readAllBytes(root.resolve("big.bin")));
+        assertTrue(Files.notExists(root.resolve("big.bin.part")));
+    }
+
+    @Test
+    void tooManyAuthFailures_closesConnection() throws Exception {
+        try (Conn c = new Conn(server.port())) {
+            for (int i = 0; i < 3; i++) {
+                assertEquals(401, c.errorCode(c.login("admin", "wrong")));
+            }
+            // server da dong ket noi: lan dang nhap thu 4 (du dung mat khau) khong duoc tra loi
+            assertThrows(IOException.class, () -> c.login("admin", "a"));
+        }
+    }
+
+    @Test
+    void abortedPut_keepsOldFileIntact() throws Exception {
+        Files.writeString(root.resolve("keep.txt"), "old content");
+        try (Conn c = new Conn(server.port())) {
+            c.login("ed", "e");
+            assertEquals(Frame.OK, c.call(Frame.PUT, d -> { d.writeUTF("/keep.txt"); d.writeLong(0); }).type());
+            Frame.write(c.out, Frame.DATA, "new".getBytes());
+            Frame.write(c.out, Frame.DATA_ABORT, new byte[0]);
+            assertEquals(499, c.errorCode(Frame.read(c.in)));
+        }
+        assertEquals("old content", Files.readString(root.resolve("keep.txt")));
+    }
+
+    @Test
+    void concurrentPutToSameFile_isConflict() throws Exception {
+        try (Conn a = new Conn(server.port()); Conn b = new Conn(server.port())) {
+            a.login("ed", "e");
+            b.login("ed", "e");
+            assertEquals(Frame.OK, a.call(Frame.PUT, d -> { d.writeUTF("/same.bin"); d.writeLong(0); }).type());
+            assertEquals(409, b.errorCode(b.call(Frame.PUT, d -> { d.writeUTF("/same.bin"); d.writeLong(0); })));
+            Frame.write(a.out, Frame.DATA, "abc".getBytes());
+            Frame.write(a.out, Frame.DATA_END, new byte[0]);
+            assertEquals(Frame.PUT_DONE, Frame.read(a.in).type());
+        }
+        assertEquals("abc", Files.readString(root.resolve("same.bin")));
     }
 
     @Test
