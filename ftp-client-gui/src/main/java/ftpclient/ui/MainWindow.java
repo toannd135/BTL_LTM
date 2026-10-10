@@ -1,8 +1,6 @@
 package ftpclient.ui;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -20,7 +18,10 @@ import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ProgressBar;
@@ -36,27 +37,42 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
 
+import ftpclient.net.BftpSession;
 import ftpclient.net.FtpSession;
 import ftpclient.net.RemoteFile;
+import ftpclient.net.RemoteSession;
 
-/** Toan bo giao dien duoc dung bang code (khong dung FXML) de don gian hoa build. */
+/** Toàn bộ giao diện được dựng bằng code (không dùng FXML) để đơn giản hóa build. */
 public class MainWindow {
 
-    /** Mot thread rieng cho toan bo giao tiep FTP — control connection la tuan tu,
-     *  hai thread cung goi lenh se lam dap ung tra ve lan lon. */
-    private final ExecutorService ftpWorker = Executors.newSingleThreadExecutor(r -> {
+    private static final String PROTO_FTP = "FTP chuẩn";
+    private static final String PROTO_BFTP = "BFTP nhị phân";
+
+    /** Một thread riêng cho toàn bộ giao tiếp với server — control connection là tuần tự,
+     *  hai thread cùng gọi lệnh sẽ làm đáp ứng trả về lẫn lộn. */
+    private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "ftp-worker");
         t.setDaemon(true);
         return t;
     });
 
-    private final FtpSession session = new FtpSession();
+    private volatile RemoteSession session = newSession(PROTO_FTP);
+    private volatile boolean connected;
 
+    private ChoiceBox<String> protocolBox;
     private TextField hostField;
     private TextField portField;
     private TextField userField;
     private PasswordField passField;
     private Button connectButton;
+    private Label roleLabel;
+    private Button refreshBtn;
+    private Button upBtn;
+    private Button mkdBtn;
+    private Button uploadBtn;
+    private Button downloadBtn;
+    private Button deleteBtn;
+    private Button cancelBtn;
     private TableView<RemoteFile> remoteTable;
     private TableView<LocalFile> localTable;
     private TextField localPathField;
@@ -67,9 +83,6 @@ public class MainWindow {
     private Path localDir = Paths.get(System.getProperty("user.home"));
 
     public Scene buildScene() {
-        session.setLogListener((dir, line) ->
-                Platform.runLater(() -> appendLog((dir.equals("SEND") ? "> " : "< ") + line)));
-
         BorderPane root = new BorderPane();
         root.setTop(buildTopArea());
         root.setCenter(buildCenterArea());
@@ -77,12 +90,33 @@ public class MainWindow {
         root.setPadding(new Insets(6));
 
         refreshLocalTable();
-        setConnected(false);
+        setConnected(false, "");
 
-        return new Scene(root, 1000, 650);
+        return new Scene(root, 1100, 680);
+    }
+
+    private RemoteSession newSession(String protocol) {
+        RemoteSession s = protocol.equals(PROTO_BFTP) ? new BftpSession() : new FtpSession();
+        s.setLogListener((dir, line) ->
+                Platform.runLater(() -> appendLog((dir.equals("SEND") ? "> " : "< ") + line)));
+        return s;
+    }
+
+    /** Gọi khi đóng cửa sổ. */
+    public void shutdown() {
+        RemoteSession s = session;
+        if (connected) {
+            s.quit();
+        }
+        s.close();
+        worker.shutdownNow();
     }
 
     private VBox buildTopArea() {
+        protocolBox = new ChoiceBox<>(FXCollections.observableArrayList(PROTO_FTP, PROTO_BFTP));
+        protocolBox.setValue(PROTO_FTP);
+        protocolBox.valueProperty().addListener((o, old, now) ->
+                portField.setText(now.equals(PROTO_BFTP) ? "2122" : "2121"));
         hostField = new TextField("localhost");
         hostField.setPrefWidth(120);
         portField = new TextField("2121");
@@ -92,22 +126,24 @@ public class MainWindow {
         passField = new PasswordField();
         passField.setText("123456");
         passField.setPrefWidth(100);
-        connectButton = new Button("Ket noi");
+        connectButton = new Button("Kết nối");
         connectButton.setOnAction(e -> onConnectClicked());
+        roleLabel = new Label();
 
         HBox connectionBar = new HBox(6,
-                new Label("Host:"), hostField,
-                new Label("Port:"), portField,
-                new Label("User:"), userField,
-                new Label("Pass:"), passField,
-                connectButton);
+                new Label("Giao thức:"), protocolBox,
+                new Label("Máy chủ:"), hostField,
+                new Label("Cổng:"), portField,
+                new Label("Tài khoản:"), userField,
+                new Label("Mật khẩu:"), passField,
+                connectButton, roleLabel);
         connectionBar.setPadding(new Insets(4));
 
-        Button refreshBtn = new Button("Lam moi");
+        refreshBtn = new Button("Làm mới");
         refreshBtn.setOnAction(e -> refreshRemoteTable());
-        Button upBtn = new Button("Len thu muc cha");
+        upBtn = new Button("Lên thư mục cha");
         upBtn.setOnAction(e -> onUpClicked());
-        Button mkdBtn = new Button("Tao thu muc");
+        mkdBtn = new Button("Tạo thư mục");
         mkdBtn.setOnAction(e -> onMkdClicked());
 
         HBox toolBar = new HBox(6, refreshBtn, upBtn, mkdBtn);
@@ -120,9 +156,9 @@ public class MainWindow {
         localPathField = new TextField();
         localPathField.setEditable(false);
         localTable = new TableView<>();
-        localTable.getColumns().add(localCol("Ten", LocalFile::name, 220));
-        localTable.getColumns().add(localCol("Kich thuoc", LocalFile::sizeText, 100));
-        localTable.getColumns().add(localCol("Ngay sua", LocalFile::modified, 140));
+        localTable.getColumns().add(localCol("Tên", LocalFile::name, 220));
+        localTable.getColumns().add(localCol("Kích thước", LocalFile::sizeText, 100));
+        localTable.getColumns().add(localCol("Ngày sửa", LocalFile::modified, 140));
         localTable.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
                 LocalFile sel = localTable.getSelectionModel().getSelectedItem();
@@ -139,43 +175,31 @@ public class MainWindow {
                 }
             }
         });
-        Button uploadBtn = new Button("Tai len ->");
+        uploadBtn = new Button("Tải lên →");
         uploadBtn.setOnAction(e -> onUploadClicked());
-        VBox localBox = new VBox(4, new Label("May cuc bo"), localPathField, localTable, uploadBtn);
+        VBox localBox = new VBox(4, new Label("Máy cục bộ"), localPathField, localTable, uploadBtn);
         VBox.setVgrow(localTable, Priority.ALWAYS);
 
-        remotePathField = new TextField("(chua ket noi)");
+        remotePathField = new TextField("(chưa kết nối)");
         remotePathField.setEditable(false);
         remoteTable = new TableView<>();
-        remoteTable.getColumns().add(remoteCol("Ten", RemoteFile::name, 220));
-        remoteTable.getColumns().add(remoteCol("Kich thuoc", f -> String.valueOf(f.size()), 100));
-        remoteTable.getColumns().add(remoteCol("Ngay sua", RemoteFile::modified, 140));
+        remoteTable.getColumns().add(remoteCol("Tên", RemoteFile::name, 220));
+        remoteTable.getColumns().add(remoteCol("Kích thước", f -> f.directory() ? "" : String.valueOf(f.size()), 100));
+        remoteTable.getColumns().add(remoteCol("Ngày sửa", RemoteFile::modified, 140));
         remoteTable.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
                 RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
                 if (sel != null && sel.directory()) {
-                    ftpWorker.submit(() -> {
-                        try {
-                            session.cwd(sel.name());
-                            List<RemoteFile> files = session.list();
-                            String pwd = session.pwd();
-                            Platform.runLater(() -> {
-                                remotePathField.setText(pwd);
-                                remoteTable.setItems(FXCollections.observableArrayList(files));
-                            });
-                        } catch (Exception ex) {
-                            Platform.runLater(() -> appendLog("LOI: " + ex.getMessage()));
-                        }
-                    });
+                    runRemote(() -> session.cwd(sel.name()));
                 }
             }
         });
-        Button downloadBtn = new Button("<- Tai ve");
+        downloadBtn = new Button("← Tải về");
         downloadBtn.setOnAction(e -> onDownloadClicked());
-        Button deleteBtn = new Button("Xoa");
+        deleteBtn = new Button("Xóa");
         deleteBtn.setOnAction(e -> onDeleteClicked());
         HBox remoteButtons = new HBox(6, downloadBtn, deleteBtn);
-        VBox remoteBox = new VBox(4, new Label("May chu"), remotePathField, remoteTable, remoteButtons);
+        VBox remoteBox = new VBox(4, new Label("Máy chủ"), remotePathField, remoteTable, remoteButtons);
         VBox.setVgrow(remoteTable, Priority.ALWAYS);
 
         SplitPane split = new SplitPane(localBox, remoteBox);
@@ -186,8 +210,11 @@ public class MainWindow {
     private VBox buildBottomArea() {
         progressBar = new ProgressBar(0);
         progressBar.setPrefWidth(300);
-        progressLabel = new Label("San sang");
-        HBox progressBox = new HBox(8, progressLabel, progressBar);
+        progressLabel = new Label("Sẵn sàng");
+        cancelBtn = new Button("Hủy truyền");
+        cancelBtn.setDisable(true);
+        cancelBtn.setOnAction(e -> session.cancelTransfer());
+        HBox progressBox = new HBox(8, progressLabel, progressBar, cancelBtn);
         progressBox.setPadding(new Insets(4));
 
         logArea = new TextArea();
@@ -195,106 +222,129 @@ public class MainWindow {
         logArea.setPrefRowCount(8);
         logArea.setFont(Font.font("Monospaced", 12));
 
-        return new VBox(4, progressBox, new Label("Nhat ky giao thuc:"), logArea);
+        return new VBox(4, progressBox, new Label("Nhật ký giao thức:"), logArea);
     }
 
-    // ---------------- actions ----------------
+    // ---------------- thao tác ----------------
+
+    @FunctionalInterface
+    private interface RemoteAction {
+        void run() throws Exception;
+    }
+
+    /** Chạy một thao tác thư mục trên worker rồi nạp lại bảng từ xa; lỗi hiện ở nhật ký và hộp thoại. */
+    private void runRemote(RemoteAction action) {
+        worker.submit(() -> {
+            try {
+                action.run();
+                List<RemoteFile> files = session.list();
+                String pwd = session.pwd();
+                Platform.runLater(() -> showRemote(pwd, files));
+            } catch (Exception ex) {
+                Platform.runLater(() -> showError(ex));
+            }
+        });
+    }
+
+    private void showRemote(String pwd, List<RemoteFile> files) {
+        remotePathField.setText(pwd);
+        remoteTable.setItems(FXCollections.observableArrayList(files));
+    }
+
+    private void showError(Throwable ex) {
+        appendLog("LỖI: " + ex.getMessage());
+        Alert a = new Alert(Alert.AlertType.ERROR, String.valueOf(ex.getMessage()), ButtonType.OK);
+        a.setHeaderText("Thao tác thất bại");
+        a.show();
+    }
 
     private void onConnectClicked() {
-        if (connectButton.getText().equals("Ket noi")) {
+        if (!connected) {
             String host = hostField.getText().trim();
             int port;
             try {
                 port = Integer.parseInt(portField.getText().trim());
             } catch (NumberFormatException e) {
-                appendLog("Cong khong hop le: " + portField.getText());
+                appendLog("Cổng không hợp lệ: " + portField.getText());
                 return;
             }
             String user = userField.getText().trim();
             String pass = passField.getText();
+            session = newSession(protocolBox.getValue());
+            RemoteSession s = session;
             connectButton.setDisable(true);
-            ftpWorker.submit(() -> {
+            worker.submit(() -> {
                 try {
-                    session.connect(host, port);
-                    session.login(user, pass);
-                    List<RemoteFile> files = session.list();
-                    String pwd = session.pwd();
+                    s.connect(host, port);
+                    String role = s.login(user, pass);
+                    List<RemoteFile> files = s.list();
+                    String pwd = s.pwd();
                     Platform.runLater(() -> {
-                        setConnected(true);
-                        remotePathField.setText(pwd);
-                        remoteTable.setItems(FXCollections.observableArrayList(files));
+                        setConnected(true, role);
+                        showRemote(pwd, files);
                         connectButton.setDisable(false);
                     });
                 } catch (Exception ex) {
+                    s.close();
                     Platform.runLater(() -> {
-                        appendLog("LOI KET NOI: " + ex.getMessage());
+                        appendLog("LỖI KẾT NỐI: " + ex.getMessage());
+                        showError(ex);
                         connectButton.setDisable(false);
                     });
                 }
             });
         } else {
-            ftpWorker.submit(() -> {
-                session.quit();
-                session.close();
-                Platform.runLater(() -> setConnected(false));
+            RemoteSession s = session;
+            worker.submit(() -> {
+                s.quit();
+                s.close();
+                Platform.runLater(() -> setConnected(false, ""));
             });
         }
     }
 
-    private void setConnected(boolean connected) {
-        connectButton.setText(connected ? "Ngat ket noi" : "Ket noi");
-        hostField.setDisable(connected);
-        portField.setDisable(connected);
-        userField.setDisable(connected);
-        passField.setDisable(connected);
-        if (!connected) {
+    private void setConnected(boolean isConnected, String role) {
+        connected = isConnected;
+        connectButton.setText(isConnected ? "Ngắt kết nối" : "Kết nối");
+        protocolBox.setDisable(isConnected);
+        hostField.setDisable(isConnected);
+        portField.setDisable(isConnected);
+        userField.setDisable(isConnected);
+        passField.setDisable(isConnected);
+        refreshBtn.setDisable(!isConnected);
+        upBtn.setDisable(!isConnected);
+        downloadBtn.setDisable(!isConnected);
+        cancelBtn.setDisable(true);
+        if (isConnected) {
+            RemoteSession s = session;
+            roleLabel.setText(role.equals("ftp") ? "Vai trò: (FTP chuẩn không báo vai trò)" : "Vai trò: " + role);
+            mkdBtn.setDisable(!s.canWrite());
+            uploadBtn.setDisable(!s.canWrite());
+            deleteBtn.setDisable(!s.canDelete());
+        } else {
+            roleLabel.setText("");
+            mkdBtn.setDisable(true);
+            uploadBtn.setDisable(true);
+            deleteBtn.setDisable(true);
             remoteTable.getItems().clear();
-            remotePathField.setText("(chua ket noi)");
+            remotePathField.setText("(chưa kết nối)");
         }
     }
 
     private void refreshRemoteTable() {
-        ftpWorker.submit(() -> {
-            try {
-                List<RemoteFile> files = session.list();
-                String pwd = session.pwd();
-                Platform.runLater(() -> {
-                    remotePathField.setText(pwd);
-                    remoteTable.setItems(FXCollections.observableArrayList(files));
-                });
-            } catch (Exception ex) {
-                Platform.runLater(() -> appendLog("LOI: " + ex.getMessage()));
-            }
+        runRemote(() -> {
         });
     }
 
     private void onUpClicked() {
-        ftpWorker.submit(() -> {
-            try {
-                session.cdup();
-                List<RemoteFile> files = session.list();
-                String pwd = session.pwd();
-                Platform.runLater(() -> {
-                    remotePathField.setText(pwd);
-                    remoteTable.setItems(FXCollections.observableArrayList(files));
-                });
-            } catch (Exception ex) {
-                Platform.runLater(() -> appendLog("LOI: " + ex.getMessage()));
-            }
-        });
+        runRemote(() -> session.cdup());
     }
 
     private void onMkdClicked() {
         TextInputDialog dialog = new TextInputDialog();
-        dialog.setHeaderText("Ten thu muc moi");
-        dialog.showAndWait().ifPresent(name -> ftpWorker.submit(() -> {
-            try {
-                session.mkd(name);
-                Platform.runLater(this::refreshRemoteTable);
-            } catch (Exception ex) {
-                Platform.runLater(() -> appendLog("LOI: " + ex.getMessage()));
-            }
-        }));
+        dialog.setHeaderText("Tên thư mục mới");
+        dialog.showAndWait().map(String::trim).filter(n -> !n.isEmpty())
+                .ifPresent(name -> runRemote(() -> session.mkd(name)));
     }
 
     private void onDeleteClicked() {
@@ -302,16 +352,18 @@ public class MainWindow {
         if (sel == null) {
             return;
         }
-        ftpWorker.submit(() -> {
-            try {
-                if (sel.directory()) {
-                    session.rmd(sel.name());
-                } else {
-                    session.dele(sel.name());
-                }
-                Platform.runLater(this::refreshRemoteTable);
-            } catch (Exception ex) {
-                Platform.runLater(() -> appendLog("LOI: " + ex.getMessage()));
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
+                "Xóa " + (sel.directory() ? "thư mục " : "file ") + sel.name() + " trên máy chủ?",
+                ButtonType.YES, ButtonType.NO);
+        confirm.setHeaderText("Xác nhận xóa");
+        if (confirm.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) {
+            return;
+        }
+        runRemote(() -> {
+            if (sel.directory()) {
+                session.rmd(sel.name());
+            } else {
+                session.dele(sel.name());
             }
         });
     }
@@ -322,18 +374,14 @@ public class MainWindow {
             return;
         }
         Path dest = localDir.resolve(sel.name());
-        Task<Void> task = new Task<>() {
+        RemoteSession s = session;
+        Task<String> task = new Task<>() {
             @Override
-            protected Void call() throws Exception {
-                try (OutputStream out = Files.newOutputStream(dest)) {
-                    session.retr(sel.name(), out, bytes -> updateProgress(bytes, Math.max(sel.size(), 1)));
-                }
-                return null;
+            protected String call() throws Exception {
+                return s.download(sel.name(), dest, sel.size(), this::updateProgress);
             }
         };
-        bindProgress(task, "Tai ve " + sel.name());
-        task.setOnSucceeded(e -> Platform.runLater(this::refreshLocalTable));
-        ftpWorker.submit(task);
+        runTransfer(task, "Tải về " + sel.name(), this::refreshLocalTable);
     }
 
     private void onUploadClicked() {
@@ -342,37 +390,42 @@ public class MainWindow {
             return;
         }
         Path src = localDir.resolve(sel.name());
-        long size;
-        try {
-            size = Files.size(src);
-        } catch (IOException e) {
-            size = 1;
-        }
-        long totalSize = size;
-        Task<Void> task = new Task<>() {
+        RemoteSession s = session;
+        Task<String> task = new Task<>() {
             @Override
-            protected Void call() throws Exception {
-                try (InputStream in = Files.newInputStream(src)) {
-                    session.stor(sel.name(), in, bytes -> updateProgress(bytes, Math.max(totalSize, 1)));
-                }
-                return null;
+            protected String call() throws Exception {
+                return s.upload(sel.name(), src, this::updateProgress);
             }
         };
-        bindProgress(task, "Tai len " + sel.name());
-        task.setOnSucceeded(e -> Platform.runLater(this::refreshRemoteTable));
-        ftpWorker.submit(task);
+        runTransfer(task, "Tải lên " + sel.name(), this::refreshRemoteTable);
     }
 
-    private void bindProgress(Task<Void> task, String label) {
-        Platform.runLater(() -> {
-            progressLabel.setText(label);
-            progressBar.progressProperty().bind(task.progressProperty());
+    /** Gắn tiến trình, nút Hủy và xử lý kết quả cho một tác vụ truyền file. */
+    private void runTransfer(Task<String> task, String label, Runnable afterSuccess) {
+        progressLabel.setText(label);
+        progressBar.progressProperty().bind(task.progressProperty());
+        cancelBtn.setDisable(!session.supportsResume());
+        task.setOnSucceeded(e -> {
+            progressBar.progressProperty().unbind();
+            cancelBtn.setDisable(true);
+            progressLabel.setText("Xong: " + label + " — " + task.getValue());
+            appendLog(label + ": " + task.getValue());
+            afterSuccess.run();
         });
-        task.setOnFailed(e -> Platform.runLater(() -> {
-            appendLog("LOI TRUYEN: " + task.getException());
-            progressLabel.setText("Loi");
-        }));
-        task.setOnSucceeded(e -> Platform.runLater(() -> progressLabel.setText("Xong: " + label)));
+        task.setOnFailed(e -> {
+            progressBar.progressProperty().unbind();
+            cancelBtn.setDisable(true);
+            progressLabel.setText("Lỗi: " + label);
+            Throwable ex = task.getException();
+            if (ex instanceof RemoteSession.CancelledException) {
+                appendLog(ex.getMessage());
+                progressLabel.setText(ex.getMessage());
+                afterSuccess.run();
+            } else {
+                showError(ex);
+            }
+        });
+        worker.submit(task);
     }
 
     private void refreshLocalTable() {
@@ -393,7 +446,7 @@ public class MainWindow {
                 }
             });
         } catch (IOException e) {
-            appendLog("LOI doc thu muc cuc bo: " + e.getMessage());
+            appendLog("LỖI đọc thư mục cục bộ: " + e.getMessage());
         }
         localTable.setItems(items);
     }

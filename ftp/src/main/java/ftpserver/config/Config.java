@@ -16,15 +16,17 @@ public class Config {
     private final int dataPortMin;
     private final int dataPortMax;
     private final int idleTimeoutSeconds;
+    private final int binPort;
     private final Map<String, User> users;
 
     private Config(int controlPort, Path rootDir, int dataPortMin, int dataPortMax,
-                   int idleTimeoutSeconds, Map<String, User> users) {
+                   int idleTimeoutSeconds, int binPort, Map<String, User> users) {
         this.controlPort = controlPort;
         this.rootDir = rootDir;
         this.dataPortMin = dataPortMin;
         this.dataPortMax = dataPortMax;
         this.idleTimeoutSeconds = idleTimeoutSeconds;
+        this.binPort = binPort;
         this.users = users;
     }
 
@@ -33,6 +35,8 @@ public class Config {
     public int dataPortMin() { return dataPortMin; }
     public int dataPortMax() { return dataPortMax; }
     public int idleTimeoutSeconds() { return idleTimeoutSeconds; }
+    /** Cong giao thuc nhi phan BFTP; 0 hoac am = tat. */
+    public int binPort() { return binPort; }
     public Map<String, User> users() { return users; }
 
     public static Config load(Path confFile) throws IOException {
@@ -56,6 +60,10 @@ public class Config {
                 ? Integer.parseInt(props.getProperty("idle.timeout.seconds").trim())
                 : 300;
 
+        int binPort = props.containsKey("bin.port")
+                ? Integer.parseInt(props.getProperty("bin.port").trim())
+                : 2122;
+
         Map<String, User> users = new HashMap<>();
         for (String key : props.stringPropertyNames()) {
             if (key.startsWith("user.") && key.endsWith(".password")) {
@@ -63,11 +71,16 @@ public class Config {
                 String password = props.getProperty(key);
                 boolean readonly = Boolean.parseBoolean(
                         props.getProperty("user." + name + ".readonly", "false"));
-                users.put(name, new User(name, password, readonly));
+                String role = props.getProperty("user." + name + ".role", readonly ? "readonly" : "user")
+                        .trim().toLowerCase();
+                if (!role.equals("admin") && !role.equals("user") && !role.equals("readonly")) {
+                    throw new IllegalArgumentException("user." + name + ".role must be admin|user|readonly, got: " + role);
+                }
+                users.put(name, new User(name, password, readonly || role.equals("readonly"), role));
             }
         }
 
-        return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds, Map.copyOf(users));
+        return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds, binPort, Map.copyOf(users));
     }
 
     private static String requireString(Properties props, String key) {
