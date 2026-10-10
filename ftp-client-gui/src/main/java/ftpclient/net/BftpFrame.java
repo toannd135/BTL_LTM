@@ -14,6 +14,8 @@ record BftpFrame(int type, byte[] payload) {
     static final int VERSION = 1;
     static final int HEADER_SIZE = 8;
     static final int MAX_PAYLOAD = 4 * 1024 * 1024;
+    /** Hau to file tam phia server khi PUT. Khop BinaryClientHandler.PART_SUFFIX. */
+    static final String PART_SUFFIX = ".part";
 
     static final int AUTH = 0x01, AUTH_OK = 0x02, QUIT = 0x0F;
     static final int LIST = 0x10, LIST_RESP = 0x11, MKD = 0x12, RMD = 0x13, DELE = 0x14;

@@ -20,6 +20,11 @@ public final class RmdCommandHandler implements CommandHandler {
             session.reply(FtpReply.SYNTAX_ERROR_PARAMS, "Missing directory name");
             return;
         }
+        if (!session.getUser().canDelete()) {
+            // cung quy tac voi BFTP: chi vai tro admin duoc xoa
+            session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied (role '" + session.getUser().role() + "' cannot delete)");
+            return;
+        }
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
             if (!Files.isDirectory(target)) {
