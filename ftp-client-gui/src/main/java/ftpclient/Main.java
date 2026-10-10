@@ -10,8 +10,9 @@ public class Main extends Application {
     @Override
     public void start(Stage stage) {
         MainWindow window = new MainWindow();
-        stage.setTitle("FTP Client - BTL LTM");
+        stage.setTitle("Máy khách FTP - BTL Lập trình mạng");
         stage.setScene(window.buildScene());
+        stage.setOnCloseRequest(e -> window.shutdown());
         stage.show();
     }
 
