@@ -1,0 +1,126 @@
+name: UI (Desktop) CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['ui-v*']
+    paths: ['ftp-client-gui/**', '.github/workflows/ui.yml']
+  pull_request:
+    paths: ['ftp-client-gui/**', '.github/workflows/ui.yml']
+
+jobs:
+  # CI + đóng gói installer native trên từng hệ điều hành (jpackage không cross-compile được)
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            type: deb
+            ext: deb
+          - os: windows-latest
+            type: msi
+            ext: msi
+          - os: macos-latest
+            type: dmg
+            ext: dmg
+    runs-on: ${{ matrix.os }}
+    env:
+      # Ký installer là tuỳ chọn: chỉ chạy khi đã khai báo secrets tương ứng
+      WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+      WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+      MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+      MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+      MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: ftp-client-gui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build jar + gom dependency (JavaFX đúng theo OS)
+        run: |
+          mvn -B verify
+          mvn -B dependency:copy-dependencies -DoutputDirectory=target/libs -DincludeScope=runtime
+          JAR=$(basename target/ftpclient-gui-*.jar)
+          cp "target/$JAR" target/libs/
+          echo "JAR=$JAR" >> "$GITHUB_ENV"
+
+      - name: Tính version cho installer
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/ui-v* ]]; then V="${GITHUB_REF_NAME#ui-v}"; else V="1.0.0"; fi
+          # MSI/DMG yêu cầu dạng số X.Y.Z
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Import chứng chỉ macOS (tuỳ chọn)
+        if: matrix.os == 'macos-latest' && env.MAC_CERT_P12_BASE64 != ''
+        run: |
+          echo "$MAC_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p ci "$RUNNER_TEMP/build.keychain"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/build.keychain"
+          security unlock-keychain -p ci "$RUNNER_TEMP/build.keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$RUNNER_TEMP/build.keychain" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$RUNNER_TEMP/build.keychain"
+          security list-keychains -d user -s "$RUNNER_TEMP/build.keychain" login.keychain
+
+      - name: jpackage
+        run: |
+          jpackage \
+            --type ${{ matrix.type }} \
+            --name FtpClient \
+            --app-version "${{ steps.ver.outputs.v }}" \
+            --input target/libs \
+            --main-jar "$JAR" \
+            --main-class ftpclient.Launcher \
+            --dest target/installer \
+            ${{ matrix.os == 'windows-latest' && '--win-shortcut --win-menu' || '' }} \
+            ${{ matrix.os == 'ubuntu-latest' && '--linux-shortcut' || '' }} \
+            $( [[ "$RUNNER_OS" == macOS && -n "$MAC_SIGN_IDENTITY" ]] && echo "--mac-sign --mac-signing-key-user-name \"$MAC_SIGN_IDENTITY\"" )
+
+      - name: Notarize DMG (tuỳ chọn)
+        if: matrix.os == 'macos-latest' && env.MAC_SIGN_IDENTITY != '' && env.APPLE_ID != ''
+        run: |
+          for f in target/installer/*.dmg; do
+            xcrun notarytool submit "$f" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple "$f"
+          done
+
+      - name: Ký MSI (tuỳ chọn)
+        if: matrix.os == 'windows-latest' && env.WIN_CERT_PFX_BASE64 != ''
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", [Convert]::FromBase64String($env:WIN_CERT_PFX_BASE64))
+          $st = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName
+          Get-ChildItem target/installer/*.msi | ForEach-Object {
+            & $st sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:WIN_CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FtpClient-${{ matrix.os }}
+          path: ftp-client-gui/target/installer/*.${{ matrix.ext }}
+
+  release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/ui-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
