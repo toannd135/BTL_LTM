@@ -34,13 +34,16 @@ public final class PassCommandHandler implements CommandHandler {
                 return;
             }
             session.setUser(user);
+            session.setGrants(session.rbac().load(user));
             session.setPathResolver(home);
             session.setCurrentDir(home.rootDir());
-            session.audit("LOGIN", "role=" + user.role() + " home=" + user.home()
+            session.audit("LOGIN", "roles=" + session.grants().roles() + " home=" + user.home()
                     + (session.isTlsActive() ? " tls=on" : " tls=off"), true);
             session.setState(SessionState.AUTHENTICATED);
             session.resetFailedLoginCount();
-            session.reply(FtpReply.LOGGED_IN, "User logged in, proceed");
+            // client doc vai tro tu dong nay de an/hien nut (quyen that van do server kiem tra)
+            session.reply(FtpReply.LOGGED_IN, "User logged in, proceed (roles: "
+                    + String.join(", ", session.grants().roles()) + ")");
         } else {
             session.incrementFailedLoginCount();
             session.auditAs(session.getPendingUsername(), "LOGIN", "bad credentials (attempt "

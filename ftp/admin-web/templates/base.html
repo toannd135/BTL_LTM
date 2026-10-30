@@ -22,9 +22,10 @@
     <a class="navbar-brand" href="/">{% include "_icon.html" %} FTP Admin</a>
     <ul class="navbar-nav me-auto">
       <li class="nav-item"><a class="nav-link" href="/">Dashboard</a></li>
-      <li class="nav-item"><a class="nav-link" href="/users">Người dùng</a></li>
-      <li class="nav-item"><a class="nav-link" href="/files">Tệp tin</a></li>
-      <li class="nav-item"><a class="nav-link" href="/audit">Nhật ký</a></li>
+      {% if 'user:manage' in perms %}<li class="nav-item"><a class="nav-link" href="/users">Người dùng</a></li>{% endif %}
+      {% if 'scan:view' in perms or 'scan:manage' in perms %}<li class="nav-item"><a class="nav-link" href="/files">Tệp tin</a></li>{% endif %}
+      {% if 'audit:view' in perms %}<li class="nav-item"><a class="nav-link" href="/audit">Nhật ký</a></li>{% endif %}
+      {% if 'breakglass:grant' in perms %}<li class="nav-item"><a class="nav-link" href="/breakglass">Break-glass</a></li>{% endif %}
     </ul>
     <form method="post" action="/logout" class="d-flex align-items-center gap-2">
       <span class="text-light small">{{ admin }}</span>

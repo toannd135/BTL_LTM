@@ -10,6 +10,7 @@ import ftpserver.command.ReinCommandHandler;
 import ftpserver.command.RestCommandHandler;
 import ftpserver.command.RnfrCommandHandler;
 import ftpserver.command.RntoCommandHandler;
+import ftpserver.command.SiteCommandHandler;
 import ftpserver.command.SizeCommandHandler;
 import ftpserver.command.CdupCommandHandler;
 import ftpserver.command.CwdCommandHandler;
@@ -66,6 +67,7 @@ public final class CommandRegistrations {
         registry.register("MDTM", new MdtmCommandHandler());
         registry.register("RNFR", new RnfrCommandHandler());
         registry.register("RNTO", new RntoCommandHandler());
+        registry.register("SITE", new SiteCommandHandler());
     }
 
     private static void registerDataCommands(CommandRegistry registry) {

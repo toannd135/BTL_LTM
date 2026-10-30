@@ -1,5 +1,6 @@
 package ftpserver.command;
 
+import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -32,7 +33,14 @@ public final class RntoCommandHandler implements CommandHandler {
                 session.reply(FtpReply.FILE_NAME_NOT_ALLOWED, "Target already exists");
                 return;
             }
+            if (target.getParent() == null || !session.canDo("file:rename", target.getParent(), Perm.WRITE)) {
+                session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
+                return;
+            }
+            String oldKey = session.aclPath(source);
             Files.move(source, target);
+            session.acl().moveTree(oldKey, session.aclPath(target));
+            session.scan().moved(oldKey, session.aclPath(target));
             session.reply(FtpReply.FILE_ACTION_OK, "Rename successful");
             session.audit("RENAME", from + " -> " + session.pathResolver().toVirtualPath(target), true);
         } catch (SecurityException e) {

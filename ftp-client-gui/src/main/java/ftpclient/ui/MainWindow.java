@@ -30,6 +30,10 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.Dialog;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ProgressBar;
@@ -48,10 +52,11 @@ import javafx.scene.input.TransferMode;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
-import javafx.stage.FileChooser;
 
+import ftpclient.net.FtpException;
 import ftpclient.net.FtpSession;
 import ftpclient.net.RemoteFile;
 import ftpclient.net.RemoteSession;
@@ -80,11 +85,12 @@ public class MainWindow {
     private Button connectButton;
     private Label roleLabel;
     private Button refreshBtn;
-    private Button pickFileBtn;
+    private Button localMkdBtn;
     private Button mkdBtn;
     private Button uploadBtn;
     private Button downloadBtn;
     private Button deleteBtn;
+    private Button shareBtn;
     private Button cancelBtn;
     private TableView<RemoteFile> remoteTable;
     private TableView<LocalFile> localTable;
@@ -164,19 +170,22 @@ public class MainWindow {
         connectionBar.setAlignment(Pos.CENTER_LEFT);
         connectionBar.setPadding(new Insets(8, 8, 4, 8));
 
-        refreshBtn = new Button("Làm mới");
-        refreshBtn.setOnAction(e -> refreshRemoteTable());
-        pickFileBtn = new Button("Chọn file từ máy tính");
-        pickFileBtn.setOnAction(e -> onPickFileClicked());
+        refreshBtn = new Button("Làm mới cả hai");
+        refreshBtn.setOnAction(e -> {
+            refreshLocalTable();
+            refreshRemoteTable();
+        });
         mkdBtn = new Button("Tạo thư mục");
         mkdBtn.setOnAction(e -> onMkdClicked());
+        localMkdBtn = new Button("Tạo thư mục");
+        localMkdBtn.setOnAction(e -> onLocalMkdClicked());
         showHiddenBox = new CheckBox("Hiện file ẩn");
         showHiddenBox.setOnAction(e -> {
             refreshLocalTable();
             applyRemoteFilter();
         });
 
-        HBox toolBar = new HBox(10, refreshBtn, pickFileBtn, mkdBtn, new Separator(Orientation.VERTICAL), showHiddenBox);
+        HBox toolBar = new HBox(10, refreshBtn, new Separator(Orientation.VERTICAL), showHiddenBox);
         toolBar.setAlignment(Pos.CENTER_LEFT);
         toolBar.setPadding(new Insets(4, 8, 8, 8));
 
@@ -187,6 +196,7 @@ public class MainWindow {
         localPathField = new TextField();
         localPathField.setEditable(false);
         localTable = new TableView<>();
+        localTable.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
         localTable.getColumns().add(nameColumn(LocalFile::name, LocalFile::directory, 220));
         localTable.getColumns().add(sizeColumn(LocalFile::size, LocalFile::directory, 90));
         localTable.getColumns().add(textColumn("Ngày sửa", LocalFile::modified, 130));
@@ -209,7 +219,7 @@ public class MainWindow {
         });
         uploadBtn = new Button("Tải lên →");
         uploadBtn.setOnAction(e -> onUploadClicked());
-        localBox = new VBox(4, panelTitle("Máy cục bộ"), localPathField, localTable, uploadBtn);
+        localBox = new VBox(4, panelHeader("Máy cục bộ", localMkdBtn), localPathField, localTable, uploadBtn);
         VBox.setVgrow(localTable, Priority.ALWAYS);
 
         remotePathField = new TextField("(chưa kết nối)");
@@ -223,7 +233,11 @@ public class MainWindow {
             if (e.getClickCount() == 2) {
                 RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
                 if (sel != null && sel.directory()) {
-                    runRemote(() -> session.cwd(sel.name()));
+                    if (sel.name().equals("..")) {
+                        runRemote(() -> session.cdup());
+                    } else {
+                        runRemote(() -> session.cwd(sel.name()));
+                    }
                 }
             }
         });
@@ -231,8 +245,16 @@ public class MainWindow {
         downloadBtn.setOnAction(e -> onDownloadClicked());
         deleteBtn = new Button("Xóa");
         deleteBtn.setOnAction(e -> onDeleteClicked());
-        HBox remoteButtons = new HBox(6, downloadBtn, deleteBtn);
-        remoteBox = new VBox(4, panelTitle("Máy chủ"), remotePathField, remoteTable, remoteButtons);
+        shareBtn = new Button("Chia sẻ");
+        shareBtn.setOnAction(e -> onShareClicked());
+        remoteTable.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> updateShareButton());
+        MenuItem shareItem = new MenuItem("Chia sẻ…");
+        shareItem.setOnAction(e -> onShareClicked());
+        ContextMenu remoteMenu = new ContextMenu(shareItem);
+        remoteMenu.setOnShowing(e -> shareItem.setDisable(shareBtn.isDisable()));
+        remoteTable.setContextMenu(remoteMenu);
+        HBox remoteButtons = new HBox(6, downloadBtn, deleteBtn, shareBtn);
+        remoteBox = new VBox(4, panelHeader("Máy chủ", mkdBtn), remotePathField, remoteTable, remoteButtons);
         VBox.setVgrow(remoteTable, Priority.ALWAYS);
 
         split = new SplitPane(localBox, remoteBox);
@@ -288,8 +310,19 @@ public class MainWindow {
 
     private void applyRemoteFilter() {
         boolean showHidden = showHiddenBox.isSelected();
-        remoteTable.setItems(FXCollections.observableArrayList(
-                remoteAll.stream().filter(f -> showHidden || !f.name().startsWith(".")).toList()));
+        ObservableList<RemoteFile> items = FXCollections.observableArrayList();
+        String pwd = remotePathField.getText();
+        if (connected && !pwd.isEmpty() && !pwd.equals("/")) {
+            items.add(new RemoteFile("..", 0, "", true));
+        }
+        remoteAll.stream().filter(f -> showHidden || !f.name().startsWith(".")).forEach(items::add);
+        remoteTable.setItems(items);
+    }
+
+    /** Dòng đang chọn ở bảng server; dòng ".." (thư mục cha) không phải file thật nên coi như không chọn. */
+    private RemoteFile selectedRemote() {
+        RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
+        return sel == null || sel.name().equals("..") ? null : sel;
     }
 
     private void showError(Throwable ex) {
@@ -359,21 +392,120 @@ public class MainWindow {
         cancelBtn.setDisable(true);
         if (isConnected) {
             RemoteSession s = session;
-            roleLabel.setText(role.equals("ftp") ? "Vai trò: (FTP chuẩn không báo vai trò)" : "Vai trò: " + role);
+            roleLabel.setText(s.roles().isEmpty() ? "Vai trò: (máy chủ không báo vai trò)"
+                    : "Vai trò: " + String.join(", ", s.roles()));
+            progressLabel.setText("Đã đăng nhập — " + roleLabel.getText());
             mkdBtn.setDisable(!s.canWrite());
             uploadBtn.setDisable(!s.canWrite());
-            pickFileBtn.setDisable(!s.canWrite());
             deleteBtn.setDisable(!s.canDelete());
         } else {
             roleLabel.setText("");
             mkdBtn.setDisable(true);
             uploadBtn.setDisable(true);
-            pickFileBtn.setDisable(true);
             deleteBtn.setDisable(true);
             remoteAll = List.of();
             remoteTable.getItems().clear();
             remotePathField.setText("(chưa kết nối)");
         }
+        updateShareButton();
+    }
+
+    /** Chỉ chủ sở hữu (employee) hoặc file_manager chia sẻ được; server vẫn kiểm tra lại. */
+    private boolean canShare() {
+        List<String> roles = session.roles();
+        return roles.isEmpty() || roles.stream().anyMatch(r ->
+                r.startsWith("employee@") || r.startsWith("file_manager@"));
+    }
+
+    private void updateShareButton() {
+        RemoteFile sel = selectedRemote();
+        shareBtn.setDisable(!connected || sel == null || sel.directory() || !canShare());
+    }
+
+    /** Hộp thoại chia sẻ: xem ACL hiện tại, cấp/thu hồi quyền cho một người dùng. */
+    private void onShareClicked() {
+        RemoteFile sel = selectedRemote();
+        if (sel == null || sel.directory()) {
+            return;
+        }
+        String file = sel.name();
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle("Chia sẻ tệp");
+        dialog.setHeaderText("Chia sẻ \"" + file + "\"");
+        TextField userBox = new TextField();
+        userBox.setPromptText("tên người dùng");
+        ComboBox<String> permBox = new ComboBox<>(FXCollections.observableArrayList("READ", "DOWNLOAD", "WRITE", "NONE"));
+        permBox.setValue("READ");
+        permBox.setTooltip(new Tooltip("NONE = thu hồi quyền"));
+        Button applyBtn = new Button("Áp dụng");
+        Label result = new Label();
+        result.setWrapText(true);
+        TextArea aclArea = new TextArea("Đang tải ACL...");
+        aclArea.setEditable(false);
+        aclArea.setPrefRowCount(8);
+        aclArea.setFont(Font.font("Monospaced", 12));
+
+        HBox form = new HBox(8, labeled("Người dùng:", userBox), labeled("Quyền:", permBox), applyBtn);
+        form.setAlignment(Pos.CENTER_LEFT);
+        VBox content = new VBox(8, form, result, new Label("Quyền hiện tại (SITE ACL):"), aclArea);
+        content.setPrefWidth(520);
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+
+        Runnable loadAcl = () -> worker.submit(() -> {
+            String text;
+            try {
+                text = aclText(session.site("ACL " + file));
+            } catch (Exception ex) {
+                text = "Không xem được ACL: " + ex.getMessage();
+            }
+            String shown = text;
+            Platform.runLater(() -> aclArea.setText(shown));
+        });
+        applyBtn.setOnAction(e -> {
+            String user = userBox.getText().trim();
+            if (user.isEmpty() || user.contains(" ")) {
+                result.setText("Nhập một tên người dùng (không có dấu cách).");
+                return;
+            }
+            String perm = permBox.getValue();
+            applyBtn.setDisable(true);
+            worker.submit(() -> {
+                String msg;
+                try {
+                    String reply = session.site("SHARE " + file + " " + user + " " + perm);
+                    msg = "Thành công: " + (reply.length() > 4 ? reply.substring(4) : reply);
+                } catch (Exception ex) {
+                    msg = "Máy chủ từ chối: " + ex.getMessage();
+                }
+                String shown = msg;
+                Platform.runLater(() -> {
+                    result.setText(shown);
+                    appendLog(shown);
+                    applyBtn.setDisable(false);
+                });
+            });
+            loadAcl.run();
+        });
+        loadAcl.run();
+        dialog.show();
+    }
+
+    /** Bỏ mã trả lời ở dòng đầu/cuối của khối "213-ACL of ..." ... "213 End". */
+    private static String aclText(String reply) {
+        StringBuilder sb = new StringBuilder();
+        for (String line : reply.split("\n")) {
+            if (line.length() >= 4 && Character.isDigit(line.charAt(0)) && (line.charAt(3) == '-' || line.charAt(3) == ' ')) {
+                line = line.substring(4);
+                if (line.equals("End")) {
+                    continue;
+                }
+            } else {
+                line = "  " + line.trim();
+            }
+            sb.append(line).append('\n');
+        }
+        return sb.toString().trim();
     }
 
     private void refreshRemoteTable() {
@@ -381,16 +513,54 @@ public class MainWindow {
         });
     }
 
-    private void onPickFileClicked() {
-        FileChooser chooser = new FileChooser();
-        chooser.setTitle("Chọn file để tải lên");
-        if (Files.isDirectory(localDir)) {
-            chooser.setInitialDirectory(localDir.toFile());
-        }
-        File file = chooser.showOpenDialog(pickFileBtn.getScene().getWindow());
-        if (file != null) {
-            uploadFile(file.toPath());
-        }
+    /** Tải lên đệ quy: tạo thư mục tương ứng trên server (đã có thì dùng lại) rồi tải từng file; xong trở về thư mục ban đầu. */
+    private void uploadDirectories(List<Path> dirs) {
+        RemoteSession s = session;
+        Task<String> task = new Task<>() {
+            private int count;
+
+            @Override
+            protected String call() throws Exception {
+                String home = s.pwd();
+                try {
+                    for (Path d : dirs) {
+                        uploadTree(d);
+                    }
+                } finally {
+                    s.cwd(home);
+                }
+                return count + " file";
+            }
+
+            private void uploadTree(Path dir) throws Exception {
+                String name = dir.getFileName().toString();
+                try {
+                    s.mkd(name);
+                } catch (FtpException ignored) {
+                    // đã tồn tại: dùng lại; nếu lỗi thật thì cwd bên dưới sẽ báo
+                }
+                s.cwd(name);
+                try (var stream = Files.list(dir)) {
+                    for (Path p : stream.sorted().toList()) {
+                        if (isCancelled()) {
+                            throw new RemoteSession.CancelledException("Đã hủy tải thư mục");
+                        }
+                        if (Files.isDirectory(p)) {
+                            uploadTree(p);
+                        } else if (Files.isRegularFile(p)) {
+                            updateMessage(p.getFileName().toString());
+                            s.upload(p.getFileName().toString(), p, (done, total) -> { });
+                            count++;
+                        }
+                    }
+                } finally {
+                    s.cdup();
+                }
+            }
+        };
+        task.messageProperty().addListener((o, a, b) -> progressLabel.setText("Tải lên " + b));
+        runTransfer(task, "Tải thư mục " + dirs.get(0).getFileName() + (dirs.size() > 1 ? " +" + (dirs.size() - 1) : ""),
+                this::refreshRemoteTable);
     }
 
     private void onMkdClicked() {
@@ -401,7 +571,7 @@ public class MainWindow {
     }
 
     private void onDeleteClicked() {
-        RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
+        RemoteFile sel = selectedRemote();
         if (sel == null) {
             return;
         }
@@ -422,7 +592,7 @@ public class MainWindow {
     }
 
     private void onDownloadClicked() {
-        RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
+        RemoteFile sel = selectedRemote();
         if (sel == null || sel.directory()) {
             return;
         }
@@ -442,11 +612,15 @@ public class MainWindow {
     }
 
     private void onUploadClicked() {
-        LocalFile sel = localTable.getSelectionModel().getSelectedItem();
-        if (sel == null || sel.directory()) {
-            return;
+        List<Path> files = localTable.getSelectionModel().getSelectedItems().stream()
+                .filter(f -> !f.directory()).map(f -> localDir.resolve(f.name())).toList();
+        List<Path> dirs = localTable.getSelectionModel().getSelectedItems().stream()
+                .filter(f -> f.directory() && !f.name().equals("..")).map(f -> localDir.resolve(f.name())).toList();
+        if (!dirs.isEmpty()) {
+            uploadDirectories(dirs);   // file lẻ được chọn cùng lúc: tải riêng sau bằng lần bấm tiếp theo
+        } else if (!files.isEmpty()) {
+            uploadQueue(files);
         }
-        uploadFile(localDir.resolve(sel.name()));
     }
 
     private void uploadFile(Path src) {
@@ -534,6 +708,31 @@ public class MainWindow {
     // ---------------- kéo - thả ----------------
 
     /** Tiêu đề bảng: kéo sang nửa bên kia để đổi chỗ hai bảng. */
+    private HBox panelHeader(String text, Button action) {
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox box = new HBox(6, panelTitle(text), spacer, action);
+        box.setAlignment(Pos.CENTER_LEFT);
+        return box;
+    }
+
+    private void onLocalMkdClicked() {
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setHeaderText("Tên thư mục mới trên máy cục bộ");
+        dialog.showAndWait().map(String::trim).filter(n -> !n.isEmpty()).ifPresent(name -> {
+            try {
+                Path dir = localDir.resolve(name).normalize();
+                if (!localDir.equals(dir.getParent())) {
+                    throw new IOException("Tên không hợp lệ: " + name);
+                }
+                Files.createDirectory(dir);
+                refreshLocalTable();
+            } catch (IOException ex) {
+                showError(ex);
+            }
+        });
+    }
+
     private Label panelTitle(String text) {
         Label title = new Label(text + "  ⇄");
         title.setCursor(Cursor.OPEN_HAND);
@@ -617,7 +816,7 @@ public class MainWindow {
     /** Bảng máy chủ nhận file kéo từ bảng cục bộ hoặc từ trình quản lý file của hệ điều hành. */
     private void setupRemoteDrop() {
         remoteTable.setOnDragDetected(e -> {
-            RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
+            RemoteFile sel = selectedRemote();
             if (sel == null || sel.directory() || !connected) {
                 return;
             }

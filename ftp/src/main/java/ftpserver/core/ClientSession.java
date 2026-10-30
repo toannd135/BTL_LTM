@@ -14,6 +14,10 @@ import java.nio.file.Path;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
+import ftpserver.acl.AclService;
+import ftpserver.acl.Perm;
+import ftpserver.rbac.RbacService;
+import ftpserver.scan.ScanService;
 import ftpserver.audit.AuditLog;
 import ftpserver.auth.User;
 import ftpserver.auth.UserManager;
@@ -42,6 +46,11 @@ public class ClientSession implements Runnable {
     private final Config config;
     private final TlsSupport tls;
     private final AuditLog audit;
+    private final AclService acl;
+    private final RbacService rbac;
+    private final ScanService scan;
+    private RbacService.Grants grants;
+    private final Set<Long> breakglassLogged = new java.util.HashSet<>();
 
     private BufferedReader reader;
     private PrintWriter writer;
@@ -61,7 +70,7 @@ public class ClientSession implements Runnable {
 
     public ClientSession(Socket controlSocket, CommandRegistry registry,
                           UserManager userManager, PathResolver pathResolver, Config config,
-                          TlsSupport tls, AuditLog audit) {
+                          TlsSupport tls, AuditLog audit, Services services) {
         this.sessionId = "S" + COUNTER.incrementAndGet();
         this.controlSocket = controlSocket;
         this.registry = registry;
@@ -71,6 +80,9 @@ public class ClientSession implements Runnable {
         this.config = config;
         this.tls = tls;
         this.audit = audit;
+        this.acl = services.acl();
+        this.rbac = services.rbac();
+        this.scan = services.scan();
         this.ioSocket = controlSocket;
     }
 
@@ -251,6 +263,7 @@ public class ClientSession implements Runnable {
             dataConnection = null;
         }
         user = null;
+        grants = null;
         pendingUsername = null;
         pathResolver = rootResolver;
         currentDir = null;
@@ -280,6 +293,75 @@ public class ClientSession implements Runnable {
     public Path getRenameFrom() { return renameFrom; }
     public void setRenameFrom(Path p) { this.renameFrom = p; }
     public void setPathResolver(PathResolver r) { this.pathResolver = r; }
+
+    public AclService acl() { return acl; }
+
+    /** Duong dan ao tinh tu root.dir (khoa cua bang ACL), khong phai tu thu muc home cua user. */
+    public String aclPath(Path real) { return rootResolver.toVirtualPath(real); }
+
+    public RbacService rbac() { return rbac; }
+    public ScanService scan() { return scan; }
+    public AuditLog auditLog() { return audit; }
+    public void setGrants(RbacService.Grants g) { this.grants = g; }
+    public RbacService.Grants grants() { return grants; }
+
+    /** Quyen toan he thong (scope "/"), vi du audit:view, breakglass:grant. */
+    public boolean hasGlobalPerm(String permission) {
+        return grants != null && grants.has(permission, "/");
+    }
+
+    /** User co quyen file:manage (hoac cap quyen dac biet dang hieu luc) tren duong dan nay: bo qua ACL tung tep. */
+    public boolean canManage(Path real) {
+        String key = aclPath(real);
+        return (grants != null && grants.has(RbacService.FILE_MANAGE, key)) || breakglass(key);
+    }
+
+    /** User hien tai co it nhat quyen {@code need} (theo ACL) tren duong dan that nay khong; quyen RBAC la file:list/download/upload. */
+    public boolean can(Path real, Perm need) {
+        String rbacPerm = switch (need) {
+            case READ -> "file:list";
+            case DOWNLOAD -> "file:download";
+            case WRITE -> "file:upload";
+        };
+        return canDo(rbacPerm, real, need);
+    }
+
+    /**
+     * Hanh dong can quyen RBAC {@code rbacPerm} tai duong dan nay, va (neu khong phai nguoi quan ly) quyen ACL {@code need} tren tep.
+     * Vai tro khong du quyen thi chi con cach cap quyen dac biet (break-glass) con han.
+     */
+    public boolean canDo(String rbacPerm, Path real, Perm need) {
+        if (user == null) {
+            return false;
+        }
+        String key = aclPath(real);
+        if (grants != null && grants.has(rbacPerm, key)
+                && (grants.has(RbacService.FILE_MANAGE, key) || acl.allows(user, key, need))) {
+            return true;
+        }
+        return breakglass(key); // neu vai tro/ACL khong cho, cap quyen dac biet con han van co the cho phep
+    }
+
+    /** Chia se tep: chu so huu co file:share, hoac nguoi quan ly. */
+    public boolean canShare(Path real) {
+        String key = aclPath(real);
+        if (grants != null && grants.has("file:share", key)
+                && (grants.has(RbacService.FILE_MANAGE, key) || acl.isOwner(user, key))) {
+            return true;
+        }
+        return breakglass(key);
+    }
+
+    private boolean breakglass(String key) {
+        Long id = rbac.activeBreakglass(user.name(), key);
+        if (id == null) {
+            return false;
+        }
+        if (breakglassLogged.add(id)) {
+            audit("BREAKGLASS_USE", "grant #" + id + " first access " + key, true);
+        }
+        return true;
+    }
 
     public boolean isAuthenticated() {
         return state == SessionState.AUTHENTICATED

@@ -1,5 +1,6 @@
 package ftpserver.command;
 
+import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -25,7 +26,7 @@ public final class MdtmCommandHandler implements CommandHandler {
         }
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (!Files.isRegularFile(target)) {
+            if (!Files.isRegularFile(target) || !session.can(target, Perm.READ)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Not a regular file");
                 return;
             }

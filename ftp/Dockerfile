@@ -1,4 +1,11 @@
 FROM eclipse-temurin:21-jre
+# Tuy chon: --build-arg WITH_CLAMAV=1 de cai ClamAV va tai CSDL chu ky luc build (image lon them ~300 MB).
+# Bat quet: -e FTP_SCAN_COMMAND="clamscan --no-summary" [-e FTP_SCAN_ENFORCE=true]
+ARG WITH_CLAMAV=0
+RUN if [ "$WITH_CLAMAV" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends clamav && rm -rf /var/lib/apt/lists/* \
+        && freshclam --stdout; \
+    fi
 WORKDIR /app
 COPY target/ftpserver.jar ftpserver.jar
 COPY ftpserver.conf ftpserver.conf

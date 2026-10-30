@@ -1,0 +1,8 @@
+# Ban PostgreSQL. Thu tu chay migration (moi dong mot tep). Khong sua tep da chay: them tep moi.
+V001__create_users.sql
+V002__seed_accounts.sql
+V003__create_files.sql
+V004__file_acl.sql
+V005__rbac.sql
+V006__audit_breakglass.sql
+V007__separate_duties.sql

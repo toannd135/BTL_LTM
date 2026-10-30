@@ -1,7 +1,9 @@
-"""Trang quan tri FTP: Dashboard, Users, Files, Audit. Dung chung CSDL SQLite va audit.log cua ftpserver.
+"""Trang quan tri FTP: Dashboard, Users, Files, Audit, Break-glass. Dung chung CSDL (SQLite hoac PostgreSQL: RBAC,
+audit_events) voi ftpserver.
+Quyen web lay tu RBAC (user_roles x role_permissions, chi scope '/'); moi trang yeu cau mot permission rieng.
 
 Chay: FTPADMIN_SECRET=<chuoi-ngau-nhien> uvicorn main:app --host 127.0.0.1 --port 8080
-Bien moi truong: FTP_HOME, FTP_DB, FTP_ROOT, FTP_AUDIT_LOG, FTP_QUARANTINE, FTPADMIN_SECRET
+Bien moi truong: FTP_HOME, FTP_DB, FTP_DB_URL, FTP_DB_USER, FTP_DB_PASSWORD, FTP_ROOT, FTP_AUDIT_LOG, FTP_QUARANTINE, FTPADMIN_SECRET
 """
 import base64
 import contextvars
@@ -32,8 +34,14 @@ AUDIT_LOG = Path(os.environ.get("FTP_AUDIT_LOG", FTP_HOME / "logs" / "audit.log"
 QUARANTINE = Path(os.environ.get("FTP_QUARANTINE", FTP_HOME / "quarantine")).resolve()
 SECRET = os.environ.get("FTPADMIN_SECRET") or secrets.token_hex(32)  # khong dat -> phien mat khi restart
 
-AUDIT_MAX_ROWS = 20000  # so dong nhat ky moi nhat co the lat qua cac trang
-ROLES = ("admin", "user", "readonly")
+TRUST_PROXY = os.environ.get("FTPADMIN_TRUST_PROXY") == "1"
+# quyen cho phep vao trang web; quyen tinh theo RBAC (user_roles x role_permissions), chi dong scope='/'
+WEB_PERMS = {"user:manage", "role:manage", "audit:view", "scan:view", "scan:manage", "breakglass:grant"}
+# scan:view mot minh (file_manager) khong du de dang nhap: file_manager lam viec qua FTP, khong qua trang quan tri
+LOGIN_PERMS = WEB_PERMS - {"scan:view"}
+# vai tro RBAC -> (users.role, users.read_only) de tuong thich cot cu
+ROLE_COMPAT = {"system_admin": ("admin", 0), "security_auditor": ("readonly", 1)}
+BREAKGLASS_MAX_MINUTES = 480
 STATUSES = ("PENDING", "CLEAN", "INFECTED", "QUARANTINED")
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
 
@@ -43,7 +51,11 @@ CLIENT_IP = contextvars.ContextVar("client_ip", default="-")
 
 @app.middleware("http")
 async def remember_client_ip(request: Request, call_next):
-    CLIENT_IP.set(request.client.host if request.client else "-")
+    ip = request.client.host if request.client else "-"
+    if TRUST_PROXY:  # sau Cloudflare/nginx: lay IP that tu header do proxy dat (chi bat khi admin-web chi nhan traffic tu proxy)
+        fwd = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        ip = fwd or ip
+    CLIENT_IP.set(ip)
     return await call_next(request)
 
 
@@ -52,16 +64,93 @@ templates = Jinja2Templates(directory=str(BASE / "templates"))
 
 
 # ---------- DB / mat khau (cung dinh dang PBKDF2 voi PasswordHasher.java) ----------
+def _db_target() -> tuple[str, str]:
+    """Cung quy uoc voi server: FTP_DB_URL (jdbc:sqlite:<tep> | jdbc:postgresql://host:port/db, nhan ca
+    postgresql://... tron), khong dat -> SQLite tai FTP_DB. -> ("sqlite", duong dan) | ("postgres", URI libpq)."""
+    url = os.environ.get("FTP_DB_URL", "").strip()
+    if url.startswith("jdbc:"):
+        url = url[len("jdbc:"):]
+    if url.startswith(("postgresql://", "postgres://")):
+        return "postgres", url
+    if url.startswith("sqlite:"):
+        return "sqlite", url[len("sqlite:"):]
+    if url:
+        raise RuntimeError(f"FTP_DB_URL khong ho tro: {url!r} (chi sqlite / postgresql)")
+    return "sqlite", str(DB_PATH)
+
+
+DB_KIND, DB_TARGET = _db_target()
+DB_USER = os.environ.get("FTP_DB_USER") or None
+DB_PASSWORD = os.environ.get("FTP_DB_PASSWORD") or None
+DB_ERRORS: tuple = (sqlite3.Error,)
+DB_INTEGRITY_ERRORS: tuple = (sqlite3.IntegrityError,)
+if DB_KIND == "postgres":
+    import psycopg  # chi can khi dung PostgreSQL
+
+    DB_ERRORS += (psycopg.Error,)
+    DB_INTEGRITY_ERRORS += (psycopg.IntegrityError,)
+
+
+class PgRow(tuple):
+    """Dong ket qua psycopg truy cap duoc ca theo chi so lan ten cot (nhu sqlite3.Row)."""
+
+    def __new__(cls, values, index):
+        row = super().__new__(cls, values)
+        row._index = index
+        return row
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._index[key] if isinstance(key, str) else key)
+
+    def keys(self):
+        return list(self._index)
+
+
+def _pg_row_factory(cursor):
+    index = {col.name: i for i, col in enumerate(cursor.description or ())}
+    return lambda values: PgRow(values, index)
+
+
+class DbConn:
+    """Lop mong tren sqlite3/psycopg: SQL viet voi placeholder '?' cho ca hai, tu doi sang '%s' cho psycopg."""
+
+    def __init__(self, raw, pg: bool):
+        self.raw, self.pg = raw, pg
+
+    def _sql(self, sql: str, params) -> str:
+        return sql.replace("%", "%%").replace("?", "%s") if self.pg and params is not None else sql
+
+    def execute(self, sql: str, params=None):
+        params = tuple(params) if params else None
+        if not self.pg:
+            return self.raw.execute(sql, params or ())
+        return self.raw.execute(self._sql(sql, params), params)
+
+    def executemany(self, sql: str, seq):
+        cur = self.raw.cursor()
+        cur.executemany(self._sql(sql, ()) if self.pg else sql, seq)
+        return cur
+
+
+def utc_now(delta: timedelta = timedelta()) -> str:
+    """Moc thoi gian UTC 'YYYY-MM-DD HH:MM:SS' cho cac cot *_at (so sanh chuoi voi nhau, giong server)."""
+    return (datetime.now(timezone.utc) + delta).strftime("%Y-%m-%d %H:%M:%S")
+
+
 @contextmanager
 def db():
-    conn = sqlite3.connect(DB_PATH, timeout=5)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    if DB_KIND == "postgres":
+        raw = psycopg.connect(DB_TARGET, user=DB_USER, password=DB_PASSWORD, connect_timeout=5,
+                              row_factory=_pg_row_factory)
+    else:
+        raw = sqlite3.connect(DB_TARGET, timeout=5)
+        raw.row_factory = sqlite3.Row
+        raw.execute("PRAGMA foreign_keys = ON")
     try:
-        yield conn
-        conn.commit()
+        yield DbConn(raw, DB_KIND == "postgres")
+        raw.commit()
     finally:
-        conn.close()
+        raw.close()
 
 
 def hash_password(password: str, iterations: int = 120_000) -> str:
@@ -83,39 +172,60 @@ DUMMY_HASH = hash_password("dummy")
 
 
 # ---------- audit ----------
+def utc_now_iso() -> str:
+    """ISO-8601 UTC kieu Java Instant.toString (mili-giay): 2026-10-30T12:00:00.123Z"""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def audit(actor: str, event: str, detail: str, ok: bool = True) -> None:
+    """Ghi vao bang audit_events (nguon chinh) va them mot dong vao audit.log nhu cu."""
     clean = lambda s: (s or "-").replace("\r", " ").replace("\n", " ").replace('"', "'")
+    ts, ip, result = utc_now_iso(), clean(CLIENT_IP.get()), "OK" if ok else "FAIL"
+    try:
+        with db() as c:
+            c.execute("INSERT INTO audit_events(ts, session, ip, username, event, result, detail) VALUES (?,?,?,?,?,?,?)",
+                      (ts, "web", ip, clean(actor), event, result, clean(detail)))
+    except DB_ERRORS:
+        pass  # CSDL loi van con dong trong audit.log
     line = 'ts=%s session=web ip=%s user=%s event=%s result=%s detail="%s"\n' % (
-        datetime.now(timezone.utc).isoformat(), clean(CLIENT_IP.get()), clean(actor), event,
-        "OK" if ok else "FAIL", clean(detail))
+        ts, ip, clean(actor), event, result, clean(detail))
     AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(AUDIT_LOG, "a", encoding="utf-8") as f:
         f.write(line)
 
 
-AUDIT_RE = re.compile(r'(\w+)=(?:"([^"]*)"|(\S+))')
+AUDIT_COLS = "id, ts, session, ip, username AS user, event, result, detail"
 
 
-def read_audit(limit=500, event="", user="", result=""):
-    if not AUDIT_LOG.exists():
-        return []
-    with open(AUDIT_LOG, "rb") as f:  # chi doc phan cuoi tep
-        f.seek(0, os.SEEK_END)
-        f.seek(max(0, f.tell() - 2_000_000))
-        lines = f.read().decode("utf-8", "replace").splitlines()
-    rows = []
-    for line in reversed(lines):
-        d = {k: (v or q) for k, q, v in AUDIT_RE.findall(line)}
-        if "ts" in d:  # Java ghi nano-giay: cat con 3 chu so de moi trinh duyet deu doc duoc
-            d["ts"] = re.sub(r"(\.\d{3})\d+", r"\1", d["ts"])
-        if not d.get("event"):
-            continue
-        if (event and d["event"] != event) or (user and d.get("user") != user) or (result and d.get("result") != result):
-            continue
-        rows.append(d)
-        if len(rows) >= limit:
-            break
-    return rows
+def _audit_row(r) -> dict:
+    d = dict(r)  # Java ghi nano-giay: cat con 3 chu so de moi trinh duyet deu doc duoc
+    d["ts"] = re.sub(r"(\.\d{3})\d+", r"\1", d["ts"] or "")
+    return d
+
+
+def _audit_where(event="", user="", result="") -> tuple[str, tuple]:
+    conds, args = [], []
+    for col, val in (("event", event), ("username", user), ("result", result)):
+        if val:
+            conds.append(f"{col}=?")
+            args.append(val)
+    return (" WHERE " + " AND ".join(conds) if conds else ""), tuple(args)
+
+
+def read_audit(limit=500, event="", user="", result="", offset=0) -> list[dict]:
+    where, args = _audit_where(event, user, result)
+    with db() as c:
+        rows = c.execute(f"SELECT {AUDIT_COLS} FROM audit_events{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                         args + (limit, offset)).fetchall()
+    return [_audit_row(r) for r in rows]
+
+
+def count_audit(event="", user="", result="", since="") -> int:
+    where, args = _audit_where(event, user, result)
+    if since:
+        where, args = (where + " AND" if where else " WHERE") + " ts >= ?", args + (since,)
+    with db() as c:
+        return c.execute("SELECT COUNT(*) FROM audit_events" + where, args).fetchone()[0]
 
 
 def activity_by_hour(hours: int = 24):
@@ -124,10 +234,14 @@ def activity_by_hour(hours: int = 24):
     slots = [now - timedelta(hours=h) for h in range(hours - 1, -1, -1)]
     index = {t.strftime("%Y-%m-%dT%H"): i for i, t in enumerate(slots)}
     series = {"LOGIN": [0] * hours, "UPLOAD": [0] * hours, "DOWNLOAD": [0] * hours}
-    for r in read_audit(limit=20000):
-        i = index.get(r.get("ts", "")[:13])
-        if i is not None and r["event"] in series and r.get("result") == "OK":
-            series[r["event"]][i] += 1
+    with db() as c:
+        rows = c.execute("SELECT substr(ts,1,13) h, event, COUNT(*) n FROM audit_events WHERE ts >= ? AND result='OK' "
+                         "AND event IN ('LOGIN','UPLOAD','DOWNLOAD') GROUP BY h, event",
+                         (slots[0].strftime("%Y-%m-%dT%H"),)).fetchall()
+    for r in rows:
+        i = index.get(r["h"])
+        if i is not None:
+            series[r["event"]][i] += r["n"]
     return {"slots": [t.strftime("%Y-%m-%dT%H:00:00Z") for t in slots], "series": series}
 
 
@@ -168,12 +282,85 @@ def paginate(request: Request, total: int, page, per_page) -> dict:
             "sizes": [(s, url(1, s)) for s in PER_PAGE_CHOICES]}
 
 
+# ---------- RBAC ----------
+def user_roles(c, username: str) -> list[tuple[str, str]]:
+    """(role, scope) cua user; khong co dong nao -> fallback giong server: users.role='admin' -> system_admin@/, con lai employee@/."""
+    rows = [(r["role"], r["scope"]) for r in
+            c.execute("SELECT role, scope FROM user_roles WHERE username=? ORDER BY role, scope", (username,))]
+    if rows:
+        return rows
+    u = c.execute("SELECT role FROM users WHERE username=?", (username,)).fetchone()
+    if not u:
+        return []
+    return [("system_admin" if u["role"] == "admin" else "employee", "/")]
+
+
+def user_perms(c, username: str) -> set[str]:
+    """Quyen web: chi tinh vai tro co scope='/' (vai tro gioi han thu muc khong vao duoc trang quan tri)."""
+    roles = [r for r, s in user_roles(c, username) if s == "/"]
+    if not roles:
+        return set()
+    marks = ",".join("?" * len(roles))
+    return {r[0] for r in c.execute(f"SELECT permission FROM role_permissions WHERE role IN ({marks})", roles)}
+
+
+def web_perms(username: str) -> set[str]:
+    """Quyen web cua tai khoan dang hoat dong; bi khoa/khong ton tai/khong co quyen dang nhap -> rong."""
+    with db() as c:
+        row = c.execute("SELECT enabled FROM users WHERE username=?", (username,)).fetchone()
+        if not row or row["enabled"] != 1:
+            return set()
+        perms = user_perms(c, username) & WEB_PERMS
+        return perms if perms & LOGIN_PERMS else set()
+
+
+def is_sysadmin(c, username: str) -> bool:
+    return ("system_admin", "/") in user_roles(c, username)
+
+
+def _other_active_admins(c, username: str) -> int:
+    """So system_admin@/ dang hoat dong khac `username` (tinh ca fallback users.role='admin')."""
+    return c.execute(
+        "SELECT COUNT(*) FROM users u WHERE u.enabled=1 AND u.username<>? AND ("
+        " EXISTS(SELECT 1 FROM user_roles r WHERE r.username=u.username AND r.role='system_admin' AND r.scope='/')"
+        " OR (u.role='admin' AND NOT EXISTS(SELECT 1 FROM user_roles r WHERE r.username=u.username)))",
+        (username,)).fetchone()[0]
+
+
+def sync_compat_role(c, username: str) -> None:
+    """Dat users.role/read_only theo vai tro RBAC con lai (tranh fallback cap nham system_admin)."""
+    roles = {r for r, _ in c.execute("SELECT role, scope FROM user_roles WHERE username=?", (username,))}
+    role, ro = next((ROLE_COMPAT[r] for r in ("system_admin", "security_auditor") if r in roles), ("user", 0))
+    c.execute("UPDATE users SET role=?, read_only=? WHERE username=?", (role, ro, username))
+
+
+def norm_scope(scope: str) -> str | None:
+    """Chuan hoa thanh '/a/b'; co '..' hoac '.' -> None."""
+    parts = [p for p in (scope or "").strip().replace("\\", "/").split("/") if p]
+    if any(p in ("..", ".") for p in parts):
+        return None
+    return "/" + "/".join(parts)
+
+
 # ---------- xac thuc / CSRF ----------
-def current_admin(request: Request) -> str:
-    name = request.session.get("admin")
-    if not name:
-        raise HTTPException(status_code=303, headers={"Location": "/login"})
-    return name
+def require(*needed: str):
+    """Dependency: chua dang nhap / mat quyen web -> 303 /login; thieu moi quyen trong `needed` -> 403.
+    Doc lai quyen tu CSDL moi request de thu hoi vai tro / khoa tai khoan co hieu luc ngay."""
+    def dep(request: Request) -> str:
+        name = request.session.get("user")
+        perms = web_perms(name) if name else set()
+        if not perms:
+            request.session.pop("user", None)
+            request.session.pop("perms", None)
+            raise HTTPException(status_code=303, headers={"Location": "/login"})
+        request.session["perms"] = sorted(perms)
+        if needed and not perms & set(needed):
+            raise HTTPException(status_code=403, detail="Khong du quyen: can " + " hoac ".join(needed))
+        return name
+    return dep
+
+
+SCAN_VIEW = ("scan:view", "scan:manage")  # duoc thao tac quet thi cung duoc xem danh sach
 
 
 def csrf_token(request: Request) -> str:
@@ -186,7 +373,8 @@ def check_csrf(request: Request, token: str) -> None:
 
 
 def render(request: Request, name: str, **ctx):
-    ctx.update(csrf=csrf_token(request), admin=request.session.get("admin"), flash=request.session.pop("flash", None))
+    ctx.update(csrf=csrf_token(request), admin=request.session.get("user"), perms=set(request.session.get("perms", [])),
+               flash=request.session.pop("flash", None))
     return templates.TemplateResponse(request, name, ctx)
 
 
@@ -210,20 +398,22 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     with db() as c:
         row = c.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
     ok = verify_password(password, row["password_hash"] if row else DUMMY_HASH)
-    if row and ok and row["enabled"] == 1 and row["role"] == "admin":
+    perms = web_perms(row["username"]) if row and ok else set()
+    if perms:
         request.session.clear()
-        request.session["admin"] = row["username"]
-        audit(row["username"], "ADMIN_LOGIN", "web admin login")
+        request.session["user"] = row["username"]
+        request.session["perms"] = sorted(perms)
+        audit(row["username"], "ADMIN_LOGIN", "web admin login perms=" + ",".join(sorted(perms)))
         return back("/")
-    audit(username, "ADMIN_LOGIN", "web admin login failed", ok=False)
-    flash(request, "Sai tai khoan/mat khau hoac khong phai admin", "danger")
+    audit(username, "ADMIN_LOGIN", "web admin login failed" + (": no web permission" if ok and row else ""), ok=False)
+    flash(request, "Sai tai khoan/mat khau hoac tai khoan khong co quyen quan tri", "danger")
     return back("/login")
 
 
 @app.post("/logout")
 def logout(request: Request, csrf: str = Form(...)):
     check_csrf(request, csrf)
-    name = request.session.get("admin")
+    name = request.session.get("user")
     request.session.clear()
     if name:
         audit(name, "ADMIN_LOGOUT", "web admin logout")
@@ -232,61 +422,73 @@ def logout(request: Request, csrf: str = Form(...)):
 
 # ---------- dashboard ----------
 @app.get("/")
-def dashboard(request: Request, admin: str = Depends(current_admin)):
+def dashboard(request: Request, admin: str = Depends(require())):
+    perms = set(request.session["perms"])
+    ctx = {"users": None, "files": None, "rows": [], "failed_logins": 0, "activity": None}
     with db() as c:
-        users = c.execute("SELECT COUNT(*) total, COALESCE(SUM(enabled=0),0) locked FROM users").fetchone()
-        files = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM files GROUP BY status")}
-    recent = read_audit(limit=5)  # dashboard co dinh khong cuon: chi vua 5 dong, xem them o trang Nhat ky
-    failed = len(read_audit(limit=1000, event="LOGIN", result="FAIL"))
-    return render(request, "dashboard.html", users=users, files=files, rows=recent, failed_logins=failed, activity=activity_by_hour())
+        if "user:manage" in perms:
+            ctx["users"] = c.execute("SELECT COUNT(*) total, COUNT(CASE WHEN enabled=0 THEN 1 END) locked FROM users").fetchone()
+        if perms & set(SCAN_VIEW):
+            ctx["files"] = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM files GROUP BY status")}
+    if "audit:view" in perms:
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+        ctx.update(rows=read_audit(limit=5),  # dashboard co dinh khong cuon: chi vua 5 dong, xem them o trang Nhat ky
+                   failed_logins=count_audit(event="LOGIN", result="FAIL", since=since), activity=activity_by_hour())
+    return render(request, "dashboard.html", **ctx)
 
 
 # ---------- users ----------
+def all_roles(c) -> list[str]:
+    return [r[0] for r in c.execute("SELECT name FROM roles ORDER BY name")]
+
+
 @app.get("/users")
-def users_page(request: Request, page: str = "1", per_page: str = "20", admin: str = Depends(current_admin)):
+def users_page(request: Request, page: str = "1", per_page: str = "20", admin: str = Depends(require("user:manage"))):
     with db() as c:
         total = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         pg = paginate(request, total, page, per_page)
         rows = c.execute("SELECT * FROM users ORDER BY username LIMIT ? OFFSET ?", (pg["per_page"], pg["offset"])).fetchall()
-    return render(request, "users.html", users=rows, roles=ROLES, pg=pg)
+        assigned = {u["username"]: user_roles(c, u["username"]) for u in rows}
+        roles = all_roles(c)
+    return render(request, "users.html", users=rows, assigned=assigned, roles=roles, pg=pg)
 
 
 @app.post("/users")
-def create_user(request: Request, admin: str = Depends(current_admin), username: str = Form(...),
-                password: str = Form(...), role: str = Form(...), home: str = Form("/"), csrf: str = Form(...)):
+def create_user(request: Request, admin: str = Depends(require("user:manage")), username: str = Form(...),
+                password: str = Form(...), role: str = Form(...), scope: str = Form("/"), home: str = Form("/"),
+                csrf: str = Form(...)):
     check_csrf(request, csrf)
     username = username.strip().lower()
-    home = "/" + home.strip().strip("/") if home.strip().strip("/") else "/"
-    if not USERNAME_RE.match(username) or role not in ROLES or len(password) < 4 or ".." in home:
-        flash(request, "Du lieu khong hop le (ten 3-32 ky tu a-z0-9_.-, mat khau >= 4 ky tu)", "danger")
+    home, scope = norm_scope(home), norm_scope(scope)
+    with db() as c:
+        valid_role = role in all_roles(c)
+    if not USERNAME_RE.match(username) or not valid_role or len(password) < 4 or home is None or scope is None:
+        flash(request, "Du lieu khong hop le (ten 3-32 ky tu a-z0-9_.-, mat khau >= 4 ky tu, vai tro co that, khong '..')", "danger")
         return back("/users")
+    compat, ro = ROLE_COMPAT.get(role, ("user", 0))
     try:
         with db() as c:
-            c.execute("INSERT INTO users(username, password_hash, role, read_only, home) VALUES (?,?,?,?,?)",
-                      (username, hash_password(password), role, 1 if role == "readonly" else 0, home))
-    except sqlite3.IntegrityError:
+            c.execute("INSERT INTO users(username, password_hash, role, read_only, home, created_at) VALUES (?,?,?,?,?,?)",
+                      (username, hash_password(password), compat, ro, home, utc_now()))
+            c.execute("INSERT INTO user_roles(username, role, scope) VALUES (?,?,?)", (username, role, scope))
+    except DB_INTEGRITY_ERRORS:
         flash(request, "Ten dang nhap da ton tai", "danger")
         return back("/users")
-    audit(admin, "ADMIN_CREATE_USER", f"{username} role={role} home={home}")
+    audit(admin, "ADMIN_CREATE_USER", f"{username} role={role}@{scope} home={home}")
     flash(request, f"Da tao {username}")
     return back("/users")
 
 
-def _other_active_admins(c, username: str) -> int:
-    return c.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND enabled=1 AND username<>?",
-                     (username,)).fetchone()[0]
-
-
 @app.post("/users/{username}/toggle")
-def toggle_user(username: str, request: Request, admin: str = Depends(current_admin), csrf: str = Form(...)):
+def toggle_user(username: str, request: Request, admin: str = Depends(require("user:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
     with db() as c:
         row = c.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         if not row:
             raise HTTPException(404)
         locking = row["enabled"] == 1
-        if locking and row["role"] == "admin" and (username == admin or _other_active_admins(c, username) == 0):
-            flash(request, "Khong the khoa chinh minh hoac admin cuoi cung", "danger")
+        if locking and (username == admin or (is_sysadmin(c, username) and _other_active_admins(c, username) == 0)):
+            flash(request, "Khong the khoa chinh minh hoac system_admin cuoi cung", "danger")
             return back("/users")
         c.execute("UPDATE users SET enabled=? WHERE username=?", (0 if locking else 1, username))
     audit(admin, "ADMIN_LOCK_USER" if locking else "ADMIN_UNLOCK_USER", username)
@@ -294,27 +496,70 @@ def toggle_user(username: str, request: Request, admin: str = Depends(current_ad
     return back("/users")
 
 
-@app.post("/users/{username}/role")
-def set_role(username: str, request: Request, admin: str = Depends(current_admin), role: str = Form(...),
-             csrf: str = Form(...)):
+def _role_form(c, username: str, role: str, scope: str):
+    """Kiem tra user/role/scope; -> (scope chuan hoa, loi hoac None)."""
+    if not c.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+        raise HTTPException(404)
+    if not c.execute("SELECT 1 FROM user_roles WHERE username=?", (username,)).fetchone():
+        # chuyen fallback thanh dong that truoc de vai tro ngam dinh khong bi mat khi gan/go
+        c.executemany("INSERT INTO user_roles(username, role, scope) VALUES (?,?,?) ON CONFLICT DO NOTHING",
+                      [(username, r, s) for r, s in user_roles(c, username)])
+    scope = norm_scope(scope)
+    if role not in all_roles(c):
+        return scope, "Vai tro khong ton tai"
+    if scope is None:
+        return scope, "Pham vi khong hop le (khong duoc chua '..')"
+    return scope, None
+
+
+@app.post("/users/{username}/roles")
+def add_role(username: str, request: Request, admin: str = Depends(require("role:manage")), role: str = Form(...),
+             scope: str = Form("/"), csrf: str = Form(...)):
     check_csrf(request, csrf)
-    if role not in ROLES:
-        raise HTTPException(400)
     with db() as c:
-        row = c.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-        if not row:
-            raise HTTPException(404)
-        if row["role"] == "admin" and role != "admin" and row["enabled"] == 1 and _other_active_admins(c, username) == 0:
-            flash(request, "Khong the ha quyen admin cuoi cung", "danger")
+        scope, err = _role_form(c, username, role, scope)
+        if err:
+            flash(request, err, "danger")
             return back("/users")
-        c.execute("UPDATE users SET role=?, read_only=? WHERE username=?", (role, 1 if role == "readonly" else 0, username))
-    audit(admin, "ADMIN_SET_ROLE", f"{username} -> {role}")
-    flash(request, f"Da gan quyen {role} cho {username}")
+        added = c.execute("INSERT INTO user_roles(username, role, scope) VALUES (?,?,?) ON CONFLICT DO NOTHING",
+                          (username, role, scope)).rowcount
+        sync_compat_role(c, username)
+    if not added:
+        flash(request, f"{username} da co {role}@{scope}", "info")
+        return back("/users")
+    audit(admin, "ADMIN_GRANT_ROLE", f"{username} +{role}@{scope}")
+    flash(request, f"Da gan {role}@{scope} cho {username}")
+    return back("/users")
+
+
+@app.post("/users/{username}/roles/remove")
+def remove_role(username: str, request: Request, admin: str = Depends(require("role:manage")), role: str = Form(...),
+                scope: str = Form("/"), csrf: str = Form(...)):
+    check_csrf(request, csrf)
+    with db() as c:
+        scope, err = _role_form(c, username, role, scope)
+        if err:
+            flash(request, err, "danger")
+            return back("/users")
+        if (role, scope) == ("system_admin", "/"):
+            row = c.execute("SELECT enabled FROM users WHERE username=?", (username,)).fetchone()
+            if username == admin or (row["enabled"] == 1 and _other_active_admins(c, username) == 0):
+                audit(admin, "ADMIN_REVOKE_ROLE", f"{username} -{role}@{scope} refused", ok=False)
+                flash(request, "Khong the tu go system_admin cua chinh minh hoac go system_admin cuoi cung", "danger")
+                return back("/users")
+        removed = c.execute("DELETE FROM user_roles WHERE username=? AND role=? AND scope=?",
+                            (username, role, scope)).rowcount
+        sync_compat_role(c, username)
+    if not removed:
+        flash(request, f"{username} khong co {role}@{scope}", "info")
+        return back("/users")
+    audit(admin, "ADMIN_REVOKE_ROLE", f"{username} -{role}@{scope}")
+    flash(request, f"Da go {role}@{scope} khoi {username}")
     return back("/users")
 
 
 @app.post("/users/{username}/password")
-def reset_password(username: str, request: Request, admin: str = Depends(current_admin),
+def reset_password(username: str, request: Request, admin: str = Depends(require("user:manage")),
                    password: str = Form(...), csrf: str = Form(...)):
     check_csrf(request, csrf)
     if len(password) < 4:
@@ -357,12 +602,12 @@ def sync_files() -> tuple[int, int]:
             seen.add(rel)
             row = c.execute("SELECT * FROM files WHERE path=?", (rel,)).fetchone()
             if row is None:
-                c.execute("INSERT INTO files(path,size,mtime,sha256) VALUES (?,?,?,?)",
-                          (rel, st.st_size, int(st.st_mtime), _sha256(p)))
+                c.execute("INSERT INTO files(path,size,mtime,sha256,updated_at) VALUES (?,?,?,?,?)",
+                          (rel, st.st_size, int(st.st_mtime), _sha256(p), utc_now()))
                 added += 1
             elif row["size"] != st.st_size or row["mtime"] != int(st.st_mtime):
                 c.execute("UPDATE files SET size=?, mtime=?, sha256=?, status='PENDING', detail=NULL, scanned_at=NULL, "
-                          "updated_at=datetime('now') WHERE id=?", (st.st_size, int(st.st_mtime), _sha256(p), row["id"]))
+                          "updated_at=? WHERE id=?", (st.st_size, int(st.st_mtime), _sha256(p), utc_now(), row["id"]))
                 changed += 1
         for row in c.execute("SELECT id, path FROM files WHERE status<>'QUARANTINED'").fetchall():
             if row["path"] not in seen:
@@ -387,7 +632,7 @@ def scan_with_clamav(p: Path) -> tuple[str, str]:
 
 @app.get("/files")
 def files_page(request: Request, status: str = "", page: str = "1", per_page: str = "20",
-               admin: str = Depends(current_admin)):
+               admin: str = Depends(require(*SCAN_VIEW))):
     where, args = "", ()
     if status in STATUSES:
         where, args = " WHERE status=?", (status,)
@@ -401,7 +646,7 @@ def files_page(request: Request, status: str = "", page: str = "1", per_page: st
 
 
 @app.post("/files/sync")
-def files_sync(request: Request, admin: str = Depends(current_admin), csrf: str = Form(...)):
+def files_sync(request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
     added, changed = sync_files()
     audit(admin, "ADMIN_FILE_SYNC", f"added={added} changed={changed}")
@@ -417,7 +662,7 @@ def _file(c, file_id: int):
 
 
 @app.post("/files/{file_id}/scan")
-def file_scan(file_id: int, request: Request, admin: str = Depends(current_admin), csrf: str = Form(...)):
+def file_scan(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
     with db() as c:
         row = _file(c, file_id)
@@ -425,30 +670,31 @@ def file_scan(file_id: int, request: Request, admin: str = Depends(current_admin
             flash(request, "Tep dang cach ly", "danger")
             return back("/files")
         status, detail = scan_with_clamav(_abs(row["path"]))
-        c.execute("UPDATE files SET status=?, detail=?, scanned_at=datetime('now'), updated_at=datetime('now') WHERE id=?",
-                  (status, detail, file_id))
+        now = utc_now()
+        c.execute("UPDATE files SET status=?, detail=?, scanned_at=?, updated_at=? WHERE id=?",
+                  (status, detail, now, now, file_id))
     audit(admin, "ADMIN_FILE_SCAN", f"{row['path']} -> {status} ({detail})", ok=status != "INFECTED")
     flash(request, f"{row['path']}: {status} - {detail}", "danger" if status == "INFECTED" else "info")
     return back("/files")
 
 
 @app.post("/files/{file_id}/approve")
-def file_approve(file_id: int, request: Request, admin: str = Depends(current_admin), csrf: str = Form(...)):
+def file_approve(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
     with db() as c:
         row = _file(c, file_id)
         if row["status"] not in ("PENDING", "INFECTED"):
             flash(request, "Chi duyet duoc tep PENDING/INFECTED", "danger")
             return back("/files")
-        c.execute("UPDATE files SET status='CLEAN', detail='Duyet thu cong boi '||?, updated_at=datetime('now') WHERE id=?",
-                  (admin, file_id))
+        c.execute("UPDATE files SET status='CLEAN', detail=?, updated_at=? WHERE id=?",
+                  (f"Duyet thu cong boi {admin}", utc_now(), file_id))
     audit(admin, "ADMIN_FILE_APPROVE", row["path"])
     flash(request, f"Da duyet {row['path']}")
     return back("/files")
 
 
 @app.post("/files/{file_id}/quarantine")
-def file_quarantine(file_id: int, request: Request, admin: str = Depends(current_admin), csrf: str = Form(...)):
+def file_quarantine(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
     with db() as c:
         row = _file(c, file_id)
@@ -458,15 +704,15 @@ def file_quarantine(file_id: int, request: Request, admin: str = Depends(current
         QUARANTINE.mkdir(parents=True, exist_ok=True)
         dest = QUARANTINE / f"{file_id}_{src.name}"
         shutil.move(str(src), dest)
-        c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, updated_at=datetime('now') WHERE id=?",
-                  (str(dest), file_id))
+        c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, updated_at=? WHERE id=?",
+                  (str(dest), utc_now(), file_id))
     audit(admin, "ADMIN_FILE_QUARANTINE", row["path"])
     flash(request, f"Da cach ly {row['path']}")
     return back("/files")
 
 
 @app.post("/files/{file_id}/restore")
-def file_restore(file_id: int, request: Request, admin: str = Depends(current_admin), csrf: str = Form(...)):
+def file_restore(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
     with db() as c:
         row = _file(c, file_id)
@@ -479,14 +725,14 @@ def file_restore(file_id: int, request: Request, admin: str = Depends(current_ad
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(row["quarantine_path"], dest)
         c.execute("UPDATE files SET status='PENDING', quarantine_path=NULL, detail='Khoi phuc tu cach ly', "
-                  "updated_at=datetime('now') WHERE id=?", (file_id,))
+                  "updated_at=? WHERE id=?", (utc_now(), file_id))
     audit(admin, "ADMIN_FILE_RESTORE", row["path"])
     flash(request, f"Da khoi phuc {row['path']} (chuyen ve PENDING, can quet lai)")
     return back("/files")
 
 
 @app.post("/files/{file_id}/delete")
-def file_delete(file_id: int, request: Request, admin: str = Depends(current_admin), csrf: str = Form(...)):
+def file_delete(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     """Xoa han tep da cach ly."""
     check_csrf(request, csrf)
     with db() as c:
@@ -504,8 +750,54 @@ def file_delete(file_id: int, request: Request, admin: str = Depends(current_adm
 # ---------- audit ----------
 @app.get("/audit")
 def audit_page(request: Request, event: str = "", user: str = "", result: str = "", page: str = "1",
-               per_page: str = "20", admin: str = Depends(current_admin)):
-    everything = read_audit(AUDIT_MAX_ROWS, event.strip(), user.strip(), result.strip())
-    pg = paginate(request, len(everything), page, per_page)
-    return render(request, "audit.html", rows=everything[pg["offset"]:pg["offset"] + pg["per_page"]], pg=pg,
-                  event=event, user=user, result=result, capped=len(everything) >= AUDIT_MAX_ROWS)
+               per_page: str = "20", admin: str = Depends(require("audit:view"))):
+    event, user, result = event.strip(), user.strip(), result.strip()
+    pg = paginate(request, count_audit(event, user, result), page, per_page)
+    rows = read_audit(pg["per_page"], event, user, result, offset=pg["offset"])
+    return render(request, "audit.html", rows=rows, pg=pg, event=event, user=user, result=result)
+
+
+# ---------- break-glass ----------
+@app.get("/breakglass")
+def breakglass_page(request: Request, admin: str = Depends(require("breakglass:grant"))):
+    with db() as c:
+        rows = c.execute("SELECT * FROM breakglass_grants WHERE revoked=0 AND expires_at > ? "
+                         "ORDER BY id DESC", (utc_now(),)).fetchall()
+        users = [r[0] for r in c.execute("SELECT username FROM users WHERE enabled=1 ORDER BY username")]
+    return render(request, "breakglass.html", grants=rows, users=users, max_minutes=BREAKGLASS_MAX_MINUTES)
+
+
+@app.post("/breakglass")
+def breakglass_grant(request: Request, admin: str = Depends(require("breakglass:grant")), username: str = Form(...),
+                     scope: str = Form(...), minutes: str = Form(...), reason: str = Form(...), csrf: str = Form(...)):
+    """Cung luat voi SITE BREAKGLASS GRANT: 1..480 phut, ly do >= 5 ky tu, khong tu cap cho minh."""
+    check_csrf(request, csrf)
+    username, reason, scope, n = username.strip(), reason.strip(), norm_scope(scope), to_int(minutes, 0)
+    if username == admin:
+        audit(admin, "BREAKGLASS_GRANT", "self-grant refused", ok=False)
+        flash(request, "Khong duoc tu cap break-glass cho chinh minh", "danger")
+        return back("/breakglass")
+    if not 1 <= n <= BREAKGLASS_MAX_MINUTES or len(reason) < 5 or scope is None:
+        flash(request, f"Du lieu khong hop le (1..{BREAKGLASS_MAX_MINUTES} phut, ly do >= 5 ky tu, khong '..')", "danger")
+        return back("/breakglass")
+    with db() as c:
+        if not c.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
+            flash(request, f"Khong co tai khoan {username}", "danger")
+            return back("/breakglass")
+        gid = c.execute("INSERT INTO breakglass_grants(username, scope, reason, granted_by, created_at, expires_at) "
+                        "VALUES (?,?,?,?,?,?) RETURNING id",
+                        (username, scope, reason, admin, utc_now(), utc_now(timedelta(minutes=n)))).fetchone()[0]
+    audit(admin, "BREAKGLASS_GRANT", f"#{gid} user={username} scope={scope} minutes={n} reason={reason}")
+    flash(request, f"Break-glass #{gid}: {username} co quyen tep tai {scope} trong {n} phut")
+    return back("/breakglass")
+
+
+@app.post("/breakglass/{grant_id}/revoke")
+def breakglass_revoke(grant_id: int, request: Request, admin: str = Depends(require("breakglass:grant")),
+                      csrf: str = Form(...)):
+    check_csrf(request, csrf)
+    with db() as c:
+        ok = c.execute("UPDATE breakglass_grants SET revoked=1 WHERE id=? AND revoked=0", (grant_id,)).rowcount > 0
+    audit(admin, "BREAKGLASS_REVOKE", f"#{grant_id}", ok=ok)
+    flash(request, f"Da thu hoi #{grant_id}" if ok else f"Khong tim thay #{grant_id} dang hieu luc", "success" if ok else "danger")
+    return back("/breakglass")
