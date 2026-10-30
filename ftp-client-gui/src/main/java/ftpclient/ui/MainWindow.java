@@ -8,6 +8,7 @@ import java.nio.file.Paths;
 import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
+import java.util.prefs.Preferences;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
@@ -70,6 +71,8 @@ public class MainWindow {
     private volatile RemoteSession session = newSession();
     private volatile boolean connected;
 
+    // nho may chu/cong/tai khoan lan truoc, khong dat cung dia chi nao trong ma nguon
+    private static final Preferences PREFS = Preferences.userNodeForPackage(MainWindow.class);
     private TextField hostField;
     private TextField portField;
     private TextField userField;
@@ -139,11 +142,12 @@ public class MainWindow {
     }
 
     private VBox buildTopArea() {
-        hostField = new TextField("localhost");
+        hostField = new TextField(PREFS.get("host", ""));
+        hostField.setPromptText("vd: ftp.tenban.com");
         hostField.setPrefWidth(120);
-        portField = new TextField("2121");
+        portField = new TextField(PREFS.get("port", "2121"));
         portField.setPrefWidth(60);
-        userField = new TextField("admin");
+        userField = new TextField(PREFS.get("user", ""));
         userField.setPrefWidth(100);
         passField = new PasswordField();
         passField.setPrefWidth(100);
@@ -307,6 +311,9 @@ public class MainWindow {
             }
             String user = userField.getText().trim();
             String pass = passField.getText();
+            PREFS.put("host", host);
+            PREFS.put("port", String.valueOf(port));
+            PREFS.put("user", user);
             session = newSession();
             RemoteSession s = session;
             connectButton.setDisable(true);
