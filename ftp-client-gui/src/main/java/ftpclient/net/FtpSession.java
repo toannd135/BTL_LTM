@@ -27,6 +27,9 @@ public class FtpSession implements RemoteSession {
 
     private static final Pattern PASV_PATTERN = Pattern.compile("\\((\\d+,\\d+,\\d+,\\d+,\\d+,\\d+)\\)");
 
+    private static final Pattern ROLES_PATTERN = Pattern.compile("\\(roles:\\s*([^)]*)\\)");
+
+    private List<String> roles = new ArrayList<>();
     private Socket control;
     private BufferedReader reader;
     private PrintWriter writer;
@@ -53,6 +56,21 @@ public class FtpSession implements RemoteSession {
             throw new EOFException("Server da dong ket noi");
         }
         logListener.onLine("RECV", line);
+        // tra loi nhieu dong "xxx-..." ket thuc o dong "xxx ..."; tra ve ca khoi, dong dau giu ma
+        if (line.length() >= 4 && line.charAt(3) == '-') {
+            String end = line.substring(0, 3) + " ";
+            StringBuilder sb = new StringBuilder(line);
+            String next;
+            do {
+                next = reader.readLine();
+                if (next == null) {
+                    throw new EOFException("Server da dong ket noi");
+                }
+                logListener.onLine("RECV", next);
+                sb.append('\n').append(next);
+            } while (!next.startsWith(end));
+            return sb.toString();
+        }
         return line;
     }
 
@@ -81,8 +99,46 @@ public class FtpSession implements RemoteSession {
     @Override
     public String login(String user, String pass) throws IOException, FtpException {
         requireOk(sendAndRead("USER " + user), 331, 230);
-        requireOk(sendAndRead("PASS " + pass), 230);
-        return "ftp";
+        String reply = requireOk(sendAndRead("PASS " + pass), 230);
+        roles = parseRoles(reply);
+        return roles.isEmpty() ? "ftp" : String.join(", ", roles);
+    }
+
+    /** Lay danh sach vai tro tu "230 ... (roles: a@/, b@/x)"; server cu khong bao thi rong. */
+    static List<String> parseRoles(String reply) {
+        Matcher m = ROLES_PATTERN.matcher(reply);
+        List<String> out = new ArrayList<>();
+        if (m.find()) {
+            for (String r : m.group(1).split(",")) {
+                if (!r.isBlank()) {
+                    out.add(r.trim());
+                }
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public List<String> roles() {
+        return List.copyOf(roles);
+    }
+
+    private boolean hasRole(String name) {
+        for (String r : roles) {
+            if (r.equals(name) || r.startsWith(name + "@")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public String site(String args) throws IOException, FtpException {
+        String reply = sendAndRead("SITE " + args);
+        if (codeOf(reply) >= 400) {
+            throw new FtpException(codeOf(reply), reply.length() > 4 ? reply.substring(4) : reply);
+        }
+        return reply;
     }
 
     @Override
@@ -244,14 +300,15 @@ public class FtpSession implements RemoteSession {
         return "FTP chuẩn (không có kiểm tra checksum)";
     }
 
+    // Chi de an/hien nut: server van kiem tra RBAC/ACL. Khong biet vai tro -> cho phep, de server quyet.
     @Override
     public boolean canWrite() {
-        return true;
+        return roles.isEmpty() || hasRole("file_manager") || hasRole("employee");
     }
 
     @Override
     public boolean canDelete() {
-        return true;
+        return roles.isEmpty() || hasRole("file_manager");
     }
 
     @Override

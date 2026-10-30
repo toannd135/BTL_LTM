@@ -46,6 +46,16 @@ jobs:
 
   admin-web-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: t
+          POSTGRES_USER: t
+          POSTGRES_PASSWORD: t
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U t -d t" --health-interval 5s --health-timeout 3s --health-retries 20
     defaults:
       run:
         working-directory: ftp/admin-web
@@ -58,8 +68,12 @@ jobs:
           cache-dependency-path: ftp/admin-web/requirements.txt
       - name: Cài dependency
         run: pip install -r requirements.txt httpx
-      # test tự dựng CSDL tạm từ ftp/src/main/resources/db/migration
-      - name: Kiểm thử trang admin
+      # test tự dựng CSDL tạm từ ftp/src/main/resources/db/migration/{sqlite,postgres}
+      - name: Kiểm thử trang admin (SQLite)
+        run: python test_admin.py
+      - name: Kiểm thử trang admin (PostgreSQL)
+        env:
+          ADMIN_TEST_PG_URL: postgresql://t:t@localhost:5432/t
         run: python test_admin.py
       - name: Kiểm tra build Docker image
         run: docker build -t ftpadmin:ci .

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -25,7 +26,12 @@ public final class MkdCommandHandler implements CommandHandler {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Directory already exists");
                 return;
             }
+            if (target.getParent() == null || !session.can(target.getParent(), Perm.WRITE)) {
+                session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
+                return;
+            }
             Files.createDirectory(target);
+            session.acl().recordOwner(session.aclPath(target), session.getUser().name());
             session.reply(FtpReply.DIR_ACTION_OK, "\"" + session.pathResolver().toVirtualPath(target) + "\" created");
             session.audit("MKDIR", session.pathResolver().toVirtualPath(target), true);
         } catch (SecurityException e) {

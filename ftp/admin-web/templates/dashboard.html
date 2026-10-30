@@ -3,14 +3,15 @@
 {% block main_class %}{% endblock %}
 {% block content %}
 <h3 class="mb-3 flex-shrink-0">Dashboard</h3>
-{% set pending = files.get('PENDING', 0) %}{% set infected = files.get('INFECTED', 0) %}
+{% set files = files or {} %}{% set pending = files.get('PENDING', 0) %}{% set infected = files.get('INFECTED', 0) %}
 <div class="row g-3 mb-3 flex-shrink-0">
-  <div class="col-6 col-lg-3"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>
-  <div class="col-6 col-lg-3"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if pending }} h-100"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 {{ 'text-warning fw-bold' if pending else 'text-dark' }}">{{ pending }}</div></div></div></a></div>
-  <div class="col-6 col-lg-3"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-danger' if infected }} h-100"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 {{ 'text-danger fw-bold' if infected else 'text-dark' }}">{{ infected }}{% if infected %} <span class="fs-6">⚠</span>{% endif %}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>
-  <div class="col-6 col-lg-3"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if failed_logins }} h-100"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2 {{ 'text-danger fw-bold' if failed_logins >= 5 else 'text-warning fw-bold' if failed_logins else 'text-dark' }}">{{ failed_logins }}</div><div class="small text-muted">trong nhật ký gần đây</div></div></div></a></div>
+  {% if users %}<div class="col-6 col-lg-3"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>{% endif %}
+  {% if 'scan:view' in perms or 'scan:manage' in perms %}<div class="col-6 col-lg-3"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if pending }} h-100"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 {{ 'text-warning fw-bold' if pending else 'text-dark' }}">{{ pending }}</div></div></div></a></div>
+  <div class="col-6 col-lg-3"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-danger' if infected }} h-100"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 {{ 'text-danger fw-bold' if infected else 'text-dark' }}">{{ infected }}{% if infected %} <span class="fs-6">⚠</span>{% endif %}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>{% endif %}
+  {% if activity %}<div class="col-6 col-lg-3"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if failed_logins }} h-100"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2 {{ 'text-danger fw-bold' if failed_logins >= 5 else 'text-warning fw-bold' if failed_logins else 'text-dark' }}">{{ failed_logins }}</div><div class="small text-muted">trong 24 giờ qua</div></div></div></a></div>{% endif %}
 </div>
 
+{% if activity %}
 <div class="card shadow-sm mb-3 dash-chart"><div class="card-header bg-white">Hoạt động 24 giờ qua <span class="text-muted small" id="tzLabel">(giờ máy của bạn)</span></div>
   <div class="card-body"><div class="chart-wrap"><canvas id="activityChart"></canvas></div></div></div>
 
@@ -41,4 +42,7 @@
     });
   }
 </script>
+{% else %}
+<p class="text-muted">Chọn mục trên thanh menu để làm việc.</p>
+{% endif %}
 {% endblock %}

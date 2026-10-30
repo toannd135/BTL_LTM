@@ -30,6 +30,12 @@ public interface RemoteSession extends Closeable {
     /** @return vai trò của tài khoản (admin/user/readonly) hoặc "ftp" nếu giao thức không báo vai trò. */
     String login(String user, String pass) throws IOException, FtpException;
 
+    /** Vai trò (kèm scope, vd "employee@/") server báo trong trả lời 230; rỗng nếu không báo. */
+    List<String> roles();
+
+    /** Gửi "SITE args", trả về toàn bộ trả lời (có thể nhiều dòng); mã ≥ 400 thì ném FtpException. */
+    String site(String args) throws IOException, FtpException;
+
     String pwd() throws IOException, FtpException;
 
     void cwd(String path) throws IOException, FtpException;

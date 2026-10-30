@@ -10,6 +10,7 @@ import java.nio.file.attribute.FileTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /** Dung chung cho ListCommandHandler va NlstCommandHandler. */
@@ -17,10 +18,10 @@ final class ListingFormatter {
 
     private ListingFormatter() {}
 
-    static void writeListing(Path dir, Socket dataSocket, boolean longFormat) throws IOException {
+    static void writeListing(Path dir, Socket dataSocket, boolean longFormat, Predicate<Path> visible) throws IOException {
         List<Path> entries;
         try (Stream<Path> s = Files.list(dir)) {
-            entries = s.sorted().toList();
+            entries = s.filter(visible).sorted().toList();
         }
         StringBuilder sb = new StringBuilder();
         for (Path p : entries) {

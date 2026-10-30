@@ -6,20 +6,31 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="col-md-3"><input name="username" class="form-control" placeholder="Tên đăng nhập" required></div>
     <div class="col-md-3"><input name="password" type="password" class="form-control" placeholder="Mật khẩu" required></div>
-    <div class="col-md-2"><select name="role" class="form-select">{% for r in roles %}<option {{ 'selected' if r == 'user' }}>{{ r }}</option>{% endfor %}</select></div>
-    <div class="col-md-2"><input name="home" class="form-control" placeholder="Thư mục (vd /sv2)" value="/"></div>
+    <div class="col-md-2"><select name="role" class="form-select" title="Vai trò RBAC">{% for r in roles %}<option {{ 'selected' if r == 'employee' }}>{{ r }}</option>{% endfor %}</select></div>
+    <div class="col-md-1"><input name="scope" class="form-control" placeholder="Phạm vi" value="/" title="Phạm vi vai trò ('/' = toàn bộ)"></div>
+    <div class="col-md-1"><input name="home" class="form-control" placeholder="Home (vd /sv2)" value="/" title="Thư mục home"></div>
     <div class="col-md-2"><button class="btn btn-primary w-100">Tạo tài khoản</button></div>
   </form>
 </div></div>
 <div class="card shadow-sm"><div class="table-responsive"><table class="table align-middle mb-0">
-  <thead><tr><th>Tài khoản</th><th>Quyền</th><th>Thư mục</th><th>Trạng thái</th><th>Đặt lại mật khẩu</th><th></th></tr></thead>
+  <thead><tr><th>Tài khoản</th><th>Vai trò (role@scope)</th><th>Thư mục</th><th>Trạng thái</th><th>Đặt lại mật khẩu</th><th></th></tr></thead>
   <tbody>
   {% for u in users %}
     <tr>
       <td>{{ u.username }}</td>
-      <td><form method="post" action="/users/{{ u.username }}/role" class="d-flex gap-1">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <select name="role" class="form-select form-select-sm" onchange="this.form.submit()">{% for r in roles %}<option {{ 'selected' if r == u.role }}>{{ r }}</option>{% endfor %}</select></form></td>
+      <td>
+        {% for r, sc in assigned[u.username] %}
+          {% if 'role:manage' in perms %}<form method="post" action="/users/{{ u.username }}/roles/remove" class="d-inline">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="role" value="{{ r }}"><input type="hidden" name="scope" value="{{ sc }}">
+            <span class="badge text-bg-light border">{{ r }}@{{ sc }} <button class="btn btn-link btn-sm p-0 text-danger text-decoration-none" title="Gỡ vai trò">✕</button></span></form>
+          {% else %}<span class="badge text-bg-light border">{{ r }}@{{ sc }}</span>{% endif %}
+        {% endfor %}
+        {% if 'role:manage' in perms %}<form method="post" action="/users/{{ u.username }}/roles" class="d-flex gap-1 mt-1">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <select name="role" class="form-select form-select-sm">{% for r in roles %}<option>{{ r }}</option>{% endfor %}</select>
+          <input name="scope" class="form-control form-control-sm" value="/" style="width:90px" title="Phạm vi">
+          <button class="btn btn-sm btn-outline-primary">Gán</button></form>{% endif %}
+      </td>
       <td>{{ u.home }}</td>
       <td>{% if u.enabled %}<span class="badge text-bg-success">Hoạt động</span>{% else %}<span class="badge text-bg-secondary">Bị khóa</span>{% endif %}</td>
       <td><form method="post" action="/users/{{ u.username }}/password" class="d-flex gap-1">

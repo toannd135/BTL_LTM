@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ftpserver
+      POSTGRES_USER: ftp
+      POSTGRES_PASSWORD: ${FTP_DB_PASSWORD:-ftp}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ftp -d ftpserver"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ftp:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FTP_DB_URL: jdbc:postgresql://db:5432/ftpserver
+      FTP_DB_USER: ftp
+      FTP_DB_PASSWORD: ${FTP_DB_PASSWORD:-ftp}
+      # FTP_SCAN_COMMAND: "clamscan --no-summary"   # can build voi --build-arg WITH_CLAMAV=1
+      # FTP_SCAN_ENFORCE: "true"
+      # FTP_TLS_KEYSTORE: /app/certs/ftps.p12
+      # FTP_TLS_KEYSTORE_PASSWORD: ${FTP_TLS_KEYSTORE_PASSWORD}
+    ports:
+      - "2121:2121"
+      - "50000-50100:50000-50100"
+    volumes:
+      - ftp-root:/app/ftproot
+      - ftp-logs:/app/logs
+      # - ./certs:/app/certs:ro
+
+volumes:
+  pg-data:
+  ftp-root:
+  ftp-logs:

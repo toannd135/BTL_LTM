@@ -26,15 +26,17 @@ public class FtpServer {
     private ServerSocket listener;
     private volatile boolean running;
     private ExecutorService pool;
+    private final Services services;
 
     public FtpServer(Config config, UserManager userManager, PathResolver pathResolver, CommandRegistry registry,
-                     TlsSupport tls, AuditLog audit) {
+                     TlsSupport tls, AuditLog audit, Services services) {
         this.config = config;
         this.userManager = userManager;
         this.pathResolver = pathResolver;
         this.registry = registry;
         this.tls = tls;
         this.audit = audit;
+        this.services = services;
     }
 
     public void start() throws IOException {
@@ -48,7 +50,7 @@ public class FtpServer {
         while (running) {
             try {
                 Socket client = listener.accept();
-                ClientSession session = new ClientSession(client, registry, userManager, pathResolver, config, tls, audit);
+                ClientSession session = new ClientSession(client, registry, userManager, pathResolver, config, tls, audit, services);
                 pool.submit(session);
             } catch (SocketException e) {
                 if (running) {

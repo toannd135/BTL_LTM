@@ -1,6 +1,7 @@
 package ftpserver.db;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -9,12 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import ftpserver.auth.User;
 import ftpserver.auth.UserManager;
+import ftpserver.rbac.RbacService;
 
 class MigrationAndAuthTest {
 
@@ -22,12 +25,33 @@ class MigrationAndAuthTest {
     void migrate_createsSchemaAndIsIdempotent(@TempDir Path tmp) throws Exception {
         Database db = new Database(tmp.resolve("t.db"));
         Migrator m = new Migrator(db);
-        assertEquals(3, m.migrate());
+        assertEquals(7, m.migrate());
         assertEquals(0, m.migrate());
         try (Connection c = db.open(); var rs = c.createStatement().executeQuery("SELECT COUNT(*) FROM users")) {
             rs.next();
-            assertEquals(2, rs.getInt(1));
+            assertEquals(4, rs.getInt(1));
         }
+    }
+
+    @Test
+    void seededRoles_separateDuties(@TempDir Path tmp) throws Exception {
+        Database db = new Database(tmp.resolve("t.db"));
+        new Migrator(db).migrate();
+        UserManager um = new UserManager(db);
+        RbacService rbac = new RbacService(db);
+
+        RbacService.Grants admin = rbac.load(um.authenticate("admin", "admin"));
+        assertEquals(List.of("system_admin@/"), admin.roles());
+        assertFalse(admin.has("file:download", "/"));
+        assertTrue(admin.has("user:manage", "/"));
+
+        RbacService.Grants fm = rbac.load(um.authenticate("fm", "fm"));
+        assertTrue(fm.has("file:manage", "/sv"));
+        assertFalse(fm.has("user:manage", "/"));
+
+        RbacService.Grants auditor = rbac.load(um.authenticate("auditor", "auditor"));
+        assertTrue(auditor.has("audit:view", "/"));
+        assertFalse(auditor.has("file:list", "/"));
     }
 
     @Test
