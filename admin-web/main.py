@@ -4,6 +4,7 @@ Chay: FTPADMIN_SECRET=<chuoi-ngau-nhien> uvicorn main:app --host 127.0.0.1 --por
 Bien moi truong: FTP_HOME, FTP_DB, FTP_ROOT, FTP_AUDIT_LOG, FTP_QUARANTINE, FTPADMIN_SECRET
 """
 import base64
+import contextvars
 import hashlib
 import hmac
 import os
@@ -13,8 +14,9 @@ import shutil
 import sqlite3
 import subprocess
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -30,11 +32,21 @@ AUDIT_LOG = Path(os.environ.get("FTP_AUDIT_LOG", FTP_HOME / "logs" / "audit.log"
 QUARANTINE = Path(os.environ.get("FTP_QUARANTINE", FTP_HOME / "quarantine")).resolve()
 SECRET = os.environ.get("FTPADMIN_SECRET") or secrets.token_hex(32)  # khong dat -> phien mat khi restart
 
+AUDIT_MAX_ROWS = 20000  # so dong nhat ky moi nhat co the lat qua cac trang
 ROLES = ("admin", "user", "readonly")
 STATUSES = ("PENDING", "CLEAN", "INFECTED", "QUARANTINED")
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
 
 app = FastAPI(title="FTP Admin")
+CLIENT_IP = contextvars.ContextVar("client_ip", default="-")
+
+
+@app.middleware("http")
+async def remember_client_ip(request: Request, call_next):
+    CLIENT_IP.set(request.client.host if request.client else "-")
+    return await call_next(request)
+
+
 app.add_middleware(SessionMiddleware, secret_key=SECRET, https_only=False, same_site="strict", max_age=3600)
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
@@ -73,8 +85,9 @@ DUMMY_HASH = hash_password("dummy")
 # ---------- audit ----------
 def audit(actor: str, event: str, detail: str, ok: bool = True) -> None:
     clean = lambda s: (s or "-").replace("\r", " ").replace("\n", " ").replace('"', "'")
-    line = 'ts=%s session=web ip=- user=%s event=%s result=%s detail="%s"\n' % (
-        datetime.now(timezone.utc).isoformat(), clean(actor), event, "OK" if ok else "FAIL", clean(detail))
+    line = 'ts=%s session=web ip=%s user=%s event=%s result=%s detail="%s"\n' % (
+        datetime.now(timezone.utc).isoformat(), clean(CLIENT_IP.get()), clean(actor), event,
+        "OK" if ok else "FAIL", clean(detail))
     AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(AUDIT_LOG, "a", encoding="utf-8") as f:
         f.write(line)
@@ -93,6 +106,8 @@ def read_audit(limit=500, event="", user="", result=""):
     rows = []
     for line in reversed(lines):
         d = {k: (v or q) for k, q, v in AUDIT_RE.findall(line)}
+        if "ts" in d:  # Java ghi nano-giay: cat con 3 chu so de moi trinh duyet deu doc duoc
+            d["ts"] = re.sub(r"(\.\d{3})\d+", r"\1", d["ts"])
         if not d.get("event"):
             continue
         if (event and d["event"] != event) or (user and d.get("user") != user) or (result and d.get("result") != result):
@@ -101,6 +116,56 @@ def read_audit(limit=500, event="", user="", result=""):
         if len(rows) >= limit:
             break
     return rows
+
+
+def activity_by_hour(hours: int = 24):
+    """Dem su kien theo gio (UTC) trong `hours` gio gan nhat; trinh duyet doi nhan gio sang gio may nguoi xem."""
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    slots = [now - timedelta(hours=h) for h in range(hours - 1, -1, -1)]
+    index = {t.strftime("%Y-%m-%dT%H"): i for i, t in enumerate(slots)}
+    series = {"LOGIN": [0] * hours, "UPLOAD": [0] * hours, "DOWNLOAD": [0] * hours}
+    for r in read_audit(limit=20000):
+        i = index.get(r.get("ts", "")[:13])
+        if i is not None and r["event"] in series and r.get("result") == "OK":
+            series[r["event"]][i] += 1
+    return {"slots": [t.strftime("%Y-%m-%dT%H:00:00Z") for t in slots], "series": series}
+
+
+# ---------- phan trang ----------
+PER_PAGE_CHOICES = (10, 20, 50, 100)
+
+
+def to_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def paginate(request: Request, total: int, page, per_page) -> dict:
+    """Thong tin phan trang + URL giu nguyen cac bo loc dang co tren query string."""
+    per_page = to_int(per_page, 20)
+    per_page = per_page if per_page in PER_PAGE_CHOICES else 20
+    pages = max(1, -(-total // per_page))
+    page = min(max(1, to_int(page, 1)), pages)
+
+    def url(n: int, size: int = per_page) -> str:
+        q = dict(request.query_params)
+        q.update(page=n, per_page=size)
+        return f"{request.url.path}?{urlencode(q)}"
+
+    numbers = sorted({1, pages, *range(max(1, page - 2), min(pages, page + 2) + 1)})
+    links, last = [], 0
+    for n in numbers:
+        if n - last > 1:
+            links.append(None)  # dau "..."
+        links.append((n, url(n)))
+        last = n
+    offset = (page - 1) * per_page
+    return {"page": page, "pages": pages, "per_page": per_page, "total": total, "offset": offset,
+            "start": offset + 1 if total else 0, "end": min(offset + per_page, total), "links": links,
+            "prev": url(page - 1) if page > 1 else None, "next": url(page + 1) if page < pages else None,
+            "sizes": [(s, url(1, s)) for s in PER_PAGE_CHOICES]}
 
 
 # ---------- xac thuc / CSRF ----------
@@ -171,17 +236,19 @@ def dashboard(request: Request, admin: str = Depends(current_admin)):
     with db() as c:
         users = c.execute("SELECT COUNT(*) total, COALESCE(SUM(enabled=0),0) locked FROM users").fetchone()
         files = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM files GROUP BY status")}
-    recent = read_audit(limit=10)
+    recent = read_audit(limit=5)  # dashboard co dinh khong cuon: chi vua 5 dong, xem them o trang Nhat ky
     failed = len(read_audit(limit=1000, event="LOGIN", result="FAIL"))
-    return render(request, "dashboard.html", users=users, files=files, rows=recent, failed_logins=failed)
+    return render(request, "dashboard.html", users=users, files=files, rows=recent, failed_logins=failed, activity=activity_by_hour())
 
 
 # ---------- users ----------
 @app.get("/users")
-def users_page(request: Request, admin: str = Depends(current_admin)):
+def users_page(request: Request, page: str = "1", per_page: str = "20", admin: str = Depends(current_admin)):
     with db() as c:
-        rows = c.execute("SELECT * FROM users ORDER BY username").fetchall()
-    return render(request, "users.html", users=rows, roles=ROLES)
+        total = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        pg = paginate(request, total, page, per_page)
+        rows = c.execute("SELECT * FROM users ORDER BY username LIMIT ? OFFSET ?", (pg["per_page"], pg["offset"])).fetchall()
+    return render(request, "users.html", users=rows, roles=ROLES, pg=pg)
 
 
 @app.post("/users")
@@ -319,13 +386,17 @@ def scan_with_clamav(p: Path) -> tuple[str, str]:
 
 
 @app.get("/files")
-def files_page(request: Request, status: str = "", admin: str = Depends(current_admin)):
-    q, args = "SELECT * FROM files", ()
+def files_page(request: Request, status: str = "", page: str = "1", per_page: str = "20",
+               admin: str = Depends(current_admin)):
+    where, args = "", ()
     if status in STATUSES:
-        q, args = q + " WHERE status=?", (status,)
+        where, args = " WHERE status=?", (status,)
     with db() as c:
-        rows = c.execute(q + " ORDER BY updated_at DESC LIMIT 500", args).fetchall()
-    return render(request, "files.html", files=rows, statuses=STATUSES, status=status,
+        total = c.execute("SELECT COUNT(*) FROM files" + where, args).fetchone()[0]
+        pg = paginate(request, total, page, per_page)
+        rows = c.execute("SELECT * FROM files" + where + " ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+                         args + (pg["per_page"], pg["offset"])).fetchall()
+    return render(request, "files.html", files=rows, statuses=STATUSES, status=status, pg=pg,
                   clamav=bool(shutil.which("clamdscan") or shutil.which("clamscan")))
 
 
@@ -432,7 +503,9 @@ def file_delete(file_id: int, request: Request, admin: str = Depends(current_adm
 
 # ---------- audit ----------
 @app.get("/audit")
-def audit_page(request: Request, event: str = "", user: str = "", result: str = "",
-               admin: str = Depends(current_admin)):
-    return render(request, "audit.html", rows=read_audit(500, event.strip(), user.strip(), result.strip()),
-                  event=event, user=user, result=result)
+def audit_page(request: Request, event: str = "", user: str = "", result: str = "", page: str = "1",
+               per_page: str = "20", admin: str = Depends(current_admin)):
+    everything = read_audit(AUDIT_MAX_ROWS, event.strip(), user.strip(), result.strip())
+    pg = paginate(request, len(everything), page, per_page)
+    return render(request, "audit.html", rows=everything[pg["offset"]:pg["offset"] + pg["per_page"]], pg=pg,
+                  event=event, user=user, result=result, capped=len(everything) >= AUDIT_MAX_ROWS)

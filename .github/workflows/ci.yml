@@ -11,6 +11,19 @@ on:
   pull_request:
 
 jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # quet ca lich su git
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          # Bo qua mat khau cu (toannd/123456) trong lich su, xem .gitleaks-baseline.json neu co
+          GITLEAKS_BASELINE_PATH: .gitleaks-baseline.json
+
   server-test:
     runs-on: ubuntu-latest
     defaults:

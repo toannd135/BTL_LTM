@@ -99,12 +99,38 @@ c.post("/files/sync", data={"csrf": t})
 with main.db() as d:
     check("tep doi noi dung quay ve PENDING", d.execute("SELECT status FROM files WHERE path='sv/ok.txt'").fetchone()[0] == "PENDING")
 
+# phan trang
+with main.db() as d:
+    for i in range(45):
+        d.execute("INSERT INTO users(username, password_hash, role, home) VALUES (?,?,?,?)", (f"bulk{i:02d}", "x", "user", "/"))
+def count(html, marker): return html.count(marker)
+p1 = c.get("/users").text
+check("users trang 1: 20 dong + thanh phan trang", count(p1, "/toggle") == 20 and "Hiển thị 1–20" in p1)
+p3 = c.get("/users?page=3&per_page=20").text
+with main.db() as d:
+    total_users = d.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+check("users trang cuoi: so dong dung", count(p3, "/toggle") == total_users - 40)
+check("page vuot gioi han -> kep ve trang cuoi", count(c.get("/users?page=999").text, "/toggle") == total_users - 40)
+check("page/per_page rac -> mac dinh, khong loi", c.get("/users?page=abc&per_page=7").status_code == 200)
+check("per_page=50 ap dung", count(c.get("/users?per_page=50").text, "/toggle") == min(50, total_users) and count(c.get("/users?per_page=10").text, "/toggle") == 10)
+with main.db() as d:
+    for i in range(30):
+        d.execute("INSERT INTO files(path,size,mtime,sha256,status) VALUES (?,?,?,?,?)", (f"bulk/{i}.bin", 1, 1, "0" * 64, "PENDING"))
+fp = c.get("/files?status=PENDING&page=2&per_page=10").text
+check("files: loc + phan trang giu bo loc trong link", "status=PENDING" in fp and "page=3" in fp and count(fp, "/scan") == 10)
+for i in range(60):
+    main.audit("tester", "UPLOAD", f"/f{i}.bin bytes=1")
+ap = c.get("/audit?event=UPLOAD&per_page=10&page=2").text
+check("audit: trang 2 co 10 dong, giu bo loc", count(ap, "<time") == 10 and "event=UPLOAD" in ap)
+check("audit: tong so dung", "/ 60" in c.get("/audit?event=UPLOAD").text)
+
 # audit
 page = c.get("/audit?user=admin").text
 check("audit hien thao tac quan tri", "ADMIN_CREATE_USER" in page and "ADMIN_FILE_QUARANTINE" in page)
 check("audit loc theo su kien", "ADMIN_CREATE_USER" not in c.get("/audit?event=ADMIN_LOGIN").text)
 d = c.get("/").text
-check("dashboard dem dung nguoi dung/tep", "Dashboard" in d)
+check("dashboard co bieu do hoat dong 24h", "activityChart" in d and '"LOGIN"' in d)
+check("audit web ghi IP trinh duyet that", main.read_audit(1, event="ADMIN_LOGIN")[0]["ip"] == "testclient")
 c.post("/logout", data={"csrf": token(c, "/users")})
 check("dang xuat", c.get("/users").status_code == 303)
 print("\nALL ADMIN TESTS PASSED")
