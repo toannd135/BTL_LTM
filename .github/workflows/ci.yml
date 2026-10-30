@@ -1,6 +1,6 @@
 name: CI/CD
 
-# Một pipeline chung cho server (ftp/), UI desktop (ftp-client-gui/) và trang quản trị (admin-web/)
+# Một pipeline chung cho server (ftp/), UI desktop (ftp-client-gui/) và trang quản trị (ftp/admin-web/)
 # - push main / PR : test server + build installer UI; push main thì đẩy Docker image :latest (ftpserver, ftpadmin)
 # - tag v*         : như trên + đẩy image theo version + tạo GitHub Release (jar server + installer UI)
 
@@ -48,14 +48,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: admin-web
+        working-directory: ftp/admin-web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: admin-web/requirements.txt
+          cache-dependency-path: ftp/admin-web/requirements.txt
       - name: Cài dependency
         run: pip install -r requirements.txt httpx
       # test tự dựng CSDL tạm từ ftp/src/main/resources/db/migration
@@ -221,7 +221,7 @@ jobs:
             type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
-          context: admin-web
+          context: ftp/admin-web
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
