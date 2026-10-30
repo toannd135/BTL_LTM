@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 
+import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -45,6 +46,14 @@ public final class StorCommandHandler implements CommandHandler {
         } catch (SecurityException e) {
             session.reply(FtpReply.FILE_NAME_NOT_ALLOWED, "Invalid file name");
             session.audit("UPLOAD", cmd + " " + arg + " (path rejected)", false);
+            return;
+        }
+        boolean isNew = !Files.exists(target);
+        // ghi de tep co san can WRITE tren tep; tao tep moi can WRITE tren thu muc chua no
+        Path guarded = isNew ? target.getParent() : target;
+        if (guarded == null || !session.can(guarded, Perm.WRITE)) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
+            session.audit("UPLOAD", cmd + " " + arg + " (denied: no write permission)", false);
             return;
         }
         if (session.getState() != SessionState.DATA_READY) {
@@ -107,6 +116,11 @@ public final class StorCommandHandler implements CommandHandler {
                 session.audit("UPLOAD", vpath + " cannot save", false);
                 return;
             }
+        }
+        session.scan().onUpload(session.aclPath(target), target);
+        if (isNew) {
+            // nguoi tai len la chu so huu: mac dinh chi minh ho (va admin) truy cap, cho den khi SITE SHARE
+            session.acl().recordOwner(session.aclPath(target), session.getUser().name());
         }
         session.reply(FtpReply.CLOSING_DATA_CONN, "Closing data connection");
         session.audit("UPLOAD", vpath + " bytes=" + received

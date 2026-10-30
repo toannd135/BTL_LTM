@@ -1,5 +1,6 @@
 package ftpserver.command;
 
+import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -22,6 +23,10 @@ public final class RnfrCommandHandler implements CommandHandler {
             Path source = session.pathResolver().resolve(session.getCurrentDir(), arg);
             if (!Files.exists(source) || source.equals(session.pathResolver().rootDir())) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "File or directory not found");
+                return;
+            }
+            if (!session.canDo("file:rename", source, Perm.WRITE)) {
+                session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
                 return;
             }
             session.setRenameFrom(source);

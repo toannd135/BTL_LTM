@@ -14,18 +14,19 @@ import java.util.HexFormat;
 import java.util.List;
 
 /**
- * Chay cac tep SQL trong classpath db/migration theo thu tu khai bao o db/migration/index.txt.
+ * Chay cac tep SQL trong classpath db/migration/{sqlite|postgres}/ theo thu tu khai bao o db/migration/index.txt.
  * Moi migration chay trong mot giao dich va chi chay mot lan (ghi vao schema_migrations).
  * Sua noi dung migration da chay se bi tu choi (so checksum).
  */
 public class Migrator {
 
-    private static final String DIR = "db/migration/";
-
     private final Database db;
+    /** Thu muc migration theo dialect: db/migration/sqlite/ hoac db/migration/postgres/. */
+    private final String dir;
 
     public Migrator(Database db) {
         this.db = db;
+        this.dir = "db/migration/" + (db.dialect() == Database.Dialect.POSTGRES ? "postgres/" : "sqlite/");
     }
 
     /** @return so migration vua duoc ap dung */
@@ -39,7 +40,7 @@ public class Migrator {
             }
             for (String file : files) {
                 String version = file.substring(0, file.indexOf("__"));
-                String sql = read(DIR + file);
+                String sql = read(dir + file);
                 String checksum = sha256(sql);
                 String existing = appliedChecksum(c, version);
                 if (existing != null) {
@@ -68,9 +69,10 @@ public class Migrator {
                 }
             }
             try (PreparedStatement ps = c.prepareStatement(
-                    "INSERT INTO schema_migrations(version, checksum, applied_at) VALUES (?, ?, datetime('now'))")) {
+                    "INSERT INTO schema_migrations(version, checksum, applied_at) VALUES (?, ?, ?)")) {
                 ps.setString(1, version);
                 ps.setString(2, checksum);
+                ps.setString(3, Database.now());
                 ps.executeUpdate();
             }
             c.commit();
@@ -91,9 +93,9 @@ public class Migrator {
         }
     }
 
-    private static List<String> readIndex() throws IOException {
+    private List<String> readIndex() throws IOException {
         List<String> files = new ArrayList<>();
-        for (String line : read(DIR + "index.txt").split("\\R")) {
+        for (String line : read(dir + "index.txt").split("\\R")) {
             String t = line.trim();
             if (!t.isEmpty() && !t.startsWith("#")) {
                 files.add(t);

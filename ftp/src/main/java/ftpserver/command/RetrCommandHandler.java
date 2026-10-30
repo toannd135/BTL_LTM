@@ -7,6 +7,7 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -31,8 +32,20 @@ public final class RetrCommandHandler implements CommandHandler {
             session.audit("DOWNLOAD", arg + " (path rejected)", false);
             return;
         }
-        if (!Files.isRegularFile(target)) {
+        if (!Files.isRegularFile(target) || !session.can(target, Perm.READ)) {
+            // khong co quyen xem thi coi nhu khong ton tai (khong lo su ton tai cua tep)
             session.reply(FtpReply.FILE_UNAVAILABLE, "File not found");
+            return;
+        }
+        if (!session.can(target, Perm.DOWNLOAD)) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
+            session.audit("DOWNLOAD", arg + " (denied: no DOWNLOAD permission)", false);
+            return;
+        }
+        String blocked = session.scan().blockReason(session.aclPath(target));
+        if (blocked != null) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "File unavailable: " + blocked);
+            session.audit("DOWNLOAD", arg + " (blocked: " + blocked + ")", false);
             return;
         }
         if (session.getState() != SessionState.DATA_READY) {

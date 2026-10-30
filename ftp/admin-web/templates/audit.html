@@ -8,5 +8,4 @@
   <div class="col-md-2"><button class="btn btn-primary">Lọc</button> <a href="/audit" class="btn btn-outline-secondary">Xóa lọc</a></div>
 </form>
 <div class="card shadow-sm">{% include "_audit_table.html" %}{% include "_pager.html" %}</div>
-{% if capped %}<p class="text-muted small mt-2">Chỉ phân trang trong {{ pg.total }} dòng mới nhất khớp bộ lọc.</p>{% endif %}
 {% endblock %}
