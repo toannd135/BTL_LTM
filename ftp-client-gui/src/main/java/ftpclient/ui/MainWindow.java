@@ -1,43 +1,56 @@
 package ftpclient.ui;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.ToLongFunction;
 
 import javafx.application.Platform;
+import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
+import javafx.geometry.Pos;
+import javafx.scene.Cursor;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.ChoiceBox;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ProgressBar;
+import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
+import javafx.scene.control.Tooltip;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.DragEvent;
+import javafx.scene.input.TransferMode;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
+import javafx.stage.FileChooser;
 
-import ftpclient.net.BftpSession;
 import ftpclient.net.FtpSession;
 import ftpclient.net.RemoteFile;
 import ftpclient.net.RemoteSession;
@@ -45,8 +58,6 @@ import ftpclient.net.RemoteSession;
 /** Toàn bộ giao diện được dựng bằng code (không dùng FXML) để đơn giản hóa build. */
 public class MainWindow {
 
-    private static final String PROTO_FTP = "FTP chuẩn";
-    private static final String PROTO_BFTP = "BFTP nhị phân";
 
     /** Một thread riêng cho toàn bộ giao tiếp với server — control connection là tuần tự,
      *  hai thread cùng gọi lệnh sẽ làm đáp ứng trả về lẫn lộn. */
@@ -56,10 +67,9 @@ public class MainWindow {
         return t;
     });
 
-    private volatile RemoteSession session = newSession(PROTO_FTP);
+    private volatile RemoteSession session = newSession();
     private volatile boolean connected;
 
-    private ChoiceBox<String> protocolBox;
     private TextField hostField;
     private TextField portField;
     private TextField userField;
@@ -67,7 +77,7 @@ public class MainWindow {
     private Button connectButton;
     private Label roleLabel;
     private Button refreshBtn;
-    private Button upBtn;
+    private Button pickFileBtn;
     private Button mkdBtn;
     private Button uploadBtn;
     private Button downloadBtn;
@@ -80,6 +90,15 @@ public class MainWindow {
     private TextArea logArea;
     private ProgressBar progressBar;
     private Label progressLabel;
+    private SplitPane split;
+    private VBox localBox;
+    private VBox remoteBox;
+    private VBox draggedPanel;
+    private CheckBox showHiddenBox;
+    private List<RemoteFile> remoteAll = List.of();
+    /** Mục đang kéo giữa hai bảng (cùng tiến trình nên giữ ở đây, không cần serialize). */
+    private LocalFile draggedLocal;
+    private RemoteFile draggedRemote;
     private Path localDir = Paths.get(System.getProperty("user.home"));
 
     public Scene buildScene() {
@@ -95,8 +114,8 @@ public class MainWindow {
         return new Scene(root, 1100, 680);
     }
 
-    private RemoteSession newSession(String protocol) {
-        RemoteSession s = protocol.equals(PROTO_BFTP) ? new BftpSession() : new FtpSession();
+    private RemoteSession newSession() {
+        RemoteSession s = new FtpSession();
         s.setLogListener((dir, line) ->
                 Platform.runLater(() -> appendLog((dir.equals("SEND") ? "> " : "< ") + line)));
         return s;
@@ -112,42 +131,50 @@ public class MainWindow {
         worker.shutdownNow();
     }
 
+    /** Nhãn đứng sát ô nhập của nó, căn giữa theo chiều dọc. */
+    private static HBox labeled(String text, javafx.scene.Node field) {
+        HBox box = new HBox(5, new Label(text), field);
+        box.setAlignment(Pos.CENTER_LEFT);
+        return box;
+    }
+
     private VBox buildTopArea() {
-        protocolBox = new ChoiceBox<>(FXCollections.observableArrayList(PROTO_FTP, PROTO_BFTP));
-        protocolBox.setValue(PROTO_FTP);
-        protocolBox.valueProperty().addListener((o, old, now) ->
-                portField.setText(now.equals(PROTO_BFTP) ? "2122" : "2121"));
         hostField = new TextField("localhost");
         hostField.setPrefWidth(120);
         portField = new TextField("2121");
         portField.setPrefWidth(60);
-        userField = new TextField("toannd");
+        userField = new TextField("admin");
         userField.setPrefWidth(100);
         passField = new PasswordField();
-        passField.setText("123456");
         passField.setPrefWidth(100);
         connectButton = new Button("Kết nối");
         connectButton.setOnAction(e -> onConnectClicked());
         roleLabel = new Label();
 
-        HBox connectionBar = new HBox(6,
-                new Label("Giao thức:"), protocolBox,
-                new Label("Máy chủ:"), hostField,
-                new Label("Cổng:"), portField,
-                new Label("Tài khoản:"), userField,
-                new Label("Mật khẩu:"), passField,
+        HBox connectionBar = new HBox(14,
+                labeled("Máy chủ:", hostField),
+                labeled("Cổng:", portField),
+                labeled("Tài khoản:", userField),
+                labeled("Mật khẩu:", passField),
                 connectButton, roleLabel);
-        connectionBar.setPadding(new Insets(4));
+        connectionBar.setAlignment(Pos.CENTER_LEFT);
+        connectionBar.setPadding(new Insets(8, 8, 4, 8));
 
         refreshBtn = new Button("Làm mới");
         refreshBtn.setOnAction(e -> refreshRemoteTable());
-        upBtn = new Button("Lên thư mục cha");
-        upBtn.setOnAction(e -> onUpClicked());
+        pickFileBtn = new Button("Chọn file từ máy tính");
+        pickFileBtn.setOnAction(e -> onPickFileClicked());
         mkdBtn = new Button("Tạo thư mục");
         mkdBtn.setOnAction(e -> onMkdClicked());
+        showHiddenBox = new CheckBox("Hiện file ẩn");
+        showHiddenBox.setOnAction(e -> {
+            refreshLocalTable();
+            applyRemoteFilter();
+        });
 
-        HBox toolBar = new HBox(6, refreshBtn, upBtn, mkdBtn);
-        toolBar.setPadding(new Insets(4));
+        HBox toolBar = new HBox(10, refreshBtn, pickFileBtn, mkdBtn, new Separator(Orientation.VERTICAL), showHiddenBox);
+        toolBar.setAlignment(Pos.CENTER_LEFT);
+        toolBar.setPadding(new Insets(4, 8, 8, 8));
 
         return new VBox(connectionBar, toolBar);
     }
@@ -156,9 +183,10 @@ public class MainWindow {
         localPathField = new TextField();
         localPathField.setEditable(false);
         localTable = new TableView<>();
-        localTable.getColumns().add(localCol("Tên", LocalFile::name, 220));
-        localTable.getColumns().add(localCol("Kích thước", LocalFile::sizeText, 100));
-        localTable.getColumns().add(localCol("Ngày sửa", LocalFile::modified, 140));
+        localTable.getColumns().add(nameColumn(LocalFile::name, LocalFile::directory, 220));
+        localTable.getColumns().add(sizeColumn(LocalFile::size, LocalFile::directory, 90));
+        localTable.getColumns().add(textColumn("Ngày sửa", LocalFile::modified, 130));
+        setupLocalDrag();
         localTable.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
                 LocalFile sel = localTable.getSelectionModel().getSelectedItem();
@@ -177,15 +205,16 @@ public class MainWindow {
         });
         uploadBtn = new Button("Tải lên →");
         uploadBtn.setOnAction(e -> onUploadClicked());
-        VBox localBox = new VBox(4, new Label("Máy cục bộ"), localPathField, localTable, uploadBtn);
+        localBox = new VBox(4, panelTitle("Máy cục bộ"), localPathField, localTable, uploadBtn);
         VBox.setVgrow(localTable, Priority.ALWAYS);
 
         remotePathField = new TextField("(chưa kết nối)");
         remotePathField.setEditable(false);
         remoteTable = new TableView<>();
-        remoteTable.getColumns().add(remoteCol("Tên", RemoteFile::name, 220));
-        remoteTable.getColumns().add(remoteCol("Kích thước", f -> f.directory() ? "" : String.valueOf(f.size()), 100));
-        remoteTable.getColumns().add(remoteCol("Ngày sửa", RemoteFile::modified, 140));
+        remoteTable.getColumns().add(nameColumn(RemoteFile::name, RemoteFile::directory, 220));
+        remoteTable.getColumns().add(sizeColumn(RemoteFile::size, RemoteFile::directory, 90));
+        remoteTable.getColumns().add(textColumn("Ngày sửa", f -> Formats.remoteDate(f.modified()), 130));
+        setupRemoteDrop();
         remoteTable.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
                 RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
@@ -199,11 +228,12 @@ public class MainWindow {
         deleteBtn = new Button("Xóa");
         deleteBtn.setOnAction(e -> onDeleteClicked());
         HBox remoteButtons = new HBox(6, downloadBtn, deleteBtn);
-        VBox remoteBox = new VBox(4, new Label("Máy chủ"), remotePathField, remoteTable, remoteButtons);
+        remoteBox = new VBox(4, panelTitle("Máy chủ"), remotePathField, remoteTable, remoteButtons);
         VBox.setVgrow(remoteTable, Priority.ALWAYS);
 
-        SplitPane split = new SplitPane(localBox, remoteBox);
+        split = new SplitPane(localBox, remoteBox);
         split.setDividerPositions(0.5);
+        setupPanelSwap();
         return split;
     }
 
@@ -248,7 +278,14 @@ public class MainWindow {
 
     private void showRemote(String pwd, List<RemoteFile> files) {
         remotePathField.setText(pwd);
-        remoteTable.setItems(FXCollections.observableArrayList(files));
+        remoteAll = files;
+        applyRemoteFilter();
+    }
+
+    private void applyRemoteFilter() {
+        boolean showHidden = showHiddenBox.isSelected();
+        remoteTable.setItems(FXCollections.observableArrayList(
+                remoteAll.stream().filter(f -> showHidden || !f.name().startsWith(".")).toList()));
     }
 
     private void showError(Throwable ex) {
@@ -270,7 +307,7 @@ public class MainWindow {
             }
             String user = userField.getText().trim();
             String pass = passField.getText();
-            session = newSession(protocolBox.getValue());
+            session = newSession();
             RemoteSession s = session;
             connectButton.setDisable(true);
             worker.submit(() -> {
@@ -306,13 +343,11 @@ public class MainWindow {
     private void setConnected(boolean isConnected, String role) {
         connected = isConnected;
         connectButton.setText(isConnected ? "Ngắt kết nối" : "Kết nối");
-        protocolBox.setDisable(isConnected);
         hostField.setDisable(isConnected);
         portField.setDisable(isConnected);
         userField.setDisable(isConnected);
         passField.setDisable(isConnected);
         refreshBtn.setDisable(!isConnected);
-        upBtn.setDisable(!isConnected);
         downloadBtn.setDisable(!isConnected);
         cancelBtn.setDisable(true);
         if (isConnected) {
@@ -320,12 +355,15 @@ public class MainWindow {
             roleLabel.setText(role.equals("ftp") ? "Vai trò: (FTP chuẩn không báo vai trò)" : "Vai trò: " + role);
             mkdBtn.setDisable(!s.canWrite());
             uploadBtn.setDisable(!s.canWrite());
+            pickFileBtn.setDisable(!s.canWrite());
             deleteBtn.setDisable(!s.canDelete());
         } else {
             roleLabel.setText("");
             mkdBtn.setDisable(true);
             uploadBtn.setDisable(true);
+            pickFileBtn.setDisable(true);
             deleteBtn.setDisable(true);
+            remoteAll = List.of();
             remoteTable.getItems().clear();
             remotePathField.setText("(chưa kết nối)");
         }
@@ -336,8 +374,16 @@ public class MainWindow {
         });
     }
 
-    private void onUpClicked() {
-        runRemote(() -> session.cdup());
+    private void onPickFileClicked() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Chọn file để tải lên");
+        if (Files.isDirectory(localDir)) {
+            chooser.setInitialDirectory(localDir.toFile());
+        }
+        File file = chooser.showOpenDialog(pickFileBtn.getScene().getWindow());
+        if (file != null) {
+            uploadFile(file.toPath());
+        }
     }
 
     private void onMkdClicked() {
@@ -373,6 +419,10 @@ public class MainWindow {
         if (sel == null || sel.directory()) {
             return;
         }
+        downloadFile(sel);
+    }
+
+    private void downloadFile(RemoteFile sel) {
         Path dest = localDir.resolve(sel.name());
         RemoteSession s = session;
         Task<String> task = new Task<>() {
@@ -389,15 +439,33 @@ public class MainWindow {
         if (sel == null || sel.directory()) {
             return;
         }
-        Path src = localDir.resolve(sel.name());
+        uploadFile(localDir.resolve(sel.name()));
+    }
+
+    private void uploadFile(Path src) {
+        uploadFile(src, this::refreshRemoteTable);
+    }
+
+    private void uploadFile(Path src, Runnable afterSuccess) {
+        String name = src.getFileName().toString();
         RemoteSession s = session;
         Task<String> task = new Task<>() {
             @Override
             protected String call() throws Exception {
-                return s.upload(sel.name(), src, this::updateProgress);
+                return s.upload(name, src, this::updateProgress);
             }
         };
-        runTransfer(task, "Tải lên " + sel.name(), this::refreshRemoteTable);
+        runTransfer(task, "Tải lên " + name, afterSuccess);
+    }
+
+    /** Tải lên lần lượt từng file (mỗi lần một tác vụ vì thanh tiến trình chỉ theo dõi được một). */
+    private void uploadQueue(List<Path> files) {
+        if (files.isEmpty()) {
+            refreshRemoteTable();
+            return;
+        }
+        List<Path> rest = files.subList(1, files.size());
+        uploadFile(files.get(0), () -> uploadQueue(rest));
     }
 
     /** Gắn tiến trình, nút Hủy và xử lý kết quả cho một tác vụ truyền file. */
@@ -430,18 +498,23 @@ public class MainWindow {
 
     private void refreshLocalTable() {
         localPathField.setText(localDir.toString());
+        boolean showHidden = showHiddenBox != null && showHiddenBox.isSelected();
         ObservableList<LocalFile> items = FXCollections.observableArrayList();
         if (localDir.getParent() != null) {
-            items.add(new LocalFile("..", true, "", ""));
+            items.add(new LocalFile("..", true, 0, ""));
         }
         try (var stream = Files.list(localDir)) {
             stream.sorted().forEach(p -> {
                 try {
+                    String name = p.getFileName().toString();
+                    if (!showHidden && (name.startsWith(".") || Files.isHidden(p))) {
+                        return;
+                    }
                     boolean dir = Files.isDirectory(p);
                     long size = dir ? 0 : Files.size(p);
-                    String modified = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+                    String modified = Formats.DATE_TIME
                             .format(Files.getLastModifiedTime(p).toInstant().atZone(ZoneId.systemDefault()));
-                    items.add(new LocalFile(p.getFileName().toString(), dir, dir ? "" : String.valueOf(size), modified));
+                    items.add(new LocalFile(name, dir, size, modified));
                 } catch (IOException ignored) {
                 }
             });
@@ -451,24 +524,185 @@ public class MainWindow {
         localTable.setItems(items);
     }
 
+    // ---------------- kéo - thả ----------------
+
+    /** Tiêu đề bảng: kéo sang nửa bên kia để đổi chỗ hai bảng. */
+    private Label panelTitle(String text) {
+        Label title = new Label(text + "  ⇄");
+        title.setCursor(Cursor.OPEN_HAND);
+        title.setTooltip(new Tooltip("Kéo sang bên kia để đổi chỗ hai bảng"));
+        title.setStyle("-fx-font-weight: bold;");
+        title.setOnDragDetected(e -> {
+            draggedPanel = (VBox) title.getParent();
+            ClipboardContent content = new ClipboardContent();
+            content.putString(text);
+            title.startDragAndDrop(TransferMode.MOVE).setContent(content);
+            e.consume();
+        });
+        title.setOnDragDone(e -> draggedPanel = null);
+        return title;
+    }
+
+    /** Bộ lọc ở SplitPane để nhận thả tiêu đề kể cả khi con trỏ đang ở trên bảng (bảng có xử lý kéo-thả riêng). */
+    private void setupPanelSwap() {
+        split.addEventFilter(DragEvent.DRAG_OVER, e -> {
+            if (draggedPanel != null) {
+                e.acceptTransferModes(TransferMode.MOVE);
+                e.consume();
+            }
+        });
+        split.addEventFilter(DragEvent.DRAG_DROPPED, e -> {
+            if (draggedPanel == null) {
+                return;
+            }
+            boolean overRightHalf = e.getX() > split.getWidth() / 2;
+            boolean draggedOnRight = split.getItems().indexOf(draggedPanel) == 1;
+            if (overRightHalf != draggedOnRight) {
+                VBox left = (VBox) split.getItems().get(0);
+                VBox right = (VBox) split.getItems().get(1);
+                split.getItems().setAll(right, left);
+                split.setDividerPositions(0.5);
+                updateTransferLabels();
+            }
+            e.setDropCompleted(true);
+            e.consume();
+        });
+    }
+
+    /** Mũi tên trên nút tải lên/tải về luôn chỉ đúng hướng theo vị trí hiện tại của hai bảng. */
+    private void updateTransferLabels() {
+        boolean localLeft = split.getItems().get(0) == localBox;
+        uploadBtn.setText(localLeft ? "Tải lên →" : "← Tải lên");
+        downloadBtn.setText(localLeft ? "← Tải về" : "Tải về →");
+    }
+
+    /** Kéo file từ bảng cục bộ sang bảng máy chủ = tải lên. */
+    private void setupLocalDrag() {
+        localTable.setOnDragDetected(e -> {
+            LocalFile sel = localTable.getSelectionModel().getSelectedItem();
+            if (sel == null || sel.directory() || !connected || !session.canWrite()) {
+                return;
+            }
+            draggedLocal = sel;
+            ClipboardContent content = new ClipboardContent();
+            content.putString(sel.name());
+            localTable.startDragAndDrop(TransferMode.COPY).setContent(content);
+            e.consume();
+        });
+        localTable.setOnDragDone(e -> draggedLocal = null);
+        // kéo file từ bảng máy chủ thả vào đây = tải về
+        localTable.setOnDragOver(e -> {
+            if (draggedRemote != null) {
+                e.acceptTransferModes(TransferMode.COPY);
+            }
+            e.consume();
+        });
+        localTable.setOnDragDropped(e -> {
+            RemoteFile f = draggedRemote;
+            e.setDropCompleted(f != null);
+            e.consume();
+            if (f != null) {
+                downloadFile(f);
+            }
+        });
+    }
+
+    /** Bảng máy chủ nhận file kéo từ bảng cục bộ hoặc từ trình quản lý file của hệ điều hành. */
+    private void setupRemoteDrop() {
+        remoteTable.setOnDragDetected(e -> {
+            RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
+            if (sel == null || sel.directory() || !connected) {
+                return;
+            }
+            draggedRemote = sel;
+            ClipboardContent content = new ClipboardContent();
+            content.putString(sel.name());
+            remoteTable.startDragAndDrop(TransferMode.COPY).setContent(content);
+            e.consume();
+        });
+        remoteTable.setOnDragDone(e -> draggedRemote = null);
+        remoteTable.setOnDragOver(e -> {
+            boolean canUpload = connected && session.canWrite();
+            if (canUpload && (draggedLocal != null || e.getDragboard().hasFiles())) {
+                e.acceptTransferModes(TransferMode.COPY);
+            }
+            e.consume();
+        });
+        remoteTable.setOnDragDropped(e -> {
+            List<Path> files = new java.util.ArrayList<>();
+            if (draggedLocal != null) {
+                files.add(localDir.resolve(draggedLocal.name()));
+            } else if (e.getDragboard().hasFiles()) {
+                for (File f : e.getDragboard().getFiles()) {
+                    if (f.isFile()) {
+                        files.add(f.toPath());
+                    }
+                }
+            }
+            e.setDropCompleted(!files.isEmpty());
+            e.consume();
+            if (!files.isEmpty()) {
+                uploadQueue(files);
+            }
+        });
+    }
+
     private void appendLog(String line) {
         logArea.appendText(line + "\n");
     }
 
-    private TableColumn<RemoteFile, String> remoteCol(String title, Function<RemoteFile, String> extractor, double width) {
-        TableColumn<RemoteFile, String> c = new TableColumn<>(title);
+    /** Cột Tên: icon thư mục/loại file + tên; sắp xếp thư mục trước, ".." trên cùng. */
+    private static <T> TableColumn<T, T> nameColumn(Function<T, String> name, Predicate<T> dir, double width) {
+        TableColumn<T, T> c = new TableColumn<>("Tên");
+        c.setCellValueFactory(d -> new ReadOnlyObjectWrapper<>(d.getValue()));
+        c.setCellFactory(col -> new TableCell<>() {
+            @Override
+            protected void updateItem(T item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setGraphic(null);
+                } else {
+                    setText(name.apply(item));
+                    setGraphic(FileIcons.create(name.apply(item), dir.test(item)));
+                }
+            }
+        });
+        c.setComparator(Comparator
+                .<T, Boolean>comparing(t -> !name.apply(t).equals(".."))
+                .thenComparing(t -> !dir.test(t))
+                .thenComparing(t -> name.apply(t).toLowerCase()));
+        c.setPrefWidth(width);
+        return c;
+    }
+
+    /** Cột Kích thước: hiện dạng KB/MB/GB, sắp xếp theo số byte; thư mục để trống. */
+    private static <T> TableColumn<T, T> sizeColumn(ToLongFunction<T> size, Predicate<T> dir, double width) {
+        TableColumn<T, T> c = new TableColumn<>("Kích thước");
+        c.setCellValueFactory(d -> new ReadOnlyObjectWrapper<>(d.getValue()));
+        c.setCellFactory(col -> new TableCell<>() {
+            {
+                setAlignment(Pos.CENTER_RIGHT);
+            }
+
+            @Override
+            protected void updateItem(T item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null || dir.test(item) ? null : Formats.humanSize(size.applyAsLong(item)));
+            }
+        });
+        c.setComparator(Comparator.comparingLong(size));
+        c.setPrefWidth(width);
+        return c;
+    }
+
+    private static <T> TableColumn<T, String> textColumn(String title, Function<T, String> extractor, double width) {
+        TableColumn<T, String> c = new TableColumn<>(title);
         c.setCellValueFactory(data -> new SimpleStringProperty(extractor.apply(data.getValue())));
         c.setPrefWidth(width);
         return c;
     }
 
-    private TableColumn<LocalFile, String> localCol(String title, Function<LocalFile, String> extractor, double width) {
-        TableColumn<LocalFile, String> c = new TableColumn<>(title);
-        c.setCellValueFactory(data -> new SimpleStringProperty(extractor.apply(data.getValue())));
-        c.setPrefWidth(width);
-        return c;
-    }
-
-    public record LocalFile(String name, boolean directory, String sizeText, String modified) {
+    public record LocalFile(String name, boolean directory, long size, String modified) {
     }
 }

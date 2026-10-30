@@ -5,6 +5,11 @@ public final class FtpReply {
     private FtpReply() {}
 
     public static final int FILE_STATUS_OK_OPENING   = 150;
+    public static final int SYSTEM_STATUS              = 211;
+    public static final int FILE_STATUS                 = 213;
+    public static final int AUTH_OK                     = 234;
+    public static final int PENDING_FURTHER_INFO       = 350;
+    public static final int PROT_DENIED_POLICY         = 534;
     public static final int COMMAND_OK                = 200;
     public static final int SYSTEM_TYPE                = 215;
     public static final int SERVICE_READY              = 220;

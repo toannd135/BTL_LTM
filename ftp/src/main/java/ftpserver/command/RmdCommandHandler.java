@@ -21,8 +21,9 @@ public final class RmdCommandHandler implements CommandHandler {
             return;
         }
         if (!session.getUser().canDelete()) {
-            // cung quy tac voi BFTP: chi vai tro admin duoc xoa
+            // chi vai tro admin duoc xoa
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied (role '" + session.getUser().role() + "' cannot delete)");
+            session.audit("RMDIR", arg + " (denied: role " + session.getUser().role() + ")", false);
             return;
         }
         try {
@@ -37,6 +38,7 @@ public final class RmdCommandHandler implements CommandHandler {
             }
             Files.delete(target);
             session.reply(FtpReply.FILE_ACTION_OK, "Directory removed");
+            session.audit("RMDIR", session.pathResolver().toVirtualPath(target), true);
         } catch (SecurityException e) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
         } catch (DirectoryNotEmptyException e) {

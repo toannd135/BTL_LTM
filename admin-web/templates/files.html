@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Quản lý tệp tin</h3>
+  <form method="post" action="/files/sync"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-primary">Đồng bộ từ thư mục FTP</button></form>
+</div>
+{% if not clamav %}<div class="alert alert-warning">Chưa cài ClamAV (clamscan/clamdscan): nút "Quét" sẽ để tệp ở trạng thái PENDING, admin duyệt thủ công.</div>{% endif %}
+<ul class="nav nav-pills mb-3">
+  <li class="nav-item"><a class="nav-link {{ 'active' if not status }}" href="/files">Tất cả</a></li>
+  {% for s in statuses %}<li class="nav-item"><a class="nav-link {{ 'active' if status == s }}" href="/files?status={{ s }}">{{ s }}</a></li>{% endfor %}
+</ul>
+<div class="card shadow-sm"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
+  <thead><tr><th>Tệp</th><th>Kích thước</th><th>SHA-256</th><th>Trạng thái</th><th>Chi tiết</th><th></th></tr></thead>
+  <tbody>
+  {% for f in files %}
+    {% set color = {'PENDING': 'warning', 'CLEAN': 'success', 'INFECTED': 'danger', 'QUARANTINED': 'dark'}[f.status] %}
+    <tr>
+      <td>{{ f.path }}</td><td class="text-nowrap">{{ '{:,}'.format(f.size) }} B</td><td><code class="small">{{ f.sha256[:12] }}…</code></td>
+      <td><span class="badge text-bg-{{ color }}">{{ f.status }}</span></td><td class="small">{{ f.detail or '' }}</td>
+      <td class="text-nowrap">
+        {% macro act(name, label, cls) %}<form method="post" action="/files/{{ f.id }}/{{ name }}" class="d-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-{{ cls }}">{{ label }}</button></form>{% endmacro %}
+        {% if f.status == 'QUARANTINED' %}{{ act('restore', 'Khôi phục', 'secondary') }} {{ act('delete', 'Xóa hẳn', 'danger') }}
+        {% else %}{{ act('scan', 'Quét', 'primary') }}
+          {% if f.status in ('PENDING', 'INFECTED') %}{{ act('approve', 'Duyệt sạch', 'success') }}{% endif %}
+          {{ act('quarantine', 'Cách ly', 'danger') }}{% endif %}
+      </td>
+    </tr>
+  {% else %}<tr><td colspan="6" class="text-center text-muted">Chưa có tệp. Bấm "Đồng bộ từ thư mục FTP".</td></tr>{% endfor %}
+  </tbody>
+</table></div></div>
+{% endblock %}

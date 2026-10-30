@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-3">Nhật ký</h3>
+<form class="row g-2 mb-3" method="get">
+  <div class="col-md-3"><input name="user" value="{{ user }}" class="form-control" placeholder="Người dùng"></div>
+  <div class="col-md-3"><input name="event" value="{{ event }}" class="form-control" placeholder="Sự kiện (LOGIN, UPLOAD, ADMIN_...)"></div>
+  <div class="col-md-2"><select name="result" class="form-select"><option value="">Mọi kết quả</option><option {{ 'selected' if result == 'OK' }}>OK</option><option {{ 'selected' if result == 'FAIL' }}>FAIL</option></select></div>
+  <div class="col-md-2"><button class="btn btn-primary">Lọc</button> <a href="/audit" class="btn btn-outline-secondary">Xóa lọc</a></div>
+</form>
+<div class="card shadow-sm">{% include "_audit_table.html" %}</div>
+<p class="text-muted small mt-2">Hiển thị tối đa 500 dòng mới nhất.</p>
+{% endblock %}
