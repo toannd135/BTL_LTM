@@ -20,8 +20,9 @@ public final class DeleCommandHandler implements CommandHandler {
             return;
         }
         if (!session.getUser().canDelete()) {
-            // cung quy tac voi BFTP: chi vai tro admin duoc xoa
+            // chi vai tro admin duoc xoa
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied (role '" + session.getUser().role() + "' cannot delete)");
+            session.audit("DELETE", arg + " (denied: role " + session.getUser().role() + ")", false);
             return;
         }
         try {
@@ -32,6 +33,7 @@ public final class DeleCommandHandler implements CommandHandler {
             }
             Files.delete(target);
             session.reply(FtpReply.FILE_ACTION_OK, "Delete successful");
+            session.audit("DELETE", session.pathResolver().toVirtualPath(target), true);
         } catch (SecurityException e) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
         } catch (IOException e) {

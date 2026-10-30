@@ -27,6 +27,7 @@ public final class MkdCommandHandler implements CommandHandler {
             }
             Files.createDirectory(target);
             session.reply(FtpReply.DIR_ACTION_OK, "\"" + session.pathResolver().toVirtualPath(target) + "\" created");
+            session.audit("MKDIR", session.pathResolver().toVirtualPath(target), true);
         } catch (SecurityException e) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
         } catch (IOException e) {

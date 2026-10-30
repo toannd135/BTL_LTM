@@ -28,6 +28,7 @@ public final class RetrCommandHandler implements CommandHandler {
             target = session.pathResolver().resolve(session.getCurrentDir(), arg);
         } catch (SecurityException e) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
+            session.audit("DOWNLOAD", arg + " (path rejected)", false);
             return;
         }
         if (!Files.isRegularFile(target)) {
@@ -38,24 +39,40 @@ public final class RetrCommandHandler implements CommandHandler {
             session.reply(FtpReply.CANT_OPEN_DATA_CONN, "Use PASV or PORT first");
             return;
         }
+        long offset = session.consumeRestartOffset();
+        try {
+            if (offset > Files.size(target)) {
+                session.reply(FtpReply.FILE_UNAVAILABLE, "Invalid restart offset");
+                return;
+            }
+        } catch (IOException e) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "File not found");
+            return;
+        }
         session.reply(FtpReply.FILE_STATUS_OK_OPENING, "About to open data connection");
+        long sent = 0;
+        String vpath = session.pathResolver().toVirtualPath(target);
         try (Socket dataSocket = session.getDataConnection().establish(10_000);
              InputStream in = Files.newInputStream(target);
              OutputStream out = dataSocket.getOutputStream()) {
             session.setState(SessionState.TRANSFERRING);
+            in.skipNBytes(offset);
             byte[] buf = new byte[8192];
             int n;
             while ((n = in.read(buf)) != -1) {
                 out.write(buf, 0, n);
+                sent += n;
             }
             out.flush();
         } catch (IOException e) {
             session.reply(FtpReply.CONN_CLOSED_ABORTED, "Transfer aborted");
+            session.audit("DOWNLOAD", vpath + " aborted after " + sent + " bytes", false);
             return;
         } finally {
             session.getDataConnection().close();
             session.setState(SessionState.AUTHENTICATED);
         }
         session.reply(FtpReply.CLOSING_DATA_CONN, "Closing data connection");
+        session.audit("DOWNLOAD", vpath + " bytes=" + sent + (offset > 0 ? " mode=resume@" + offset : ""), true);
     }
 }

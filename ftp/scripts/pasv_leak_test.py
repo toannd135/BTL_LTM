@@ -12,8 +12,8 @@ before = count_ports_5xxxx()
 for i in range(10):
     s = socket.create_connection((HOST, PORT), timeout=5)
     s.recv(100)  # 220
-    s.sendall(b"USER toannd\r\n"); s.recv(100)
-    s.sendall(b"PASS 123456\r\n"); s.recv(100)
+    s.sendall(b"USER admin\r\n"); s.recv(100)
+    s.sendall(b"PASS admin\r\n"); s.recv(100)
     s.sendall(b"PASV\r\n"); s.recv(100)  # mo cong PASV that su
     s.close()  # ngat dot ngot, KHONG goi RETR/LIST/QUIT
     time.sleep(0.1)

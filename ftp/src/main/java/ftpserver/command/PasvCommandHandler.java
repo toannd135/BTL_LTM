@@ -20,6 +20,7 @@ public final class PasvCommandHandler implements CommandHandler {
             session.getDataConnection().close(); // BR-07: tranh ro cong tu lan PASV truoc
         }
         DataConnection dc = new DataConnection();
+        dc.setTls(session.dataTls());
         int port;
         try {
             port = dc.openPassive(session.config().dataPortMin(), session.config().dataPortMax());
@@ -31,7 +32,10 @@ public final class PasvCommandHandler implements CommandHandler {
         session.setState(SessionState.DATA_READY);
 
         InetSocketAddress local = (InetSocketAddress) session.controlSocket().getLocalSocketAddress();
-        String[] parts = local.getAddress().getHostAddress().split("\\.");
+        String advertised = session.config().pasvAddress() != null
+                ? session.config().pasvAddress()
+                : local.getAddress().getHostAddress();
+        String[] parts = advertised.split("\\.");
         int p1 = port / 256;
         int p2 = port % 256;
         session.reply(FtpReply.ENTERING_PASSIVE, "Entering Passive Mode (" +

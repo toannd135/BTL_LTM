@@ -3,11 +3,8 @@ package ftpserver.config;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Properties;
 
-import ftpserver.auth.User;
 
 public class Config {
 
@@ -16,18 +13,27 @@ public class Config {
     private final int dataPortMin;
     private final int dataPortMax;
     private final int idleTimeoutSeconds;
-    private final int binPort;
-    private final Map<String, User> users;
+    private final Path dbPath;
+    private final String pasvAddress;
+    private final Path tlsKeystore;
+    private final String tlsKeystorePassword;
+    private final boolean tlsRequired;
+    private final Path auditLog;
 
     private Config(int controlPort, Path rootDir, int dataPortMin, int dataPortMax,
-                   int idleTimeoutSeconds, int binPort, Map<String, User> users) {
+                   int idleTimeoutSeconds, Path dbPath, String pasvAddress,
+                   Path tlsKeystore, String tlsKeystorePassword, boolean tlsRequired, Path auditLog) {
         this.controlPort = controlPort;
         this.rootDir = rootDir;
         this.dataPortMin = dataPortMin;
         this.dataPortMax = dataPortMax;
         this.idleTimeoutSeconds = idleTimeoutSeconds;
-        this.binPort = binPort;
-        this.users = users;
+        this.dbPath = dbPath;
+        this.pasvAddress = pasvAddress;
+        this.tlsKeystore = tlsKeystore;
+        this.tlsKeystorePassword = tlsKeystorePassword;
+        this.tlsRequired = tlsRequired;
+        this.auditLog = auditLog;
     }
 
     public int controlPort() { return controlPort; }
@@ -35,9 +41,15 @@ public class Config {
     public int dataPortMin() { return dataPortMin; }
     public int dataPortMax() { return dataPortMax; }
     public int idleTimeoutSeconds() { return idleTimeoutSeconds; }
-    /** Cong giao thuc nhi phan BFTP; 0 hoac am = tat. */
-    public int binPort() { return binPort; }
-    public Map<String, User> users() { return users; }
+    /** Tep SQLite chua tai khoan; migration chay khi server khoi dong. */
+    public Path dbPath() { return dbPath; }
+    /** Dia chi IP cong khai bao trong phan hoi PASV (can khi server nam sau NAT, vd Azure). null = dung dia chi cuc bo. */
+    public String pasvAddress() { return pasvAddress; }
+    public Path tlsKeystore() { return tlsKeystore; }
+    public String tlsKeystorePassword() { return tlsKeystorePassword; }
+    public boolean tlsEnabled() { return tlsKeystore != null; }
+    public boolean tlsRequired() { return tlsRequired; }
+    public Path auditLog() { return auditLog; }
 
     public static Config load(Path confFile) throws IOException {
         if (!Files.exists(confFile)) {
@@ -60,27 +72,37 @@ public class Config {
                 ? Integer.parseInt(props.getProperty("idle.timeout.seconds").trim())
                 : 300;
 
-        int binPort = props.containsKey("bin.port")
-                ? Integer.parseInt(props.getProperty("bin.port").trim())
-                : 2122;
-
-        Map<String, User> users = new HashMap<>();
-        for (String key : props.stringPropertyNames()) {
-            if (key.startsWith("user.") && key.endsWith(".password")) {
-                String name = key.substring("user.".length(), key.length() - ".password".length());
-                String password = props.getProperty(key);
-                boolean readonly = Boolean.parseBoolean(
-                        props.getProperty("user." + name + ".readonly", "false"));
-                String role = props.getProperty("user." + name + ".role", readonly ? "readonly" : "user")
-                        .trim().toLowerCase();
-                if (!role.equals("admin") && !role.equals("user") && !role.equals("readonly")) {
-                    throw new IllegalArgumentException("user." + name + ".role must be admin|user|readonly, got: " + role);
-                }
-                users.put(name, new User(name, password, readonly || role.equals("readonly"), role));
+        Path dbPath = Path.of(props.getProperty("db.path", "./data/ftpserver.db").trim());
+        String pasvAddress = optional(props, "pasv.address");
+        String keystore = envOr("FTP_TLS_KEYSTORE", optional(props, "tls.keystore"));
+        String keystorePassword = envOr("FTP_TLS_KEYSTORE_PASSWORD", optional(props, "tls.keystore.password"));
+        boolean tlsRequired = Boolean.parseBoolean(props.getProperty("tls.required", "false").trim());
+        Path tlsKeystore = null;
+        if (keystore != null) {
+            tlsKeystore = Path.of(keystore);
+            if (!Files.isRegularFile(tlsKeystore)) {
+                throw new IllegalArgumentException("tls.keystore not found: " + tlsKeystore);
             }
+            if (keystorePassword == null) {
+                throw new IllegalArgumentException("Missing TLS keystore password (env FTP_TLS_KEYSTORE_PASSWORD)");
+            }
+        } else if (tlsRequired) {
+            throw new IllegalArgumentException("tls.required=true needs tls.keystore");
         }
+        Path auditLog = Path.of(props.getProperty("audit.log", "./logs/audit.log").trim());
 
-        return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds, binPort, Map.copyOf(users));
+        return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds,
+                dbPath, pasvAddress, tlsKeystore, keystorePassword, tlsRequired, auditLog);
+    }
+
+    private static String optional(Properties props, String key) {
+        String v = props.getProperty(key);
+        return (v == null || v.isBlank()) ? null : v.trim();
+    }
+
+    private static String envOr(String envName, String fallback) {
+        String v = System.getenv(envName);
+        return (v == null || v.isBlank()) ? fallback : v;
     }
 
     private static String requireString(Properties props, String key) {
