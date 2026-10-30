@@ -10,10 +10,10 @@ Trang quản trị dùng chung CSDL SQLite (`data/ftpserver.db`) và `logs/audit
 | Nhật ký | lọc theo người dùng/sự kiện/kết quả; thao tác quản trị cũng được ghi (`ADMIN_*`) |
 
 ## Chạy
-Chạy ftpserver ít nhất một lần trước (để migration tạo bảng), rồi từ thư mục `ftp/` (admin-web nằm cạnh `ftp/`; đặt `FTP_HOME` nếu bố trí khác):
+Chạy ftpserver ít nhất một lần trước (để migration tạo bảng), rồi từ thư mục `ftp/` (admin-web nằm trong `ftp/admin-web`; đặt `FTP_HOME` nếu bố trí khác):
 
-    python -m venv .venv && .venv/bin/pip install -r ../admin-web/requirements.txt
-    cd ../admin-web && FTPADMIN_SECRET=$(openssl rand -hex 32) ../ftp/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8080
+    python -m venv .venv && .venv/bin/pip install -r admin-web/requirements.txt
+    cd admin-web && FTPADMIN_SECRET=$(openssl rand -hex 32) ../.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8080
 
 Biến môi trường: `FTP_DB`, `FTP_ROOT`, `FTP_AUDIT_LOG`, `FTP_QUARANTINE` (mặc định nằm trong `ftp/`), `FTPADMIN_SECRET`.
 Chỉ bind 127.0.0.1; đưa ra ngoài phải qua HTTPS (reverse proxy) hoặc SSH tunnel.

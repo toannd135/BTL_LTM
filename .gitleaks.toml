@@ -10,7 +10,7 @@ paths = [
   '''ftp/src/main/resources/db/migration/V\d+__seed_accounts\.sql''',
   '''ftp/ftpserver\.conf''',
   '''ftp/scripts/.*_test\.py''',
-  '''admin-web/test_admin\.py''',
+  '''ftp/admin-web/test_admin\.py''',
   '''docs/handoff/.*''',
 ]
 regexes = [
