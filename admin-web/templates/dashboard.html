@@ -1,13 +1,44 @@
 {% extends "base.html" %}
+{% block body_class %}dash-fixed{% endblock %}
+{% block main_class %}{% endblock %}
 {% block content %}
-<h3 class="mb-3">Dashboard</h3>
-<div class="row g-3 mb-4">
-  <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>
-  <div class="col-md-3"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 text-warning">{{ files.get('PENDING', 0) }}</div></div></div></a></div>
-  <div class="col-md-3"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 text-danger">{{ files.get('INFECTED', 0) }}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>
-  <div class="col-md-3"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2">{{ failed_logins }}</div><div class="small text-muted">trong nhật ký gần đây</div></div></div></a></div>
+<h3 class="mb-3 flex-shrink-0">Dashboard</h3>
+{% set pending = files.get('PENDING', 0) %}{% set infected = files.get('INFECTED', 0) %}
+<div class="row g-3 mb-3 flex-shrink-0">
+  <div class="col-6 col-lg-3"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>
+  <div class="col-6 col-lg-3"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if pending }} h-100"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 {{ 'text-warning fw-bold' if pending else 'text-dark' }}">{{ pending }}</div></div></div></a></div>
+  <div class="col-6 col-lg-3"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-danger' if infected }} h-100"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 {{ 'text-danger fw-bold' if infected else 'text-dark' }}">{{ infected }}{% if infected %} <span class="fs-6">⚠</span>{% endif %}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>
+  <div class="col-6 col-lg-3"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if failed_logins }} h-100"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2 {{ 'text-danger fw-bold' if failed_logins >= 5 else 'text-warning fw-bold' if failed_logins else 'text-dark' }}">{{ failed_logins }}</div><div class="small text-muted">trong nhật ký gần đây</div></div></div></a></div>
 </div>
-<div class="card shadow-sm"><div class="card-header">Hoạt động gần đây</div>
+
+<div class="card shadow-sm mb-3 dash-chart"><div class="card-header bg-white">Hoạt động 24 giờ qua <span class="text-muted small" id="tzLabel">(giờ máy của bạn)</span></div>
+  <div class="card-body"><div class="chart-wrap"><canvas id="activityChart"></canvas></div></div></div>
+
+<div class="card shadow-sm flex-shrink-0">
+  <div class="card-header bg-white d-flex flex-wrap gap-2 justify-content-between align-items-center">
+    <span>Hoạt động gần đây</span>
+    <form method="get" action="/audit" class="d-flex gap-2">
+      <input name="user" class="form-control form-control-sm" placeholder="Người dùng" style="width:140px">
+      <input name="event" class="form-control form-control-sm" placeholder="Sự kiện" style="width:140px">
+      <button class="btn btn-sm btn-outline-primary">Lọc</button>
+      <a href="/audit" class="btn btn-sm btn-primary">Xem tất cả →</a>
+    </form>
+  </div>
   {% include "_audit_table.html" %}
 </div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  var a = {{ activity | tojson }};
+  document.getElementById('tzLabel').textContent = '(' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')';
+  if (window.Chart) {
+    new Chart(document.getElementById('activityChart'), {
+      type: 'bar',
+      data: { labels: a.slots.map(function (s) { var t = new Date(s); return String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'); }), datasets: [
+        { label: 'Đăng nhập', data: a.series.LOGIN, backgroundColor: '#0d6efd' },
+        { label: 'Upload', data: a.series.UPLOAD, backgroundColor: '#198754' },
+        { label: 'Download', data: a.series.DOWNLOAD, backgroundColor: '#fd7e14' } ] },
+      options: { maintainAspectRatio: false, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }
+    });
+  }
+</script>
 {% endblock %}

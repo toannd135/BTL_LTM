@@ -7,6 +7,6 @@
   <div class="col-md-2"><select name="result" class="form-select"><option value="">Mọi kết quả</option><option {{ 'selected' if result == 'OK' }}>OK</option><option {{ 'selected' if result == 'FAIL' }}>FAIL</option></select></div>
   <div class="col-md-2"><button class="btn btn-primary">Lọc</button> <a href="/audit" class="btn btn-outline-secondary">Xóa lọc</a></div>
 </form>
-<div class="card shadow-sm">{% include "_audit_table.html" %}</div>
-<p class="text-muted small mt-2">Hiển thị tối đa 500 dòng mới nhất.</p>
+<div class="card shadow-sm">{% include "_audit_table.html" %}{% include "_pager.html" %}</div>
+{% if capped %}<p class="text-muted small mt-2">Chỉ phân trang trong {{ pg.total }} dòng mới nhất khớp bộ lọc.</p>{% endif %}
 {% endblock %}

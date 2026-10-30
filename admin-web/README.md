@@ -21,3 +21,9 @@ Chỉ bind 127.0.0.1; đưa ra ngoài phải qua HTTPS (reverse proxy) hoặc SS
 ## Giới hạn hiện tại
 Trạng thái tệp chỉ do trang admin quản lý: **FTP server chưa chặn tải tệp PENDING/INFECTED**. Tệp chỉ rời khỏi
 thư mục FTP khi admin bấm "Cách ly". Kiểm thử: `python test_admin.py`.
+
+## Thời gian và IP trong nhật ký
+- Log lưu thời gian UTC; trang web đổi sang múi giờ của máy đang xem (tooltip ghi tên múi giờ).
+- IP FTP là địa chỉ nguồn của kết nối TCP tới server. IP thao tác web là `request.client.host`. Khi đặt sau reverse proxy (nginx...)
+  hoặc Docker bridge, IP thấy được là của proxy/gateway; để lấy IP thật của trình duyệt chạy
+  `uvicorn main:app --proxy-headers --forwarded-allow-ips=<IP-proxy-tin-cay>` (và proxy phải gửi `X-Forwarded-For`).

@@ -3,7 +3,7 @@
   <tbody>
   {% for r in rows %}
     <tr>
-      <td class="text-nowrap small">{{ r.ts[:19].replace('T', ' ') }}</td><td>{{ r.user }}</td><td>{{ r.ip }}</td><td><code>{{ r.event }}</code></td>
+      <td class="text-nowrap small"><time class="localtime" datetime="{{ r.ts }}">{{ r.ts[:19].replace('T', ' ') }} UTC</time></td><td>{{ r.user if r.user != '-' else '—' }}</td><td class="text-nowrap">{% if r.ip and r.ip != '-' %}{{ r.ip }}{% elif r.session == 'web' %}<span class="text-muted">Web (nội bộ)</span>{% else %}<span class="text-muted">—</span>{% endif %}</td><td><code>{{ r.event }}</code></td>
       <td><span class="badge text-bg-{{ 'success' if r.result == 'OK' else 'danger' }}">{{ r.result }}</span></td><td class="small">{{ r.detail }}</td>
     </tr>
   {% else %}<tr><td colspan="6" class="text-center text-muted">Chưa có dữ liệu</td></tr>{% endfor %}

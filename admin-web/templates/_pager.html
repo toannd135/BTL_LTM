@@ -1,0 +1,16 @@
+{% if pg and pg.total > 0 %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 p-2 border-top bg-white small">
+  <div class="text-muted">Hiển thị {{ pg.start }}–{{ pg.end }} / {{ pg.total }}
+    · <span>mỗi trang:</span>
+    {% for size, link in pg.sizes %}<a href="{{ link }}" class="{{ 'fw-bold text-dark' if size == pg.per_page else '' }} text-decoration-none">{{ size }}</a>{{ ' ' if not loop.last }}{% endfor %}
+  </div>
+  <nav aria-label="Phân trang"><ul class="pagination pagination-sm mb-0">
+    <li class="page-item {{ 'disabled' if not pg.prev }}"><a class="page-link" href="{{ pg.prev or '#' }}">‹ Trước</a></li>
+    {% for l in pg.links %}
+      {% if l is none %}<li class="page-item disabled"><span class="page-link">…</span></li>
+      {% else %}<li class="page-item {{ 'active' if l[0] == pg.page }}"><a class="page-link" href="{{ l[1] }}">{{ l[0] }}</a></li>{% endif %}
+    {% endfor %}
+    <li class="page-item {{ 'disabled' if not pg.next }}"><a class="page-link" href="{{ pg.next or '#' }}">Sau ›</a></li>
+  </ul></nav>
+</div>
+{% endif %}
