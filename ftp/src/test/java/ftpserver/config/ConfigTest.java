@@ -21,15 +21,13 @@ class ConfigTest {
                 data.port.min=50000
                 data.port.max=50100
                 idle.timeout.seconds=300
-                user.toannd.password=123456
-                user.toannd.readonly=false
-                """.formatted(tmp.resolve("root")));
+                db.path=%s
+                """.formatted(tmp.resolve("root"), tmp.resolve("x.db")));
 
         Config config = Config.load(conf);
 
         assertEquals(2121, config.controlPort());
-        assertTrue(config.users().containsKey("toannd"));
-        assertEquals(false, config.users().get("toannd").readOnly());
+        assertEquals(tmp.resolve("x.db"), config.dbPath());
     }
 
     @Test
@@ -39,5 +37,20 @@ class ConfigTest {
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> Config.load(conf));
         assertTrue(ex.getMessage().contains("root.dir"));
+    }
+
+    @Test
+    void tlsRequiredWithoutKeystore_isRejected(@TempDir Path tmp) throws Exception {
+        Path conf = tmp.resolve("ftpserver.conf");
+        Files.writeString(conf, """
+                control.port=2121
+                root.dir=%s
+                data.port.min=50000
+                data.port.max=50100
+                tls.required=true
+                """.formatted(tmp.resolve("root")));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> Config.load(conf));
+        assertTrue(ex.getMessage().contains("tls.keystore"));
     }
 }

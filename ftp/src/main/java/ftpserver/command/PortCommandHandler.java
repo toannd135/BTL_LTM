@@ -51,6 +51,7 @@ public final class PortCommandHandler implements CommandHandler {
             session.getDataConnection().close();
         }
         DataConnection dc = new DataConnection();
+        dc.setTls(session.dataTls());
         try {
             dc.setActiveTarget(InetAddress.getByName(ip), port);
         } catch (UnknownHostException e) {

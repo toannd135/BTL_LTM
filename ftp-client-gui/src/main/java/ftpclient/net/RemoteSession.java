@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 
-/** Giao diện chung cho hai giao thức: FTP chuẩn (FtpSession) và nhị phân BFTP (BftpSession). */
+/** Giao diện phiên làm việc với FTP server (cài đặt bởi FtpSession). */
 public interface RemoteSession extends Closeable {
 
     interface LogListener {

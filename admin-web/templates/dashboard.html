@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h3 class="mb-3">Dashboard</h3>
+<div class="row g-3 mb-4">
+  <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>
+  <div class="col-md-3"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 text-warning">{{ files.get('PENDING', 0) }}</div></div></div></a></div>
+  <div class="col-md-3"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 text-danger">{{ files.get('INFECTED', 0) }}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>
+  <div class="col-md-3"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2">{{ failed_logins }}</div><div class="small text-muted">trong nhật ký gần đây</div></div></div></a></div>
+</div>
+<div class="card shadow-sm"><div class="card-header">Hoạt động gần đây</div>
+  {% include "_audit_table.html" %}
+</div>
+{% endblock %}

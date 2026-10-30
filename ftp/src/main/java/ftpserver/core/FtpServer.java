@@ -8,9 +8,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import ftpserver.audit.AuditLog;
 import ftpserver.auth.UserManager;
 import ftpserver.config.Config;
 import ftpserver.fs.PathResolver;
+import ftpserver.tls.TlsSupport;
 
 public class FtpServer {
 
@@ -18,16 +20,21 @@ public class FtpServer {
     private final UserManager userManager;
     private final PathResolver pathResolver;
     private final CommandRegistry registry;
+    private final TlsSupport tls;
+    private final AuditLog audit;
 
     private ServerSocket listener;
     private volatile boolean running;
     private ExecutorService pool;
 
-    public FtpServer(Config config, UserManager userManager, PathResolver pathResolver, CommandRegistry registry) {
+    public FtpServer(Config config, UserManager userManager, PathResolver pathResolver, CommandRegistry registry,
+                     TlsSupport tls, AuditLog audit) {
         this.config = config;
         this.userManager = userManager;
         this.pathResolver = pathResolver;
         this.registry = registry;
+        this.tls = tls;
+        this.audit = audit;
     }
 
     public void start() throws IOException {
@@ -35,12 +42,13 @@ public class FtpServer {
         listener = new ServerSocket(config.controlPort());
         running = true;
         System.out.println("FTP server listening on port " + config.controlPort()
-                + ", root=" + config.rootDir());
+                + ", root=" + config.rootDir()
+                + ", tls=" + (tls == null ? "off" : config.tlsRequired() ? "required" : "optional"));
 
         while (running) {
             try {
                 Socket client = listener.accept();
-                ClientSession session = new ClientSession(client, registry, userManager, pathResolver, config);
+                ClientSession session = new ClientSession(client, registry, userManager, pathResolver, config, tls, audit);
                 pool.submit(session);
             } catch (SocketException e) {
                 if (running) {

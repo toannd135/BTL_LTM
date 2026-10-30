@@ -37,3 +37,15 @@ build/
 
 ### Mac OS ###
 .DS_Store
+### FTPS / secrets / runtime ###
+certs/
+*.p12
+*.jks
+*.pfx
+logs/
+ftproot/toannd/
+ftproot/editor/
+data/
+quarantine/
+.venv/
+__pycache__/
