@@ -101,6 +101,19 @@ class AclServiceTest {
     }
 
     @Test
+    void folderOwnerKeepsFullControlOfFilesOthersCreateInside() throws Exception {
+        acl.recordOwner("/shared/proj", "A");
+        acl.grant("/shared/proj", "B", Perm.WRITE, "A");
+        acl.grant("/shared/proj", "D", Perm.READ, "A");
+        acl.recordOwner("/shared/proj/b.txt", "B"); // B tai len trong thu muc cua A
+        assertTrue(acl.allows(a, "/shared/proj/b.txt", Perm.WRITE));
+        assertTrue(acl.isOwner(a, "/shared/proj/b.txt")); // A van chia se/thu hoi duoc
+        assertTrue(acl.allows(d, "/shared/proj/b.txt", Perm.READ)); // quyen thu muc phu len tep con
+        assertFalse(acl.isOwner(b, "/shared/proj"));
+        assertFalse(acl.isOwner(d, "/shared/proj/b.txt"));
+    }
+
+    @Test
     void siblingWithSamePrefixIsNotAffected() {
         acl.recordOwner("/shared/dir", "A");
         acl.recordOwner("/shared/dir2", "B");
