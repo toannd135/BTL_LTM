@@ -3,6 +3,7 @@ package ftpclient;
 import javafx.application.Application;
 import javafx.stage.Stage;
 
+import ftpclient.ui.AppIcon;
 import ftpclient.ui.MainWindow;
 
 public class Main extends Application {
@@ -10,6 +11,7 @@ public class Main extends Application {
     @Override
     public void start(Stage stage) {
         MainWindow window = new MainWindow();
+        AppIcon.apply(stage);
         stage.setTitle("Máy khách FTP - BTL Lập trình mạng");
         stage.setScene(window.buildScene());
         stage.setOnCloseRequest(e -> window.shutdown());
