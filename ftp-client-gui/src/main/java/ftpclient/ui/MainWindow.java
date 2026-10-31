@@ -527,20 +527,21 @@ public class MainWindow {
 
     private void updateShareButton() {
         RemoteFile sel = selectedRemote();
-        shareBtn.setDisable(!connected || sel == null || sel.directory() || !canShare());
+        shareBtn.setDisable(!connected || sel == null || !canShare());
     }
 
     /** Hộp thoại chia sẻ: xem ACL hiện tại, cấp/thu hồi quyền cho một người dùng. */
     private void onShareClicked() {
         RemoteFile sel = selectedRemote();
-        if (sel == null || sel.directory()) {
+        if (sel == null) {
             return;
         }
         String file = sel.name();
         Dialog<Void> dialog = new Dialog<>();
-        dialog.setTitle("Chia sẻ tệp");
+        dialog.setTitle(sel.directory() ? "Chia sẻ thư mục" : "Chia sẻ tệp");
         AppIcon.apply(dialog);
-        dialog.setHeaderText("Chia sẻ \"" + file + "\"");
+        dialog.setHeaderText("Chia sẻ \"" + file + "\""
+                + (sel.directory() ? "\nQuyền áp dụng cho mọi tệp và thư mục con bên trong." : ""));
         TextField userBox = new TextField();
         userBox.setPromptText("tên người dùng");
         ComboBox<String> permBox = new ComboBox<>(FXCollections.observableArrayList("READ", "DOWNLOAD", "WRITE", "NONE"));

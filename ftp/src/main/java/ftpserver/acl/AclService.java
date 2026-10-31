@@ -18,7 +18,7 @@ import ftpserver.db.Database;
  * Quyen hieu luc cua mot user tren mot duong dan:
  * <ul>
  *   <li>tep khong co chu so huu (tep cu): WRITE (khong han che them);</li>
- *   <li>chu so huu (gan nhat tinh tu tep len cac thu muc cha): WRITE;</li>
+ *   <li>chu so huu tep hoac bat ky thu muc cha nao: WRITE (nhu Google Drive);</li>
  *   <li>con lai: muc cao nhat duoc cap tren tep hoac thu muc cha, neu khong co thi null (khong thay, khong truy cap).</li>
  * </ul>
  * Tai khoan chi doc khong bao gio vuot qua DOWNLOAD. Loi CSDL khi kiem tra quyen = tu choi.
@@ -90,7 +90,7 @@ public class AclService {
         try (Connection c = db.open()) {
             String owner = ownerOf(c, path);
             Perm result;
-            if (owner == null || owner.equals(user.name())) {
+            if (owner == null || ownsAncestor(c, user.name(), path)) {
                 result = Perm.WRITE;
             } else {
                 result = bestGrant(c, user.name(), path);
@@ -139,8 +139,33 @@ public class AclService {
         if (user == null) {
             return false;
         }
-        String owner = ownerOf(path);
-        return owner != null && owner.equals(user.name());
+        try (Connection c = db.open()) {
+            return ownsAncestor(c, user.name(), path);
+        } catch (SQLException e) {
+            System.err.println("ACL owner lookup failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Giong Google Drive: chu so huu mot thu muc toan quyen voi moi thu ben trong, ke ca tep nguoi khac tao trong do.
+     * Vi vay kiem tra user co so huu tep hoac bat ky thu muc cha nao, khong chi chu so huu gan nhat.
+     */
+    private static boolean ownsAncestor(Connection c, String username, String path) throws SQLException {
+        List<String> chain = chain(path);
+        if (chain.isEmpty()) {
+            return false;
+        }
+        String sql = "SELECT 1 FROM file_owner WHERE owner = ? AND path IN (" + marks(chain.size()) + ")";
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, username);
+            for (int i = 0; i < chain.size(); i++) {
+                ps.setString(i + 2, chain.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
     /** Ghi chu so huu cho tep/thu muc moi; bo qua neu da co. */
