@@ -28,15 +28,21 @@
     state: mounted
 
 # VM chi co 1 GB RAM: them swap de Java + Postgres + admin-web khong bi OOM
-- name: Tao swapfile
-  ansible.builtin.command: fallocate -l {{ swap_size }} /swapfile
-  args:
-    creates: /swapfile
+- name: Kiem tra swapfile
+  ansible.builtin.stat:
+    path: /swapfile
   register: swapfile
 
-- name: Kich hoat swap
-  ansible.builtin.shell: chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-  when: swapfile.changed
+# Tao moi hoac doi kich thuoc (vd 2G -> 4G khi bat ClamAV)
+- name: Tao/doi kich thuoc swapfile
+  ansible.builtin.shell: |
+    swapoff /swapfile 2>/dev/null || true
+    rm -f /swapfile
+    fallocate -l {{ swap_size }} /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+  when: not swapfile.stat.exists or swapfile.stat.size != (swap_size | human_to_bytes)
 
 - name: Ghi swap vao fstab
   ansible.posix.mount:

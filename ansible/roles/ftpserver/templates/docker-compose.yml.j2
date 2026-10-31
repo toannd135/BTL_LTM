@@ -48,9 +48,21 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
 
+{% if clamav_enabled %}
+  # clamd + freshclam (tu cap nhat chu ky). Nap CSDL chu ky can ~1-1.5 GB RAM, khoi dong lan dau vai phut
+  clamd:
+    image: {{ clamav_image }}
+    restart: unless-stopped
+    volumes:
+      - ./clamav-db:/var/lib/clamav
+
+{% endif %}
   admin:
 {% if ftp_image_source == 'build' %}
-    build: ./build/admin-web
+    build:
+      context: ./build/admin-web
+      args:
+        WITH_CLAMAV: "{{ '1' if clamav_enabled else '0' }}"
     image: ftpadmin:local
 {% else %}
     image: {{ ftpadmin_image }}
@@ -65,9 +77,12 @@ services:
       FTP_DB_PASSWORD: ${FTP_DB_PASSWORD}
       FTPADMIN_SECRET: ${FTPADMIN_SECRET}
     ports:
-      - "127.0.0.1:{{ ftpadmin_port }}:8080"
+      - "{{ ftpadmin_bind }}:{{ ftpadmin_port }}:8080"
     volumes:
       - ./ftproot:/ftproot
       - ./logs:/logs
       - ./data:/data
       - ./quarantine:/quarantine
+{% if clamav_enabled %}
+      - ./config/clamd.conf:/etc/clamav/clamd.conf:ro
+{% endif %}

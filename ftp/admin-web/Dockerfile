@@ -1,11 +1,19 @@
 FROM python:3.12-slim
 
+# Tuy chon: --build-arg WITH_CLAMAV=1 cai client clamdscan (nho, khong kem CSDL chu ky);
+# can them clamd chay rieng va /etc/clamav/clamd.conf tro toi no (TCPAddr/TCPSocket)
+ARG WITH_CLAMAV=0
+RUN if [ "$WITH_CLAMAV" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends clamdscan && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 COPY templates templates
+COPY static static
 
 # Dữ liệu dùng chung với ftpserver: mount volume vào các đường dẫn dưới đây.
 # PostgreSQL: đặt FTP_DB_URL=jdbc:postgresql://host:5432/db (hoặc postgresql://...), FTP_DB_USER, FTP_DB_PASSWORD;
