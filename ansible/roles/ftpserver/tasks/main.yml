@@ -1,0 +1,100 @@
+- name: Kiem tra bien bat buoc
+  ansible.builtin.assert:
+    that:
+      - ftp_public_ip is defined and ftp_public_ip | length > 0
+      - ftp_db_password | length >= 12
+      - ftpadmin_secret | length >= 32
+    fail_msg: "Thieu ftp_public_ip (inventory) hoac bi mat trong group_vars/ftpserver/vault.yml qua ngan"
+    quiet: true
+
+- name: Tao thu muc du lieu ung dung (uid {{ ftp_app_uid }} dung chung cho ftpserver va admin-web)
+  ansible.builtin.file:
+    path: "{{ ftp_base_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ ftp_app_uid }}"
+    group: "{{ ftp_app_uid }}"
+    mode: "0750"
+  loop: [ftproot, logs, data, quarantine]
+
+- name: Tao thu muc cau hinh va Postgres
+  ansible.builtin.file:
+    path: "{{ ftp_base_dir }}/{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: config, mode: "0755" }
+    - { path: certs, mode: "0750" }
+    - { path: pgdata, mode: "0700" }   # entrypoint postgres tu chown
+
+- name: Chep keystore FTPS
+  ansible.builtin.copy:
+    src: "{{ ftp_tls_keystore_src }}"
+    dest: "{{ ftp_base_dir }}/certs/ftps.p12"
+    owner: "{{ ftp_app_uid }}"
+    mode: "0400"
+  when: ftp_tls_enabled
+  notify: Khoi dong lai ftpserver
+
+- name: Ghi ftpserver.conf
+  ansible.builtin.template:
+    src: ftpserver.conf.j2
+    dest: "{{ ftp_base_dir }}/config/ftpserver.conf"
+    mode: "0644"
+  notify: Khoi dong lai ftpserver
+
+- name: Ghi .env (bi mat)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ ftp_base_dir }}/.env"
+    mode: "0600"
+  no_log: true
+
+- name: Ghi docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ ftp_base_dir }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Chep ma nguon de build image tren VM
+  when: ftp_image_source == 'build'
+  block:
+    - name: Tao thu muc build
+      ansible.builtin.file:
+        path: "{{ ftp_base_dir }}/build/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [ftp/target, ftp/ftproot, admin-web/templates]
+
+    - name: Chep tep build ftpserver
+      ansible.builtin.copy:
+        src: "{{ ftp_src_dir }}/{{ item }}"
+        dest: "{{ ftp_base_dir }}/build/ftp/{{ item }}"
+        mode: "0644"
+      loop: [Dockerfile, ftpserver.conf, target/ftpserver.jar]
+
+    - name: Chep tep build admin-web
+      ansible.builtin.copy:
+        src: "{{ ftp_src_dir }}/admin-web/{{ item }}"
+        dest: "{{ ftp_base_dir }}/build/admin-web/"
+        mode: "0644"
+      loop: [Dockerfile, requirements.txt, main.py, templates]
+
+- name: Dang nhap GHCR (image private)
+  ansible.builtin.command:
+    cmd: docker login ghcr.io -u {{ ghcr_username }} --password-stdin
+    stdin: "{{ ghcr_token }}"
+  when: ftp_image_source == 'registry' and ghcr_token | length > 0
+  changed_when: false
+  no_log: true
+
+- name: Build/keo image va chay stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ ftp_base_dir }}"
+    build: "{{ 'always' if ftp_image_source == 'build' else 'never' }}"
+    pull: "{{ 'missing' if ftp_image_source == 'build' else 'always' }}"
+    state: present
+
+- name: Cho cong FTP mo
+  ansible.builtin.wait_for:
+    port: "{{ ftp_control_port }}"
+    timeout: 60

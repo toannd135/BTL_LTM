@@ -1,0 +1,6 @@
+# hosts.ini duoc Terraform sinh ra (terraform apply). Mau khi tu viet tay:
+[ftpserver]
+20.0.0.1 ansible_user=azureuser ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[ftpserver:vars]
+ftp_public_ip=20.0.0.1

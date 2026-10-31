@@ -1,0 +1,7 @@
+# cp vault.yml.example vault.yml && ansible-vault encrypt vault.yml
+# Sinh gia tri ngau nhien: openssl rand -hex 32
+vault_ftp_db_password: "doi-gia-tri-nay"
+vault_ftpadmin_secret: "doi-gia-tri-nay"
+# vault_ftp_tls_keystore_password: ""
+# vault_ghcr_username: "toannd135"
+# vault_ghcr_token: "ghp_..."

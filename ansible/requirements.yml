@@ -1,0 +1,5 @@
+collections:
+  - name: community.general
+  - name: community.docker
+    version: ">=3.6.0"   # docker_compose_v2
+  - name: ansible.posix

@@ -1,0 +1,6 @@
+# cp terraform.tfvars.example terraform.tfvars  (terraform.tfvars da gitignore)
+# subscription_id   = "00000000-0000-0000-0000-000000000000"
+ssh_allowed_cidr = "1.2.3.4/32" # curl -s ifconfig.me
+# location          = "southeastasia"
+# vm_size           = "Standard_B2s"
+# ftp_allowed_cidr  = "0.0.0.0/0"
