@@ -11,14 +11,15 @@ ftp_data_disk: /dev/disk/azure/scsi1/lun0
 ftp_base_dir: /srv/ftp
 ftp_app_uid: 10001           # trung uid user admin trong image ftpadmin
 
-# VM B2ats_v2 (1 GB RAM): swap + gioi han heap Java
-swap_size: 2G
+# VM B2ats_v2 (1 GB RAM): swap + gioi han heap Java. 4G vi clamd nap CSDL chu ky ~1-1.5 GB
+swap_size: 4G
 ftp_java_opts: "-Xmx256m -XX:+UseSerialGC"
 
 ftp_control_port: 2121
 ftp_pasv_min: 50000
 ftp_pasv_max: 50100
-ftpadmin_port: 8080          # chi bind 127.0.0.1, vao qua SSH tunnel
+ftpadmin_port: 8080
+# ftpadmin_bind: mac dinh 127.0.0.1 (roles/ftpserver/defaults), Terraform ghi 0.0.0.0 vao inventory khi mo NSG
 
 # FTPS: dat true va tro toi keystore tao bang ftp/scripts/gen-keystore.sh
 ftp_tls_enabled: false

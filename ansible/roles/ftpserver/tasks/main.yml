@@ -42,6 +42,15 @@
     mode: "0644"
   notify: Khoi dong lai ftpserver
 
+- name: Ghi clamd.conf cho clamdscan trong admin-web (tro toi container clamd)
+  ansible.builtin.copy:
+    dest: "{{ ftp_base_dir }}/config/clamd.conf"
+    mode: "0644"
+    content: |
+      TCPSocket 3310
+      TCPAddr clamd
+  when: clamav_enabled
+
 - name: Ghi .env (bi mat)
   ansible.builtin.template:
     src: env.j2
@@ -92,6 +101,7 @@
     project_src: "{{ ftp_base_dir }}"
     build: "{{ 'always' if ftp_image_source == 'build' else 'never' }}"
     pull: "{{ 'missing' if ftp_image_source == 'build' else 'always' }}"
+    remove_orphans: true   # xoa container cua service da bo (vd clamd khi clamav_enabled=false)
     state: present
 
 - name: Cho cong FTP mo

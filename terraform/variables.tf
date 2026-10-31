@@ -51,6 +51,12 @@ variable "ftp_allowed_cidr" {
   default     = "0.0.0.0/0"
 }
 
+variable "admin_web_allowed_cidr" {
+  description = "Dai IP duoc vao thang admin-web (cong 8080, HTTP khong ma hoa). null = dong, chi vao qua SSH tunnel"
+  type        = string
+  default     = null
+}
+
 variable "data_disk_size_gb" {
   description = "Dung luong o du lieu (ftproot, Postgres, log), gan vao /srv/ftp. 64 = P6, nam trong goi mien phi"
   type        = number

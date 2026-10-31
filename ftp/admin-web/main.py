@@ -22,6 +22,7 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -61,6 +62,7 @@ async def remember_client_ip(request: Request, call_next):
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET, https_only=False, same_site="strict", max_age=3600)
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
 
 # ---------- DB / mat khau (cung dinh dang PBKDF2 voi PasswordHasher.java) ----------
@@ -621,7 +623,9 @@ def scan_with_clamav(p: Path) -> tuple[str, str]:
     for exe in ("clamdscan", "clamscan"):  # clamd chua chay -> thu clamscan
         if not shutil.which(exe):
             continue
-        r = subprocess.run([exe, "--no-summary", str(p)], capture_output=True, text=True, timeout=300)
+        # --stream: gui noi dung tep qua socket, clamd o container/may khac khong can doc duoc duong dan
+        args = [exe, "--no-summary"] + (["--stream"] if exe == "clamdscan" else []) + [str(p)]
+        r = subprocess.run(args, capture_output=True, text=True, timeout=300)
         if r.returncode == 0:
             return "CLEAN", f"{exe}: OK"
         if r.returncode == 1:

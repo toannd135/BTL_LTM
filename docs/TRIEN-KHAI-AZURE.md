@@ -8,7 +8,8 @@ Terraform (terraform/)                     Ansible (ansible/)
                                                         docker-compose (postgres + ftp + admin-web), pull GHCR
 ```
 
-NSG mở: `22` (chỉ `ssh_allowed_cidr`), `2121` và `50000-50100` (`ftp_allowed_cidr`). Admin-web chỉ bind `127.0.0.1:8080`, vào qua SSH tunnel.
+NSG mở: `22` (chỉ `ssh_allowed_cidr`), `2121` và `50000-50100` (`ftp_allowed_cidr`). Admin-web mặc định chỉ bind `127.0.0.1:8080`, vào qua SSH tunnel;
+đặt `admin_web_allowed_cidr = "<IP>/32"` trong `terraform.tfvars` rồi `terraform apply` + chạy lại playbook để vào thẳng `http://<public_ip>:8080` (HTTP, chỉ nên mở cho vài IP).
 
 ## Yêu cầu
 - `az login` (Azure CLI), Terraform ≥ 1.5, Ansible ≥ 2.15, khóa SSH `~/.ssh/id_rsa(.pub)`
