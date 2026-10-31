@@ -121,6 +121,11 @@ resource "azurerm_linux_virtual_machine" "main" {
     public_key = file(pathexpand(var.ssh_public_key_path))
   }
 
+  # Identity duoc bat tu ben ngoai (portal/policy); khai bao de Terraform khong go no
+  identity {
+    type = "SystemAssigned"
+  }
+
   os_disk {
     caching              = "ReadWrite"
     storage_account_type = var.disk_type
