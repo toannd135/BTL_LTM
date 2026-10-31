@@ -172,6 +172,7 @@ jobs:
             --main-jar "$JAR" \
             --main-class ftpclient.Launcher \
             --dest target/installer \
+            --icon packaging/FtpClient.${{ matrix.os == 'windows-latest' && 'ico' || (matrix.os == 'macos-latest' && 'icns' || 'png') }} \
             ${{ matrix.os == 'windows-latest' && '--win-shortcut --win-menu' || '' }} \
             ${{ matrix.os == 'ubuntu-latest' && '--linux-shortcut' || '' }} \
             $( [[ "$RUNNER_OS" == macOS && -n "$MAC_SIGN_IDENTITY" ]] && echo "--mac-sign --mac-signing-key-user-name \"$MAC_SIGN_IDENTITY\"" )
@@ -256,6 +257,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ftp/admin-web
+          build-args: WITH_CLAMAV=1   # client clamdscan, clamd chay container rieng
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

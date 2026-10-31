@@ -28,7 +28,7 @@ resource "azurerm_public_ip" "main" {
   tags                = var.tags
 }
 
-# Trang quan tri (8080) KHONG mo ra ngoai: chi bind 127.0.0.1, vao qua SSH tunnel
+# Trang quan tri (8080) mac dinh dong, vao qua SSH tunnel; dat admin_web_allowed_cidr de mo cho mot dai IP
 resource "azurerm_network_security_group" "main" {
   name                = "nsg-${var.prefix}"
   location            = azurerm_resource_group.main.location
@@ -69,6 +69,21 @@ resource "azurerm_network_security_group" "main" {
     destination_port_range     = "50000-50100"
     source_address_prefix      = var.ftp_allowed_cidr
     destination_address_prefix = "*"
+  }
+
+  dynamic "security_rule" {
+    for_each = var.admin_web_allowed_cidr == null ? [] : [var.admin_web_allowed_cidr]
+    content {
+      name                       = "admin-web"
+      priority                   = 130
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "8080"
+      source_address_prefix      = security_rule.value
+      destination_address_prefix = "*"
+    }
   }
 }
 
@@ -164,5 +179,6 @@ resource "local_file" "ansible_inventory" {
 
     [ftpserver:vars]
     ftp_public_ip=${azurerm_public_ip.main.ip_address}
+    ftpadmin_bind=${var.admin_web_allowed_cidr == null ? "127.0.0.1" : "0.0.0.0"}
   EOT
 }

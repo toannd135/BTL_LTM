@@ -1,0 +1,7 @@
+# Muc uu tien thap nhat de inventory do Terraform sinh (ftpadmin_bind=0.0.0.0) ghi de duoc
+ftpadmin_bind: 127.0.0.1
+
+# ClamAV: container clamd rieng, admin-web quet bang clamdscan --stream.
+# Tam tat: VM 1 GB RAM khong du cho clamd (~1-1.5 GB); bat lai khi doi VM lon hon
+clamav_enabled: false
+clamav_image: clamav/clamav:stable
