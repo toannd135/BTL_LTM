@@ -5,6 +5,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
@@ -30,6 +34,7 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
+import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Dialog;
@@ -37,6 +42,7 @@ import javafx.scene.control.MenuItem;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ProgressBar;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TableCell;
@@ -118,12 +124,13 @@ public class MainWindow {
         root.setTop(buildTopArea());
         root.setCenter(buildCenterArea());
         root.setBottom(buildBottomArea());
-        root.setPadding(new Insets(6));
 
         refreshLocalTable();
         setConnected(false, "");
 
-        return new Scene(root, 1100, 680);
+        Scene scene = new Scene(root, 1150, 720);
+        scene.getStylesheets().add(MainWindow.class.getResource("app.css").toExternalForm());
+        return scene;
     }
 
     private RemoteSession newSession() {
@@ -160,27 +167,24 @@ public class MainWindow {
         userField.setPrefWidth(100);
         passField = new PasswordField();
         passField.setPrefWidth(100);
-        connectButton = new Button("Kết nối");
+        connectButton = iconButton("Kết nối", "connect");
+        connectButton.getStyleClass().add("primary");
+        connectButton.setDefaultButton(true);
         connectButton.setOnAction(e -> onConnectClicked());
         roleLabel = new Label();
+        roleLabel.setMinWidth(0);
 
-        HBox connectionBar = new HBox(14,
-                labeled("Máy chủ:", hostField),
-                labeled("Cổng:", portField),
-                labeled("Tài khoản:", userField),
-                labeled("Mật khẩu:", passField),
-                connectButton, roleLabel);
-        connectionBar.setAlignment(Pos.CENTER_LEFT);
-        connectionBar.setPadding(new Insets(8, 8, 4, 8));
-
-        refreshBtn = new Button("Làm mới cả hai");
+        refreshBtn = iconButton("Làm mới", "refresh");
+        refreshBtn.setTooltip(new Tooltip("Làm mới cả hai bảng"));
         refreshBtn.setOnAction(e -> {
             refreshLocalTable();
-            refreshRemoteTable();
+            if (connected) {
+                refreshRemoteTable();
+            }
         });
-        mkdBtn = new Button("Tạo thư mục");
+        mkdBtn = iconButton("Tạo thư mục", "folder-plus");
         mkdBtn.setOnAction(e -> onMkdClicked());
-        localMkdBtn = new Button("Tạo thư mục");
+        localMkdBtn = iconButton("Tạo thư mục", "folder-plus");
         localMkdBtn.setOnAction(e -> onLocalMkdClicked());
         showHiddenBox = new CheckBox("Hiện file ẩn");
         showHiddenBox.setOnAction(e -> {
@@ -188,21 +192,37 @@ public class MainWindow {
             applyRemoteFilter();
         });
 
-        HBox toolBar = new HBox(10, refreshBtn, new Separator(Orientation.VERTICAL), showHiddenBox);
-        toolBar.setAlignment(Pos.CENTER_LEFT);
-        toolBar.setPadding(new Insets(4, 8, 8, 8));
-
-        return new VBox(connectionBar, toolBar);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox bar = new HBox(12,
+                labeled("Máy chủ:", hostField),
+                labeled("Cổng:", portField),
+                labeled("Tài khoản:", userField),
+                labeled("Mật khẩu:", passField),
+                connectButton,
+                new Separator(Orientation.VERTICAL),
+                refreshBtn, showHiddenBox, spacer, roleLabel);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        VBox top = new VBox(bar);
+        top.getStyleClass().add("top-bar");
+        return top;
     }
 
     private SplitPane buildCenterArea() {
         localPathField = new TextField();
         localPathField.setEditable(false);
         localTable = new TableView<>();
+        localTable.setPlaceholder(new Label("Thư mục rỗng"));
         localTable.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
         localTable.getColumns().add(nameColumn(LocalFile::name, LocalFile::directory, 220));
         localTable.getColumns().add(sizeColumn(LocalFile::size, LocalFile::directory, 90));
+        localTable.getColumns().add(textColumn("Loại", f -> FileIcons.typeName(f.name(), f.directory()), 120, false));
         localTable.getColumns().add(textColumn("Ngày sửa", LocalFile::modified, 130));
+        localTable.getColumns().add(textColumn("Quyền", LocalFile::permissions, 95, false));
+        localTable.getColumns().add(textColumn("Chủ sở hữu", LocalFile::owner, 90, false));
+        localTable.getColumns().add(textColumn("Nhóm", LocalFile::group, 90, false));
+        localTable.getColumns().add(textColumn("Ngày tạo", LocalFile::created, 130, false));
+        installColumnChooser(localTable, "local");
         setupLocalDrag();
         localTable.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
@@ -222,30 +242,46 @@ public class MainWindow {
                 }
             }
         });
-        MenuItem localOpenItem = new MenuItem("Mở");
-        localOpenItem.setOnAction(e -> {
-            LocalFile sel = localTable.getSelectionModel().getSelectedItem();
+        uploadBtn = iconButton("Tải lên →", "upload");
+        uploadBtn.setOnAction(e -> onUploadClicked());
+
+        MenuItem localOpenItem = menuItem("Mở", "open", () -> {
+            LocalFile sel = selectedLocal();
             if (sel != null && !sel.directory()) {
                 openLocal(localDir.resolve(sel.name()));
             }
         });
-        ContextMenu localMenu = new ContextMenu(localOpenItem);
+        MenuItem localUploadItem = menuItem("Tải lên máy chủ", "upload", this::onUploadClicked);
+        MenuItem localRenameItem = menuItem("Đổi tên…", "rename", this::onLocalRenameClicked);
+        MenuItem localMkdItem = menuItem("Tạo thư mục…", "folder-plus", this::onLocalMkdClicked);
+        MenuItem localRefreshItem = menuItem("Làm mới", "refresh", this::refreshLocalTable);
+        ContextMenu localMenu = new ContextMenu(localOpenItem, localUploadItem, localRenameItem,
+                new SeparatorMenuItem(), localMkdItem, localRefreshItem);
         localMenu.setOnShowing(e -> {
-            LocalFile sel = localTable.getSelectionModel().getSelectedItem();
+            LocalFile sel = selectedLocal();
             localOpenItem.setDisable(sel == null || sel.directory());
+            localUploadItem.setDisable(sel == null || uploadBtn.isDisable());
+            localRenameItem.setDisable(sel == null);
         });
         localTable.setContextMenu(localMenu);
-        uploadBtn = new Button("Tải lên →");
-        uploadBtn.setOnAction(e -> onUploadClicked());
-        localBox = new VBox(4, panelHeader("Máy cục bộ", localMkdBtn), localPathField, localTable, uploadBtn);
+        HBox localButtons = new HBox(uploadBtn);
+        localButtons.getStyleClass().add("action-bar");
+        localBox = new VBox(6, panelHeader("Máy cục bộ", localMkdBtn), localPathField, localTable, localButtons);
+        localBox.getStyleClass().add("panel");
         VBox.setVgrow(localTable, Priority.ALWAYS);
 
         remotePathField = new TextField("(chưa kết nối)");
         remotePathField.setEditable(false);
         remoteTable = new TableView<>();
+        remoteTable.setPlaceholder(new Label("Chưa kết nối đến máy chủ"));
         remoteTable.getColumns().add(nameColumn(RemoteFile::name, RemoteFile::directory, 220));
         remoteTable.getColumns().add(sizeColumn(RemoteFile::size, RemoteFile::directory, 90));
+        remoteTable.getColumns().add(textColumn("Loại", f -> FileIcons.typeName(f.name(), f.directory()), 120, false));
         remoteTable.getColumns().add(textColumn("Ngày sửa", f -> Formats.remoteDate(f.modified()), 130));
+        remoteTable.getColumns().add(textColumn("Quyền", RemoteFile::permissions, 95, false));
+        remoteTable.getColumns().add(textColumn("Chủ sở hữu", RemoteFile::owner, 90, false));
+        remoteTable.getColumns().add(textColumn("Nhóm", RemoteFile::group, 90, false));
+        installColumnChooser(remoteTable, "remote");
         setupRemoteDrop();
         remoteTable.setOnMouseClicked(e -> {
             if (e.getClickCount() == 2) {
@@ -261,9 +297,9 @@ public class MainWindow {
                 }
             }
         });
-        downloadBtn = new Button("← Tải về");
+        downloadBtn = iconButton("← Tải về", "download");
         downloadBtn.setOnAction(e -> onDownloadClicked());
-        openBtn = new Button("Mở");
+        openBtn = iconButton("Mở", "open");
         openBtn.setTooltip(new Tooltip("Tải về thư mục tạm rồi mở bằng ứng dụng mặc định"));
         openBtn.setOnAction(e -> {
             RemoteFile sel = selectedRemote();
@@ -271,24 +307,35 @@ public class MainWindow {
                 openRemote(sel);
             }
         });
-        deleteBtn = new Button("Xóa");
+        deleteBtn = iconButton("Xóa", "delete");
         deleteBtn.setOnAction(e -> onDeleteClicked());
-        shareBtn = new Button("Chia sẻ");
+        shareBtn = iconButton("Chia sẻ", "share");
         shareBtn.setOnAction(e -> onShareClicked());
         remoteTable.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> updateShareButton());
-        MenuItem openItem = new MenuItem("Mở");
-        openItem.setOnAction(e -> openBtn.fire());
-        MenuItem shareItem = new MenuItem("Chia sẻ…");
-        shareItem.setOnAction(e -> onShareClicked());
-        ContextMenu remoteMenu = new ContextMenu(openItem, shareItem);
+        MenuItem downloadItem = menuItem("Tải về máy", "download", this::onDownloadClicked);
+        MenuItem openItem = menuItem("Mở", "open", () -> openBtn.fire());
+        MenuItem renameItem = menuItem("Đổi tên…", "rename", this::onRenameClicked);
+        MenuItem deleteItem = menuItem("Xóa", "delete", this::onDeleteClicked);
+        MenuItem shareItem = menuItem("Chia sẻ…", "share", this::onShareClicked);
+        MenuItem mkdItem = menuItem("Tạo thư mục…", "folder-plus", this::onMkdClicked);
+        MenuItem refreshItem = menuItem("Làm mới", "refresh", this::refreshRemoteTable);
+        ContextMenu remoteMenu = new ContextMenu(downloadItem, openItem, renameItem, deleteItem, shareItem,
+                new SeparatorMenuItem(), mkdItem, refreshItem);
         remoteMenu.setOnShowing(e -> {
             RemoteFile sel = selectedRemote();
+            downloadItem.setDisable(!connected || sel == null);
             openItem.setDisable(!connected || sel == null || sel.directory());
+            renameItem.setDisable(!connected || sel == null || mkdBtn.isDisable());
+            deleteItem.setDisable(sel == null || deleteBtn.isDisable());
             shareItem.setDisable(shareBtn.isDisable());
+            mkdItem.setDisable(!connected || mkdBtn.isDisable());
+            refreshItem.setDisable(!connected);
         });
         remoteTable.setContextMenu(remoteMenu);
-        HBox remoteButtons = new HBox(6, downloadBtn, openBtn, deleteBtn, shareBtn);
-        remoteBox = new VBox(4, panelHeader("Máy chủ", mkdBtn), remotePathField, remoteTable, remoteButtons);
+        HBox remoteButtons = new HBox(downloadBtn, openBtn, deleteBtn, shareBtn);
+        remoteButtons.getStyleClass().add("action-bar");
+        remoteBox = new VBox(6, panelHeader("Máy chủ", mkdBtn), remotePathField, remoteTable, remoteButtons);
+        remoteBox.getStyleClass().add("panel");
         VBox.setVgrow(remoteTable, Priority.ALWAYS);
 
         split = new SplitPane(localBox, remoteBox);
@@ -301,18 +348,38 @@ public class MainWindow {
         progressBar = new ProgressBar(0);
         progressBar.setPrefWidth(300);
         progressLabel = new Label("Sẵn sàng");
-        cancelBtn = new Button("Hủy truyền");
+        progressLabel.setMinWidth(0);
+        cancelBtn = iconButton("Hủy truyền", "cancel");
+        cancelBtn.getStyleClass().add("danger");
         cancelBtn.setDisable(true);
-        cancelBtn.setOnAction(e -> session.cancelTransfer());
-        HBox progressBox = new HBox(8, progressLabel, progressBar, cancelBtn);
-        progressBox.setPadding(new Insets(4));
+        cancelBtn.setOnAction(e -> {
+            cancelBtn.setDisable(true);
+            progressLabel.setText("Đang hủy…");
+            session.cancelTransfer();
+        });
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox progressBox = new HBox(10, progressLabel, spacer, progressBar, cancelBtn);
+        progressBox.setAlignment(Pos.CENTER_LEFT);
+        progressBox.getStyleClass().add("status-bar");
 
         logArea = new TextArea();
         logArea.setEditable(false);
-        logArea.setPrefRowCount(8);
-        logArea.setFont(Font.font("Monospaced", 12));
+        logArea.setPrefRowCount(7);
+        logArea.getStyleClass().add("log-area");
+        Button clearLogBtn = new Button("Xóa nhật ký");
+        clearLogBtn.setOnAction(e -> logArea.clear());
+        Region logSpacer = new Region();
+        HBox.setHgrow(logSpacer, Priority.ALWAYS);
+        Label logTitle = new Label("Nhật ký giao thức");
+        logTitle.getStyleClass().add("section-title");
+        HBox logHeader = new HBox(8, logTitle, logSpacer, clearLogBtn);
+        logHeader.setAlignment(Pos.CENTER_LEFT);
+        VBox logBox = new VBox(6, logHeader, logArea);
+        logBox.getStyleClass().add("log-box");
+        VBox.setMargin(logBox, new Insets(0, 8, 8, 8));
 
-        return new VBox(4, progressBox, new Label("Nhật ký giao thức:"), logArea);
+        return new VBox(4, progressBox, logBox);
     }
 
     // ---------------- thao tác ----------------
@@ -418,11 +485,16 @@ public class MainWindow {
     private void setConnected(boolean isConnected, String role) {
         connected = isConnected;
         connectButton.setText(isConnected ? "Ngắt kết nối" : "Kết nối");
+        connectButton.getStyleClass().remove(isConnected ? "primary" : "danger");
+        if (!connectButton.getStyleClass().contains(isConnected ? "danger" : "primary")) {
+            connectButton.getStyleClass().add(isConnected ? "danger" : "primary");
+        }
+        connectButton.setDefaultButton(!isConnected);
+        ((Label) remoteTable.getPlaceholder()).setText(isConnected ? "Thư mục rỗng" : "Chưa kết nối đến máy chủ");
         hostField.setDisable(isConnected);
         portField.setDisable(isConnected);
         userField.setDisable(isConnected);
         passField.setDisable(isConnected);
-        refreshBtn.setDisable(!isConnected);
         downloadBtn.setDisable(!isConnected);
         openBtn.setDisable(!isConnected);
         cancelBtn.setDisable(true);
@@ -729,7 +801,7 @@ public class MainWindow {
     private void runTransfer(Task<String> task, String label, Runnable afterSuccess) {
         progressLabel.setText(label);
         progressBar.progressProperty().bind(task.progressProperty());
-        cancelBtn.setDisable(!session.supportsResume());
+        cancelBtn.setDisable(false);
         task.setOnSucceeded(e -> {
             progressBar.progressProperty().unbind();
             cancelBtn.setDisable(true);
@@ -743,9 +815,14 @@ public class MainWindow {
             progressLabel.setText("Lỗi: " + label);
             Throwable ex = task.getException();
             if (ex instanceof RemoteSession.CancelledException) {
+                // dừng cả hàng đợi (không gọi afterSuccess), chỉ nạp lại hai bảng
                 appendLog(ex.getMessage());
                 progressLabel.setText(ex.getMessage());
-                afterSuccess.run();
+                progressBar.setProgress(0);
+                refreshLocalTable();
+                if (connected) {
+                    refreshRemoteTable();
+                }
             } else {
                 showError(ex);
             }
@@ -758,7 +835,7 @@ public class MainWindow {
         boolean showHidden = showHiddenBox != null && showHiddenBox.isSelected();
         ObservableList<LocalFile> items = FXCollections.observableArrayList();
         if (localDir.getParent() != null) {
-            items.add(new LocalFile("..", true, 0, ""));
+            items.add(new LocalFile("..", true, 0, "", "", "", "", ""));
         }
         try (var stream = Files.list(localDir)) {
             stream.sorted().forEach(p -> {
@@ -767,11 +844,7 @@ public class MainWindow {
                     if (!showHidden && (name.startsWith(".") || Files.isHidden(p))) {
                         return;
                     }
-                    boolean dir = Files.isDirectory(p);
-                    long size = dir ? 0 : Files.size(p);
-                    String modified = Formats.DATE_TIME
-                            .format(Files.getLastModifiedTime(p).toInstant().atZone(ZoneId.systemDefault()));
-                    items.add(new LocalFile(name, dir, size, modified));
+                    items.add(readLocalFile(p, name));
                 } catch (IOException ignored) {
                 }
             });
@@ -784,6 +857,58 @@ public class MainWindow {
     // ---------------- kéo - thả ----------------
 
     /** Tiêu đề bảng: kéo sang nửa bên kia để đổi chỗ hai bảng. */
+    private static Button iconButton(String text, String icon) {
+        Button b = new Button(text, Icons.of(icon));
+        return b;
+    }
+
+    private static MenuItem menuItem(String text, String icon, Runnable action) {
+        MenuItem item = new MenuItem(text, Icons.of(icon));
+        item.setOnAction(e -> action.run());
+        return item;
+    }
+
+    private LocalFile selectedLocal() {
+        LocalFile sel = localTable.getSelectionModel().getSelectedItem();
+        return sel == null || sel.name().equals("..") ? null : sel;
+    }
+
+    private void onRenameClicked() {
+        RemoteFile sel = selectedRemote();
+        if (sel == null) {
+            return;
+        }
+        askNewName(sel.name()).ifPresent(to -> runRemote(() -> session.rename(sel.name(), to)));
+    }
+
+    private void onLocalRenameClicked() {
+        LocalFile sel = selectedLocal();
+        if (sel == null) {
+            return;
+        }
+        askNewName(sel.name()).ifPresent(to -> {
+            try {
+                Path target = localDir.resolve(to).normalize();
+                if (!localDir.equals(target.getParent())) {
+                    throw new IOException("Tên không hợp lệ: " + to);
+                }
+                Files.move(localDir.resolve(sel.name()), target);
+                refreshLocalTable();
+            } catch (IOException ex) {
+                showError(ex);
+            }
+        });
+    }
+
+    private static java.util.Optional<String> askNewName(String current) {
+        TextInputDialog dialog = new TextInputDialog(current);
+        dialog.setHeaderText("Đổi tên \"" + current + "\"");
+        dialog.setContentText("Tên mới:");
+        AppIcon.apply(dialog);
+        return dialog.showAndWait().map(String::trim)
+                .filter(n -> !n.isEmpty() && !n.equals(current) && !n.contains("/"));
+    }
+
     private HBox panelHeader(String text, Button action) {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -979,12 +1104,66 @@ public class MainWindow {
     }
 
     private static <T> TableColumn<T, String> textColumn(String title, Function<T, String> extractor, double width) {
+        return textColumn(title, extractor, width, true);
+    }
+
+    private static <T> TableColumn<T, String> textColumn(String title, Function<T, String> extractor, double width,
+                                                         boolean visible) {
         TableColumn<T, String> c = new TableColumn<>(title);
         c.setCellValueFactory(data -> new SimpleStringProperty(extractor.apply(data.getValue())));
         c.setPrefWidth(width);
+        c.setVisible(visible);
         return c;
     }
 
-    public record LocalFile(String name, boolean directory, long size, String modified) {
+    /**
+     * Chuột phải vào tiêu đề bảng -> chọn cột hiển thị (như Nautilus). Cột đầu (Tên) luôn hiện.
+     * Lựa chọn lưu vào Preferences theo từng bảng.
+     */
+    private static <T> void installColumnChooser(TableView<T> table, String key) {
+        ContextMenu menu = new ContextMenu();
+        List<TableColumn<T, ?>> cols = List.copyOf(table.getColumns());
+        for (TableColumn<T, ?> col : cols.subList(1, cols.size())) {
+            String prefKey = "col." + key + "." + col.getText();
+            col.setVisible(PREFS.getBoolean(prefKey, col.isVisible()));
+            CheckMenuItem item = new CheckMenuItem(col.getText());
+            item.selectedProperty().bindBidirectional(col.visibleProperty());
+            col.visibleProperty().addListener((o, was, now) -> PREFS.putBoolean(prefKey, now));
+            menu.getItems().add(item);
+        }
+        cols.forEach(c -> c.setContextMenu(menu));
+    }
+
+    /** Đọc thuộc tính một tệp cục bộ; hệ không có POSIX (Windows) thì để trống quyền/nhóm. */
+    private static LocalFile readLocalFile(Path p, String name) throws IOException {
+        BasicFileAttributes a;
+        String perms = "";
+        String owner = "";
+        String group = "";
+        try {
+            PosixFileAttributes px = Files.readAttributes(p, PosixFileAttributes.class);
+            a = px;
+            perms = (px.isDirectory() ? "d" : px.isSymbolicLink() ? "l" : "-")
+                    + PosixFilePermissions.toString(px.permissions());
+            owner = px.owner().getName();
+            group = px.group().getName();
+        } catch (UnsupportedOperationException e) {
+            a = Files.readAttributes(p, BasicFileAttributes.class);
+            try {
+                owner = Files.getOwner(p).getName();
+            } catch (IOException | UnsupportedOperationException ignored) {
+            }
+        }
+        boolean dir = a.isDirectory();
+        return new LocalFile(name, dir, dir ? 0 : a.size(), localTime(a.lastModifiedTime()), perms, owner, group,
+                localTime(a.creationTime()));
+    }
+
+    private static String localTime(FileTime t) {
+        return Formats.DATE_TIME.format(t.toInstant().atZone(ZoneId.systemDefault()));
+    }
+
+    public record LocalFile(String name, boolean directory, long size, String modified,
+                            String permissions, String owner, String group, String created) {
     }
 }

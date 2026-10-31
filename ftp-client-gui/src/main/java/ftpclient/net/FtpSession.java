@@ -31,6 +31,9 @@ public class FtpSession implements RemoteSession {
 
     private List<String> roles = new ArrayList<>();
     private Socket control;
+    /** Socket data của lần truyền đang chạy (để nút Hủy cắt được từ luồng giao diện). */
+    private volatile Socket activeData;
+    private volatile boolean cancelled;
     private BufferedReader reader;
     private PrintWriter writer;
     private LogListener logListener = (dir, line) -> {
@@ -174,6 +177,12 @@ public class FtpSession implements RemoteSession {
         requireOk(sendAndRead("DELE " + name), 250);
     }
 
+    @Override
+    public void rename(String from, String to) throws IOException, FtpException {
+        requireOk(sendAndRead("RNFR " + from), 350);
+        requireOk(sendAndRead("RNTO " + to), 250);
+    }
+
     private Socket openPassiveDataSocket() throws IOException, FtpException {
         String reply = requireOk(sendAndRead("PASV"), 227);
         Matcher m = PASV_PATTERN.matcher(reply);
@@ -223,43 +232,52 @@ public class FtpSession implements RemoteSession {
         }
         String modified = parts[5] + " " + parts[6] + " " + parts[7];
         String name = parts[8];
-        return new RemoteFile(name, size, modified, dir);
+        return new RemoteFile(name, size, modified, dir, parts[0], parts[2], parts[3]);
     }
 
     public void retr(String remoteName, OutputStream out, LongConsumer onBytes) throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("RETR " + remoteName), 150, 125);
-        try (InputStream in = data.getInputStream()) {
-            byte[] buf = new byte[8192];
-            int n;
-            long total = 0;
-            while ((n = in.read(buf)) != -1) {
-                out.write(buf, 0, n);
-                total += n;
-                onBytes.accept(total);
-            }
-        } finally {
-            data.close();
-        }
+        pump(data, data.getInputStream(), out, onBytes);
         requireOk(readReply(), 226);
     }
 
     public void stor(String remoteName, InputStream in, LongConsumer onBytes) throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("STOR " + remoteName), 150, 125);
-        try (OutputStream out = data.getOutputStream()) {
+        pump(data, in, data.getOutputStream(), onBytes);
+        requireOk(readReply(), 226);
+    }
+
+    /**
+     * Chép dữ liệu qua kết nối data. Bị {@link #cancelTransfer()} thì socket đã bị cắt (RST): đọc nốt
+     * reply 426 của server cho đồng bộ kênh điều khiển rồi ném CancelledException. Server tự xóa tệp tải lên dở.
+     */
+    private void pump(Socket data, InputStream in, OutputStream out, LongConsumer onBytes) throws IOException {
+        cancelled = false;
+        activeData = data;
+        try {
             byte[] buf = new byte[8192];
             int n;
             long total = 0;
-            while ((n = in.read(buf)) != -1) {
+            while (!cancelled && (n = in.read(buf)) != -1) {
                 out.write(buf, 0, n);
                 total += n;
                 onBytes.accept(total);
             }
+            out.flush();
+        } catch (IOException e) {
+            if (!cancelled) {
+                throw e;
+            }
         } finally {
+            activeData = null;
             data.close();
         }
-        requireOk(readReply(), 226);
+        if (cancelled) {
+            readReply(); // 426 Transfer aborted (hoặc 226 nếu vừa kịp xong)
+            throw new CancelledException("Đã hủy truyền");
+        }
     }
 
     @Override
@@ -287,6 +305,9 @@ public class FtpSession implements RemoteSession {
             throws IOException, FtpException {
         try (OutputStream out = Files.newOutputStream(dest)) {
             retr(name, out, bytes -> progress.update(bytes, Math.max(expectedSize, 1)));
+        } catch (CancelledException e) {
+            Files.deleteIfExists(dest); // không để lại tệp tải dở
+            throw e;
         }
         return "FTP chuẩn (không có kiểm tra checksum)";
     }
@@ -318,5 +339,15 @@ public class FtpSession implements RemoteSession {
 
     @Override
     public void cancelTransfer() {
+        Socket data = activeData;
+        if (data == null) {
+            return;
+        }
+        cancelled = true;
+        try {
+            data.setSoLinger(true, 0); // đóng bằng RST: server thấy lỗi I/O -> bỏ tệp dở, trả 426
+            data.close();
+        } catch (IOException ignored) {
+        }
     }
 }

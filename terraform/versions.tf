@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/local"
       version = "~> 2.5"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 
   # State cuc bo (terraform.tfstate, da gitignore). Lam nhom thi chuyen sang Azure Storage:

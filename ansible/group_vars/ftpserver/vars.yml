@@ -27,7 +27,8 @@ ftp_tls_required: false
 ftp_tls_keystore_src: "{{ playbook_dir }}/../ftp/certs/ftps.p12"
 
 # Bi mat: dat trong vault.yml (xem vault.yml.example)
-ftp_db_password: "{{ vault_ftp_db_password }}"
+# Terraform ghi tf_ftp_db_password (mat khau Azure PostgreSQL) vao inventory; khong co thi dung vault
+ftp_db_password: "{{ tf_ftp_db_password | default(vault_ftp_db_password) }}"
 ftpadmin_secret: "{{ vault_ftpadmin_secret }}"
 ftp_tls_keystore_password: "{{ vault_ftp_tls_keystore_password | default('') }}"
 # Image GHCR private thi can token (scope read:packages); public thi bo trong
