@@ -171,7 +171,7 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "main" {
 # Sinh inventory cho Ansible
 resource "local_file" "ansible_inventory" {
   filename        = "${path.module}/../ansible/inventory/hosts.ini"
-  file_permission = "0644"
+  file_permission = "0600" # chua mat khau Postgres
   content         = <<-EOT
     # Sinh boi Terraform, khong sua tay
     [ftpserver]
@@ -180,5 +180,7 @@ resource "local_file" "ansible_inventory" {
     [ftpserver:vars]
     ftp_public_ip=${azurerm_public_ip.main.ip_address}
     ftpadmin_bind=${var.admin_web_allowed_cidr == null ? "127.0.0.1" : "0.0.0.0"}
+    ftp_db_host=${azurerm_postgresql_flexible_server.main.fqdn}
+    tf_ftp_db_password=${random_password.db.result}
   EOT
 }

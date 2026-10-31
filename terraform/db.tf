@@ -1,125 +1,88 @@
-# VM rieng chi chay PostgreSQL. Khong co Public IP: Ansible vao qua VM ung dung (ProxyJump),
-# ra Internet (apt) bang default outbound access cua subnet.
+# PostgreSQL dung dich vu Azure Database for PostgreSQL Flexible Server.
+# Goi mien phi Azure for Students: B1ms (Burstable) 750 gio/thang + 32 GB luu tru + 32 GB backup.
+# Truy cap cong khai co firewall: chi IP public cua VM ung dung duoc vao; bat buoc TLS (sslmode=require).
 
-variable "db_vm_size" {
-  description = "B2pts_v2 (ARM, 2 vCPU / 1 GB): 750 gio mien phi rieng, khong chung voi B2ats_v2 cua VM ung dung"
+variable "db_sku" {
+  description = "B_Standard_B1ms nam trong goi mien phi"
   type        = string
-  default     = "Standard_B2pts_v2"
+  default     = "B_Standard_B1ms"
 }
 
-variable "db_private_ip" {
-  description = "IP noi bo co dinh cua VM Postgres (app ket noi toi day)"
+variable "db_version" {
+  type    = string
+  default = "16"
+}
+
+variable "db_allowed_cidr_extra" {
+  description = "Them 1 IP (vd may ca nhan) duoc vao Postgres de psql/debug. null = chi VM"
   type        = string
-  default     = "10.20.1.10"
+  default     = null
 }
 
-resource "azurerm_network_security_group" "db" {
-  name                = "nsg-${var.prefix}-db"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
+resource "random_string" "db_suffix" {
+  length  = 6
+  upper   = false
+  special = false
+}
 
-  security_rule {
-    name                       = "postgres-from-app"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "5432"
-    source_address_prefix      = azurerm_network_interface.main.private_ip_address
-    destination_address_prefix = "*"
-  }
+# Azure yeu cau mat khau co >= 3 trong 4 loai ky tu; khong dung ky tu dac biet de khoi escape trong URL/.env
+resource "random_password" "db" {
+  length      = 32
+  special     = false
+  min_upper   = 2
+  min_lower   = 2
+  min_numeric = 2
+}
 
-  security_rule {
-    name                       = "ssh-from-app"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = azurerm_network_interface.main.private_ip_address
-    destination_address_prefix = "*"
-  }
+resource "azurerm_postgresql_flexible_server" "main" {
+  name                          = "psql-${var.prefix}-${random_string.db_suffix.result}" # ten DNS toan cau
+  resource_group_name           = azurerm_resource_group.main.name
+  location                      = azurerm_resource_group.main.location
+  version                       = var.db_version
+  sku_name                      = var.db_sku
+  storage_mb                    = 32768
+  storage_tier                  = "P4"
+  auto_grow_enabled             = false
+  backup_retention_days         = 7
+  geo_redundant_backup_enabled  = false
+  public_network_access_enabled = true
+  administrator_login           = "ftp"
+  administrator_password        = random_password.db.result
+  tags                          = var.tags
 
-  # Chan moi truy cap khac trong VNet (mac dinh Azure cho phep VNet -> VNet)
-  security_rule {
-    name                       = "deny-vnet-other"
-    priority                   = 4000
-    direction                  = "Inbound"
-    access                     = "Deny"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "VirtualNetwork"
-    destination_address_prefix = "*"
+  lifecycle {
+    # Azure tu chon zone khi tao; khong de Terraform doi lai
+    ignore_changes = [zone, high_availability[0].standby_availability_zone]
   }
 }
 
-resource "azurerm_network_interface" "db" {
-  name                = "nic-${var.prefix}-db"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = var.tags
-
-  ip_configuration {
-    name                          = "internal"
-    subnet_id                     = azurerm_subnet.main.id
-    private_ip_address_allocation = "Static"
-    private_ip_address            = var.db_private_ip
-  }
+resource "azurerm_postgresql_flexible_server_database" "ftpserver" {
+  name      = "ftpserver"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
 }
 
-resource "azurerm_network_interface_security_group_association" "db" {
-  network_interface_id      = azurerm_network_interface.db.id
-  network_security_group_id = azurerm_network_security_group.db.id
+resource "azurerm_postgresql_flexible_server_firewall_rule" "vm" {
+  name             = "vm-app"
+  server_id        = azurerm_postgresql_flexible_server.main.id
+  start_ip_address = azurerm_public_ip.main.ip_address
+  end_ip_address   = azurerm_public_ip.main.ip_address
 }
 
-resource "azurerm_linux_virtual_machine" "db" {
-  name                            = "vm-${var.prefix}-db"
-  location                        = azurerm_resource_group.main.location
-  resource_group_name             = azurerm_resource_group.main.name
-  size                            = var.db_vm_size
-  admin_username                  = var.admin_username
-  disable_password_authentication = true
-  network_interface_ids           = [azurerm_network_interface.db.id]
-  tags                            = var.tags
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = file(pathexpand(var.ssh_public_key_path))
-  }
-
-  # 2 o P6 mien phi da dung cho VM ung dung -> HDD Standard 30 GB (re nhat)
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
-    disk_size_gb         = 30
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "ubuntu-24_04-lts"
-    sku       = "server-arm64"
-    version   = "latest"
-  }
+resource "azurerm_postgresql_flexible_server_firewall_rule" "extra" {
+  count            = var.db_allowed_cidr_extra == null ? 0 : 1
+  name             = "extra"
+  server_id        = azurerm_postgresql_flexible_server.main.id
+  start_ip_address = cidrhost(var.db_allowed_cidr_extra, 0)
+  end_ip_address   = cidrhost(var.db_allowed_cidr_extra, -1)
 }
 
-resource "azurerm_dev_test_global_vm_shutdown_schedule" "db" {
-  count                 = var.auto_shutdown_time == null ? 0 : 1
-  virtual_machine_id    = azurerm_linux_virtual_machine.db.id
-  location              = azurerm_resource_group.main.location
-  enabled               = true
-  daily_recurrence_time = var.auto_shutdown_time
-  timezone              = "SE Asia Standard Time"
-  tags                  = var.tags
-
-  notification_settings {
-    enabled = false
-  }
+output "db_host" {
+  value = azurerm_postgresql_flexible_server.main.fqdn
 }
 
-output "db_private_ip" {
-  value = var.db_private_ip
+output "db_password" {
+  value     = random_password.db.result
+  sensitive = true
 }

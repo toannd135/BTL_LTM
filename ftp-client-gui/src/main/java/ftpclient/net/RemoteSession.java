@@ -48,6 +48,9 @@ public interface RemoteSession extends Closeable {
 
     void dele(String name) throws IOException, FtpException;
 
+    /** Đổi tên trong thư mục hiện tại (RNFR + RNTO). */
+    void rename(String from, String to) throws IOException, FtpException;
+
     List<RemoteFile> list() throws IOException, FtpException;
 
     /** @return ghi chú kết quả (tiếp tục từ đâu, kết quả kiểm tra checksum...). */
