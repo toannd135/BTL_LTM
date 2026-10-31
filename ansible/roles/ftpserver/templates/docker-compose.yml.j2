@@ -1,0 +1,73 @@
+# {{ ansible_managed }}
+name: ftpserver
+
+services:
+  db:
+    image: {{ postgres_image }}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ftpserver
+      POSTGRES_USER: ftp
+      POSTGRES_PASSWORD: ${FTP_DB_PASSWORD}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ftp -d ftpserver"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ftp:
+{% if ftp_image_source == 'build' %}
+    build: ./build/ftp
+    image: ftpserver:local
+{% else %}
+    image: {{ ftp_image }}
+{% endif %}
+    restart: unless-stopped
+    user: "{{ ftp_app_uid }}:{{ ftp_app_uid }}"
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["java", "-jar", "ftpserver.jar", "/app/config/ftpserver.conf"]
+    environment:
+      JAVA_TOOL_OPTIONS: "{{ ftp_java_opts }}"
+      FTP_DB_URL: jdbc:postgresql://db:5432/ftpserver
+      FTP_DB_USER: ftp
+      FTP_DB_PASSWORD: ${FTP_DB_PASSWORD}
+{% if ftp_tls_enabled %}
+      FTP_TLS_KEYSTORE_PASSWORD: ${FTP_TLS_KEYSTORE_PASSWORD}
+{% endif %}
+    ports:
+      - "{{ ftp_control_port }}:{{ ftp_control_port }}"
+      - "{{ ftp_pasv_min }}-{{ ftp_pasv_max }}:{{ ftp_pasv_min }}-{{ ftp_pasv_max }}"
+    volumes:
+      - ./config:/app/config:ro
+      - ./certs:/app/certs:ro
+      - ./ftproot:/app/ftproot
+      - ./logs:/app/logs
+      - ./data:/app/data
+
+  admin:
+{% if ftp_image_source == 'build' %}
+    build: ./build/admin-web
+    image: ftpadmin:local
+{% else %}
+    image: {{ ftpadmin_image }}
+{% endif %}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FTP_DB_URL: postgresql://db:5432/ftpserver
+      FTP_DB_USER: ftp
+      FTP_DB_PASSWORD: ${FTP_DB_PASSWORD}
+      FTPADMIN_SECRET: ${FTPADMIN_SECRET}
+    ports:
+      - "127.0.0.1:{{ ftpadmin_port }}:8080"
+    volumes:
+      - ./ftproot:/ftproot
+      - ./logs:/logs
+      - ./data:/data
+      - ./quarantine:/quarantine

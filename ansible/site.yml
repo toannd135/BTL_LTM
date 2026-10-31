@@ -1,0 +1,10 @@
+# Trien khai ftpserver + admin-web + Postgres len VM do Terraform tao
+#   ansible-galaxy collection install -r requirements.yml
+#   ansible-playbook site.yml --ask-vault-pass
+- name: Trien khai FTP server
+  hosts: ftpserver
+  become: true
+  roles:
+    - base
+    - docker
+    - ftpserver
