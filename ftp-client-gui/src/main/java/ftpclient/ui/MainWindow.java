@@ -89,6 +89,7 @@ public class MainWindow {
     private Button mkdBtn;
     private Button uploadBtn;
     private Button downloadBtn;
+    private Button openBtn;
     private Button deleteBtn;
     private Button shareBtn;
     private Button cancelBtn;
@@ -108,6 +109,8 @@ public class MainWindow {
     /** Mục đang kéo giữa hai bảng (cùng tiến trình nên giữ ở đây, không cần serialize). */
     private LocalFile draggedLocal;
     private RemoteFile draggedRemote;
+    /** Thư mục tạm chứa file máy chủ tải về để mở (tạo khi cần, xóa khi thoát JVM). */
+    private Path openCacheDir;
     private Path localDir = Paths.get(System.getProperty("user.home"));
 
     public Scene buildScene() {
@@ -214,9 +217,24 @@ public class MainWindow {
                         localDir = localDir.resolve(sel.name());
                     }
                     refreshLocalTable();
+                } else if (sel != null) {
+                    openLocal(localDir.resolve(sel.name()));
                 }
             }
         });
+        MenuItem localOpenItem = new MenuItem("Mở");
+        localOpenItem.setOnAction(e -> {
+            LocalFile sel = localTable.getSelectionModel().getSelectedItem();
+            if (sel != null && !sel.directory()) {
+                openLocal(localDir.resolve(sel.name()));
+            }
+        });
+        ContextMenu localMenu = new ContextMenu(localOpenItem);
+        localMenu.setOnShowing(e -> {
+            LocalFile sel = localTable.getSelectionModel().getSelectedItem();
+            localOpenItem.setDisable(sel == null || sel.directory());
+        });
+        localTable.setContextMenu(localMenu);
         uploadBtn = new Button("Tải lên →");
         uploadBtn.setOnAction(e -> onUploadClicked());
         localBox = new VBox(4, panelHeader("Máy cục bộ", localMkdBtn), localPathField, localTable, uploadBtn);
@@ -238,22 +256,38 @@ public class MainWindow {
                     } else {
                         runRemote(() -> session.cwd(sel.name()));
                     }
+                } else if (sel != null) {
+                    openRemote(sel);
                 }
             }
         });
         downloadBtn = new Button("← Tải về");
         downloadBtn.setOnAction(e -> onDownloadClicked());
+        openBtn = new Button("Mở");
+        openBtn.setTooltip(new Tooltip("Tải về thư mục tạm rồi mở bằng ứng dụng mặc định"));
+        openBtn.setOnAction(e -> {
+            RemoteFile sel = selectedRemote();
+            if (sel != null && !sel.directory()) {
+                openRemote(sel);
+            }
+        });
         deleteBtn = new Button("Xóa");
         deleteBtn.setOnAction(e -> onDeleteClicked());
         shareBtn = new Button("Chia sẻ");
         shareBtn.setOnAction(e -> onShareClicked());
         remoteTable.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> updateShareButton());
+        MenuItem openItem = new MenuItem("Mở");
+        openItem.setOnAction(e -> openBtn.fire());
         MenuItem shareItem = new MenuItem("Chia sẻ…");
         shareItem.setOnAction(e -> onShareClicked());
-        ContextMenu remoteMenu = new ContextMenu(shareItem);
-        remoteMenu.setOnShowing(e -> shareItem.setDisable(shareBtn.isDisable()));
+        ContextMenu remoteMenu = new ContextMenu(openItem, shareItem);
+        remoteMenu.setOnShowing(e -> {
+            RemoteFile sel = selectedRemote();
+            openItem.setDisable(!connected || sel == null || sel.directory());
+            shareItem.setDisable(shareBtn.isDisable());
+        });
         remoteTable.setContextMenu(remoteMenu);
-        HBox remoteButtons = new HBox(6, downloadBtn, deleteBtn, shareBtn);
+        HBox remoteButtons = new HBox(6, downloadBtn, openBtn, deleteBtn, shareBtn);
         remoteBox = new VBox(4, panelHeader("Máy chủ", mkdBtn), remotePathField, remoteTable, remoteButtons);
         VBox.setVgrow(remoteTable, Priority.ALWAYS);
 
@@ -329,6 +363,7 @@ public class MainWindow {
         appendLog("LỖI: " + ex.getMessage());
         Alert a = new Alert(Alert.AlertType.ERROR, String.valueOf(ex.getMessage()), ButtonType.OK);
         a.setHeaderText("Thao tác thất bại");
+        AppIcon.apply(a);
         a.show();
     }
 
@@ -389,6 +424,7 @@ public class MainWindow {
         passField.setDisable(isConnected);
         refreshBtn.setDisable(!isConnected);
         downloadBtn.setDisable(!isConnected);
+        openBtn.setDisable(!isConnected);
         cancelBtn.setDisable(true);
         if (isConnected) {
             RemoteSession s = session;
@@ -431,6 +467,7 @@ public class MainWindow {
         String file = sel.name();
         Dialog<Void> dialog = new Dialog<>();
         dialog.setTitle("Chia sẻ tệp");
+        AppIcon.apply(dialog);
         dialog.setHeaderText("Chia sẻ \"" + file + "\"");
         TextField userBox = new TextField();
         userBox.setPromptText("tên người dùng");
@@ -579,6 +616,7 @@ public class MainWindow {
                 "Xóa " + (sel.directory() ? "thư mục " : "file ") + sel.name() + " trên máy chủ?",
                 ButtonType.YES, ButtonType.NO);
         confirm.setHeaderText("Xác nhận xóa");
+        AppIcon.apply(confirm);
         if (confirm.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) {
             return;
         }
@@ -609,6 +647,44 @@ public class MainWindow {
             }
         };
         runTransfer(task, "Tải về " + sel.name(), this::refreshLocalTable);
+    }
+
+    /** Tải file máy chủ vào thư mục tạm (không đụng thư mục cục bộ đang xem) rồi mở. */
+    private void openRemote(RemoteFile sel) {
+        Path dest;
+        try {
+            if (openCacheDir == null) {
+                openCacheDir = Files.createTempDirectory("ftpclient-open-");
+                openCacheDir.toFile().deleteOnExit();
+            }
+            dest = openCacheDir.resolve(sel.name());
+        } catch (IOException ex) {
+            showError(ex);
+            return;
+        }
+        RemoteSession s = session;
+        Task<String> task = new Task<>() {
+            @Override
+            protected String call() throws Exception {
+                Files.deleteIfExists(dest);   // luôn lấy bản mới nhất, không resume từ bản mở lần trước
+                return s.download(sel.name(), dest, sel.size(), this::updateProgress);
+            }
+        };
+        runTransfer(task, "Mở " + sel.name(), () -> {
+            dest.toFile().deleteOnExit();
+            if (Files.isRegularFile(dest)) {
+                openLocal(dest);
+            }
+        });
+    }
+
+    private void openLocal(Path file) {
+        try {
+            FileOpener.open(file);
+            appendLog("Mở " + file);
+        } catch (IOException ex) {
+            showError(ex);
+        }
     }
 
     private void onUploadClicked() {
