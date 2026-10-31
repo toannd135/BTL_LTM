@@ -51,6 +51,34 @@ final class FileIcons {
         return Color.web("#6b7280");
     }
 
+    /** Cột "Loại" kiểu Nautilus: "Thư mục", "Ảnh (PNG)", "Tệp nén (ZIP)"... */
+    static String typeName(String name, boolean directory) {
+        if (directory) {
+            return name.equals("..") ? "" : "Thư mục";
+        }
+        String ext = extension(name);
+        if (ext.isEmpty()) {
+            return "Tệp";
+        }
+        String kind;
+        if (ext.equals("pdf")) {
+            kind = "Tài liệu PDF";
+        } else if (CODE.contains(ext)) {
+            kind = "Mã nguồn";
+        } else if (TEXT.contains(ext)) {
+            kind = "Văn bản";
+        } else if (IMAGE.contains(ext)) {
+            kind = "Ảnh";
+        } else if (ARCHIVE.contains(ext)) {
+            kind = "Tệp nén";
+        } else if (OFFICE.contains(ext)) {
+            kind = "Tài liệu Office";
+        } else {
+            kind = "Tệp";
+        }
+        return kind + " (" + ext.toUpperCase(Locale.ROOT) + ")";
+    }
+
     private static String extension(String name) {
         int dot = name.lastIndexOf('.');
         return dot < 0 || dot == name.length() - 1 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);

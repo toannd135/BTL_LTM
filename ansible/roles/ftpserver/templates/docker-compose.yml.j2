@@ -2,6 +2,7 @@
 name: ftpserver
 
 services:
+{% if not ftp_db_host %}
   db:
     image: {{ postgres_image }}
     restart: unless-stopped
@@ -17,6 +18,7 @@ services:
       timeout: 3s
       retries: 20
 
+{% endif %}
   ftp:
 {% if ftp_image_source == 'build' %}
     build: ./build/ftp
@@ -26,13 +28,15 @@ services:
 {% endif %}
     restart: unless-stopped
     user: "{{ ftp_app_uid }}:{{ ftp_app_uid }}"
+{% if not ftp_db_host %}
     depends_on:
       db:
         condition: service_healthy
+{% endif %}
     entrypoint: ["java", "-jar", "ftpserver.jar", "/app/config/ftpserver.conf"]
     environment:
       JAVA_TOOL_OPTIONS: "{{ ftp_java_opts }}"
-      FTP_DB_URL: jdbc:postgresql://db:5432/ftpserver
+      FTP_DB_URL: jdbc:postgresql://{{ ftp_db_url_suffix }}
       FTP_DB_USER: ftp
       FTP_DB_PASSWORD: ${FTP_DB_PASSWORD}
 {% if ftp_tls_enabled %}
@@ -68,11 +72,13 @@ services:
     image: {{ ftpadmin_image }}
 {% endif %}
     restart: unless-stopped
+{% if not ftp_db_host %}
     depends_on:
       db:
         condition: service_healthy
+{% endif %}
     environment:
-      FTP_DB_URL: postgresql://db:5432/ftpserver
+      FTP_DB_URL: postgresql://{{ ftp_db_url_suffix }}
       FTP_DB_USER: ftp
       FTP_DB_PASSWORD: ${FTP_DB_PASSWORD}
       FTPADMIN_SECRET: ${FTPADMIN_SECRET}

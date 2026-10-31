@@ -5,3 +5,7 @@ ftpadmin_bind: 127.0.0.1
 # Tam tat: VM 1 GB RAM khong du cho clamd (~1-1.5 GB); bat lai khi doi VM lon hon
 clamav_enabled: false
 clamav_image: clamav/clamav:stable
+
+# Postgres ngoai (Azure Database for PostgreSQL, Terraform ghi vao inventory). Rong = chay container db tren VM
+ftp_db_host: ""
+ftp_db_url_suffix: "{{ ftp_db_host ~ ':5432/ftpserver?sslmode=require' if ftp_db_host else 'db:5432/ftpserver' }}"

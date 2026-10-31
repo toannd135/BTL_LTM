@@ -86,7 +86,7 @@
         src: "{{ ftp_src_dir }}/admin-web/{{ item }}"
         dest: "{{ ftp_base_dir }}/build/admin-web/"
         mode: "0644"
-      loop: [Dockerfile, requirements.txt, main.py, templates]
+      loop: [Dockerfile, requirements.txt, main.py, templates, static]
 
 - name: Dang nhap GHCR (image private)
   ansible.builtin.command:
