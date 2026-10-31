@@ -13,8 +13,12 @@ paths = [
   '''ftp/admin-web/test_admin\.py''',
   '''docs/handoff/.*''',
 ]
+# Commit cu chua mat khau toannd da lo (da doi mat khau); gitleaks-action khong ho tro baseline nen bo qua theo commit
+commits = [
+  '''03544b1f55fa6c67432c244b96d0fca7b3c2aff5''',
+]
 regexes = [
-  '''(?i)\badmin/admin\b''',
-  '''(?i)\bsv/sv\b''',
+  '''(?i)\badmin[/:]admin\b''',
+  '''(?i)\bsv[/:]sv\b''',
   '''(?i)demo[-_ ]?(secret|key)[-_a-z0-9]*''',
 ]

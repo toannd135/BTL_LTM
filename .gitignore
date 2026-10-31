@@ -41,3 +41,13 @@ ftp/ftproot/*
 !ftp/ftproot/readme.txt
 !ftp/ftproot/docs/
 !ftp/ftproot/docs/sample.txt
+
+# Terraform / Ansible (state va bi mat khong commit)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/tfplan
+terraform/.terraform.lock.hcl.bak
+ansible/inventory/hosts.ini
+ansible/group_vars/*/vault.yml

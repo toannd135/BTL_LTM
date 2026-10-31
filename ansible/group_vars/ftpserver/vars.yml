@@ -1,0 +1,34 @@
+# build: chep ma nguon local (can ftp/target/ftpserver.jar: mvn -f ftp/pom.xml -DskipTests package) va build tren VM
+# registry: keo image CI day len GHCR (job server-docker / admin-docker); package private thi can vault_ghcr_token
+ftp_image_source: build
+ftp_src_dir: "{{ playbook_dir }}/../ftp"
+ftp_image: ghcr.io/toannd135/btl_ltm/ftpserver:latest
+ftpadmin_image: ghcr.io/toannd135/btl_ltm/ftpadmin:latest
+postgres_image: postgres:16-alpine
+
+# O du lieu Terraform gan vao LUN 0, mount tai ftp_base_dir
+ftp_data_disk: /dev/disk/azure/scsi1/lun0
+ftp_base_dir: /srv/ftp
+ftp_app_uid: 10001           # trung uid user admin trong image ftpadmin
+
+# VM B2ats_v2 (1 GB RAM): swap + gioi han heap Java
+swap_size: 2G
+ftp_java_opts: "-Xmx256m -XX:+UseSerialGC"
+
+ftp_control_port: 2121
+ftp_pasv_min: 50000
+ftp_pasv_max: 50100
+ftpadmin_port: 8080          # chi bind 127.0.0.1, vao qua SSH tunnel
+
+# FTPS: dat true va tro toi keystore tao bang ftp/scripts/gen-keystore.sh
+ftp_tls_enabled: false
+ftp_tls_required: false
+ftp_tls_keystore_src: "{{ playbook_dir }}/../ftp/certs/ftps.p12"
+
+# Bi mat: dat trong vault.yml (xem vault.yml.example)
+ftp_db_password: "{{ vault_ftp_db_password }}"
+ftpadmin_secret: "{{ vault_ftpadmin_secret }}"
+ftp_tls_keystore_password: "{{ vault_ftp_tls_keystore_password | default('') }}"
+# Image GHCR private thi can token (scope read:packages); public thi bo trong
+ghcr_username: "{{ vault_ghcr_username | default('') }}"
+ghcr_token: "{{ vault_ghcr_token | default('') }}"

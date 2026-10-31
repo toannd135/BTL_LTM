@@ -20,9 +20,8 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Commit cu chua mat khau da lo duoc allowlist trong .gitleaks.toml (action khong ho tro baseline)
           GITLEAKS_CONFIG: .gitleaks.toml
-          # Bo qua mat khau cu (toannd/123456) trong lich su, xem .gitleaks-baseline.json neu co
-          GITLEAKS_BASELINE_PATH: .gitleaks-baseline.json
 
   server-test:
     runs-on: ubuntu-latest
@@ -41,8 +40,28 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ftpserver-jar
-          path: ftp/target/*.jar
+          path: ftp/target/ftpserver.jar   # bo original-ftpserver.jar (jar chua shade)
 
+  infra-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform fmt + validate
+        working-directory: terraform
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Ansible syntax-check
+        working-directory: ansible
+        env:
+          ANSIBLE_CONFIG: ansible.cfg
+        run: |
+          pipx install ansible-core
+          ansible-galaxy collection install -r requirements.yml
+          cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml
+          ansible-playbook site.yml --syntax-check -i inventory/hosts.ini.example
 
   admin-web-test:
     runs-on: ubuntu-latest
@@ -127,7 +146,8 @@ jobs:
       - name: Tính version cho installer
         id: ver
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/ui-v* ]]; then V="${GITHUB_REF_NAME#ui-v}"; else V="1.0.0"; fi
+          # workflow chi chay voi tag v*, nen lay version tu tag v1.2.3 -> 1.2.3
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="1.0.0"; fi
           # MSI/DMG yêu cầu dạng số X.Y.Z
           echo "v=$V" >> "$GITHUB_OUTPUT"
 

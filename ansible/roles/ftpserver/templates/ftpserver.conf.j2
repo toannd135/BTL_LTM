@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+control.port={{ ftp_control_port }}
+root.dir=/app/ftproot
+data.port.min={{ ftp_pasv_min }}
+data.port.max={{ ftp_pasv_max }}
+idle.timeout.seconds=300
+
+# VM Azure nam sau NAT: phan hoi PASV phai tra Public IP
+pasv.address={{ ftp_public_ip }}
+
+{% if ftp_tls_enabled %}
+tls.keystore=/app/certs/ftps.p12
+tls.required={{ ftp_tls_required | string | lower }}
+{% endif %}
+
+audit.log=/app/logs/audit.log
+# db.url / db.user / db.password lay tu env FTP_DB_* (docker-compose)
+db.path=/app/data/ftpserver.db

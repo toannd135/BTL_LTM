@@ -1,0 +1,48 @@
+# Triển khai lên Azure (Terraform + Ansible)
+
+```
+Terraform (terraform/)                     Ansible (ansible/)
+  RG, VNet, NSG, Public IP tĩnh,     →       base:      format + mount data disk (LUN 0) vào /srv/ftp
+  VM Ubuntu 24.04, data disk 32 GB           docker:    Docker Engine + compose plugin
+  sinh ansible/inventory/hosts.ini           ftpserver: ftpserver.conf (pasv.address = Public IP), .env,
+                                                        docker-compose (postgres + ftp + admin-web), pull GHCR
+```
+
+NSG mở: `22` (chỉ `ssh_allowed_cidr`), `2121` và `50000-50100` (`ftp_allowed_cidr`). Admin-web chỉ bind `127.0.0.1:8080`, vào qua SSH tunnel.
+
+## Yêu cầu
+- `az login` (Azure CLI), Terraform ≥ 1.5, Ansible ≥ 2.15, khóa SSH `~/.ssh/id_rsa(.pub)`
+- Image `ghcr.io/toannd135/btl_ltm/{ftpserver,ftpadmin}:latest` đã được CI đẩy lên (push `main`). Package private → cần token `read:packages` trong vault.
+
+## 1. Hạ tầng
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars   # sửa ssh_allowed_cidr = "<IP của bạn>/32"
+terraform init
+terraform apply
+```
+
+## 2. Cấu hình + chạy ứng dụng
+```bash
+cd ../ansible
+export ANSIBLE_CONFIG=$PWD/ansible.cfg          # bắt buộc nếu repo nằm trên ổ NTFS/world-writable: Ansible bỏ qua ansible.cfg
+ansible-galaxy collection install -r requirements.yml
+cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml   # điền openssl rand -hex 32
+ansible-vault encrypt group_vars/ftpserver/vault.yml
+ansible-playbook site.yml --ask-vault-pass
+```
+Chạy lại playbook để cập nhật image mới (`pull: always`). Đổi `ftpserver.conf` → tự restart service `ftp`.
+
+## 3. Sử dụng
+```bash
+terraform -chdir=terraform output                        # IP, lệnh ssh, tunnel
+ftp -p <public_ip> 2121                                  # hoặc FileZilla, chế độ passive
+ssh -N -L 8080:127.0.0.1:8080 azureuser@<public_ip>      # rồi mở http://localhost:8080
+```
+Tài khoản seed `admin/admin`, `sv/sv` — **đổi mật khẩu ngay** sau lần chạy đầu.
+
+FTPS: tạo keystore bằng `ftp/scripts/gen-keystore.sh` vào `ftp/certs/ftps.p12`, đặt `ftp_tls_enabled: true`
+(và `ftp_tls_required: true` nếu bắt buộc) trong `group_vars/ftpserver/vars.yml`, thêm `vault_ftp_tls_keystore_password`.
+
+## Dọn dẹp
+`terraform destroy` xóa toàn bộ resource group, **kể cả data disk** (ftproot + Postgres). Sao lưu `/srv/ftp` trước.
