@@ -97,12 +97,81 @@ FTP_TLS_KEYSTORE_PASSWORD=doi-mat-khau ./scripts/gen-keystore.sh ftp.tenban.com 
 
 Production dùng chứng chỉ thật (Let's Encrypt) rồi đóng gói PKCS12 bằng `openssl pkcs12 -export`. Không commit keystore.
 
-### Triển khai lên VM (Azure) với tên miền
+## Thiết kế & triển khai trên Azure (gói Azure for Students)
 
-- Mở trong NSG: TCP **2121** và **50000–50100**; đặt `pasv.address` là IP public của VM.
-- Cloudflare: bản ghi **A** → IP VM ở chế độ **DNS only** (đám mây xám); proxy của Cloudflare không chuyển được FTP.
-- Tệp người dùng lưu trong **SeaweedFS** (object storage, S3 API, dữ liệu ở `/srv/ftp/seaweedfs`); `data`, `logs` nằm trên đĩa của VM. Cần gắn volume và tự sao lưu. Đặt `vault_ftp_s3_access_key` / `vault_ftp_s3_secret_key` trong `ansible/group_vars/ftpserver/vault.yml` (xem `vault.yml.example`).
-- Trang quản trị chỉ bind `127.0.0.1`; truy cập từ xa thì đặt sau reverse proxy HTTPS.
+Sơ đồ chi tiết từng thành phần (tài nguyên, mạng/NSG, container, luồng upload, triển khai, vận hành, chi phí): [`docs/THIET-KE-AZURE.md`](docs/THIET-KE-AZURE.md).
+
+### Mục tiêu
+VM 1 GB RAM chỉ chạy **FTP server + trang quản trị**; việc nặng (lưu tệp, quét mã độc) tách sang VM thứ hai trong cùng mạng riêng; CSDL dùng dịch vụ PostgreSQL có sẵn.
+
+```
+ Internet
+    │  2121 + 50000-50100 (FTP, passive)     8080 (admin, tùy chọn / SSH tunnel)
+    ▼
+┌──────────────────────────────┐   S3 :8333   ┌───────────────────────────────┐
+│ VM-A  B2ats_v2 (1 GB)        │ ───────────▶ │ VM-B  B2als_v2 (4 GB)         │
+│ 10.20.1.10 + public IP tĩnh  │  clamd :3310 │ 10.20.1.11 (chỉ VNet)         │
+│  • ftpserver (-Xmx192m)      │ ───────────▶ │  • SeaweedFS (kho tệp, S3 API)│
+│  • admin-web (FastAPI)       │              │  • clamd + freshclam (ClamAV) │
+└──────────────┬───────────────┘              │  • data disk 64 GB            │
+               │ TLS (5432)                   └───────────────────────────────┘
+               ▼
+   Azure PostgreSQL Flexible Server B1ms (tài khoản, ACL, audit, bảng files)
+```
+
+| Thành phần | Chạy ở | RAM ước tính | Ghi chú |
+|---|---|---|---|
+| ftpserver + admin-web | VM-A | ~0,6–0,7 GB (có swap 2 GB) | image build trên VM từ mã nguồn (`ftp_image_source: build`) |
+| SeaweedFS + clamd | VM-B | clamd ≈ 1 GB (đo thực tế 954 MiB), SeaweedFS ~0,3 GB | cổng 8333/3310 chỉ mở cho VM-A |
+| PostgreSQL | dịch vụ Azure | không tính vào VM | firewall chỉ cho IP VM-A, bắt buộc TLS |
+
+### Luồng upload và xử lý mã độc
+1. Client `STOR` → server nhận dữ liệu vào **vùng đệm** (chưa vào kho).
+2. Server gửi vùng đệm cho **clamd** (giao thức `INSTREAM`, qua mạng riêng).
+3. **Nhiễm mã độc** → bỏ vùng đệm: tệp **không bao giờ vào kho**, tệp cũ cùng tên (nếu ghi đè) còn nguyên; client nhận `550 WARNING: malware detected (<tên mẫu>)…`; sự kiện `MALWARE` vào audit log.
+4. **Sạch** → commit vào SeaweedFS, ghi `CLEAN` vào bảng `files`, trả `226`.
+5. clamd lỗi/không tới được → tệp vào kho ở trạng thái `PENDING` và bị **chặn tải** (`ftp_scan_enforce: true`) tới khi quét lại được. APPE/REST (ghi trực tiếp) quét sau khi ghi và xóa tệp nếu nhiễm.
+6. Admin-web: dashboard hiện khung cảnh báo các upload mã độc trong 24 giờ, báo nếu CSDL virus của clamd cũ > 3 ngày; nút **Quét** quét lại qua clamd, **Cách ly** chuyển tệp sang bucket `<bucket>-quarantine`.
+
+### Mạng và bảo mật
+- NSG VM-A: `22` chỉ từ `ssh_allowed_cidr`; `2121` và `50000-50100` từ `ftp_allowed_cidr`; `8080` chỉ mở khi đặt `admin_web_allowed_cidr` (mặc định đóng, vào qua SSH tunnel).
+- NSG VM-B: chỉ nhận `22`/`8333`/`3310` **từ VM-A** (IP tĩnh 10.20.1.10), có rule chặn mọi nguồn khác trong VNet. clamd **không có xác thực** nên tuyệt đối không mở ra ngoài. VM-B không có SSH công khai; Ansible vào qua VM-A (ProxyCommand).
+- VM-B có thể có public IP chỉ để ra internet (kéo image, CSDL virus) — không có rule inbound.
+- FTP server chạy bằng user không phải root; tệp người dùng lưu qua S3 với khóa riêng (`vault_ftp_s3_*`).
+- Cloudflare: bản ghi **A** → IP VM-A ở chế độ **DNS only**; proxy Cloudflare không chuyển được FTP. `pasv.address` là IP public của VM-A (Ansible tự đặt).
+
+### Triển khai (Terraform + Ansible)
+```bash
+az login
+cd terraform && cp terraform.tfvars.example terraform.tfvars   # sửa ssh_allowed_cidr = "<IP bạn>/32"
+terraform init && terraform apply     # RG, VNet, NSG, VM-A, VM-B, đĩa, PostgreSQL, sinh ansible/inventory/hosts.ini
+
+cd ../ansible && export ANSIBLE_CONFIG=$PWD/ansible.cfg
+ansible-galaxy collection install -r requirements.yml
+cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml   # điền bí mật, gồm vault_ftp_s3_access_key/secret_key
+ansible-vault encrypt group_vars/ftpserver/vault.yml
+ansible-playbook site.yml --ask-vault-pass
+```
+`site.yml` chạy 3 play: base + Docker (cả hai VM) → `storage` (VM-B: SeaweedFS, clamd) → `ftpserver` (VM-A). Lần đầu clamd tải CSDL virus mất vài phút (playbook chờ tối đa 15 phút). Chạy lại playbook để cập nhật; đổi `ftpserver.conf` tự khởi động lại service. Chi tiết: [`docs/TRIEN-KHAI-AZURE.md`](docs/TRIEN-KHAI-AZURE.md).
+
+### Vận hành
+- **Bật/tắt:** auto-shutdown 23:00 chỉ tắt VM, không tự bật. Sau khi tắt, bật **VM-B trước**, rồi VM-A (`az vm start -g rg-<prefix> -n vm-<prefix>-storage`).
+- **Sao lưu:** `scripts/backup-seaweedfs.sh` tạo snapshot data disk của VM-B (giữ 7 bản). `terraform destroy` xóa cả dữ liệu SeaweedFS lẫn PostgreSQL — sao lưu trước.
+- **Đổi IP nhà:** sửa `ssh_allowed_cidr` / `admin_web_allowed_cidr` rồi `terraform apply`.
+- **CI:** job `trivy` quét CVE thư viện + cấu hình Terraform/Dockerfile (lỗi khi có HIGH/CRITICAL đã có bản vá); gitleaks quét bí mật.
+
+### Chi phí ước tính (vùng eastasia)
+| Chạy 24/7 | Chạy ~8 giờ/ngày |
+|---|---|
+| ≈ **53 USD/tháng** | ≈ **27 USD/tháng** |
+
+Gồm VM-B 0,0526 USD/giờ (13–38 USD), đĩa VM-B 7,2 USD, 2 public IP 7,3 USD. VM-A, 2 đĩa P6 và PostgreSQL B1ms nằm trong ưu đãi miễn phí 12 tháng của Azure for Students (cần kiểm tra subscription còn ưu đãi). Credit Student khoảng 100 USD: nên đặt budget alert và tắt VM-B khi không dùng. `Standard_B2s` (v1) **không có** ở eastasia cho gói Student nên VM-B dùng `Standard_B2als_v2`.
+
+### Hạn chế đã biết
+- Ghi đè/đổi tên **thư mục** trên S3 không atomic (lỗi giữa chừng có thể để lại cây thư mục dở).
+- `LIST`/`NLST` bỏ qua tham số đường dẫn (luôn liệt kê thư mục hiện tại).
+- Tệp rất lớn: `STOR` chờ quét xong mới trả lời (giới hạn quét của clamd 500 MB).
+- Dữ liệu tệp cũ trên đĩa VM-A **không tự chuyển** sang SeaweedFS khi đổi sang kho S3.
 
 ## Chi tiết server (`ftp/`)
 
@@ -217,7 +286,8 @@ ftpserver/
 ├── core/                  FtpServer, ClientSession, CommandRegistry, FtpReply
 ├── command/               mỗi lệnh FTP một CommandHandler
 ├── data/                  DataConnection (PASV/PORT), DataMode, TransferType
-└── fs/                    PathResolver (ánh xạ & kiểm tra đường dẫn an toàn)
+├── fs/                    PathResolver (đường dẫn an toàn), FileStore (LocalFileStore | S3FileStore → SeaweedFS)
+└── scan/                  ScanService, ClamdClient (quét mã độc qua clamd INSTREAM)
 ```
 
 Chi tiết từng luồng (khởi động, đăng nhập, LIST/RETR/STOR...) xem [`ftp/LUONG-DU-LIEU.md`](ftp/LUONG-DU-LIEU.md).
