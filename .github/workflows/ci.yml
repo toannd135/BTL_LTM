@@ -58,15 +58,11 @@ jobs:
           mvn -B -q -f ftp/pom.xml dependency:resolve
           mvn -B -q -f ftp-client-gui/pom.xml dependency:resolve || true
       - name: Trivy (CVE thư viện + misconfig), lỗi khi có HIGH/CRITICAL đã có bản vá
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          scan-type: fs
-          scanners: vuln,misconfig
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          skip-dirs: ftp/target,terraform/.terraform
-          skip-files: terraform/terraform.tfstate,terraform/terraform.tfstate.backup
-          exit-code: '1'
+        run: |
+          docker run --rm -v "$PWD":/w -v "$HOME/.m2":/root/.m2 -w /w aquasec/trivy:0.58.1 fs \
+            --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            --skip-dirs ftp/target,terraform/.terraform \
+            --skip-files terraform/terraform.tfstate,terraform/terraform.tfstate.backup .
 
   infra-check:
     runs-on: ubuntu-latest
@@ -124,13 +120,9 @@ jobs:
         run: docker build -t ftpadmin:ci .
       # Báo cáo CVE của OS/Python trong image (không chặn: lỗi lớp nền thường chờ bản vá của image gốc)
       - name: Trivy quét image admin
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          image-ref: ftpadmin:ci
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '0'
-
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.1 image \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 ftpadmin:ci
 
   ui-package:
     strategy:
