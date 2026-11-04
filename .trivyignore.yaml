@@ -1,0 +1,7 @@
+# FTP phuc vu client bat ky (sinh vien, may demo) nen cong 2121 va dai passive mo cong khai co chu y;
+# nguoi trien khai thu hep bang ftp_allowed_cidr trong terraform.tfvars.
+misconfigurations:
+  - id: AVD-AZU-0047
+    paths:
+      - terraform/main.tf
+    statement: FTP control/passive la dich vu cong khai co chu y
