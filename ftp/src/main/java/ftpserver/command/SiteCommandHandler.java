@@ -1,6 +1,5 @@
 package ftpserver.command;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -220,7 +219,7 @@ public final class SiteCommandHandler implements CommandHandler {
         String scope;
         try {
             Path real = session.pathResolver().resolve(session.getCurrentDir(), t[1]);
-            if (!Files.isDirectory(real)) {
+            if (!session.store().isDirectory(real)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Directory not found");
                 return;
             }
@@ -248,7 +247,7 @@ public final class SiteCommandHandler implements CommandHandler {
         }
         try {
             Path real = session.pathResolver().resolve(session.getCurrentDir(), fileArg);
-            if (!Files.exists(real) || !session.can(real, Perm.READ)) {
+            if (!session.store().exists(real) || !session.can(real, Perm.READ)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "File not found");
                 return null;
             }

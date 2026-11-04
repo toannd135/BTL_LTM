@@ -1,0 +1,7 @@
+# Gioi han RAM tung container tren VM-B (>= 2 GB RAM). clamd nap CSDL chu ky nen can nhieu nhat
+seaweedfs_mem_limit: 512m
+seaweedfs_gomemlimit: 300MiB
+clamd_mem_limit: 2g
+# Tep lon hon gioi han nay clamd tu choi (INSTREAM size limit exceeded) -> tep o lai PENDING
+clamd_max_file_size: 500M
+clamav_image: clamav/clamav:stable

@@ -112,4 +112,42 @@ class ScanServiceTest {
             }
         }
     }
+
+    /** clamd gia tra loi FOUND/OK: tep nhiem bi xoa khoi kho + bao ten mau, tep sach duoc giu. */
+    @Test
+    void infectedUploadIsDeletedAndReported(@TempDir Path tmp) throws Exception {
+        ftpserver.fs.FileStore store = new ftpserver.fs.LocalFileStore(tmp);
+        Path bad = Files.writeString(tmp.resolve("bad.txt"), "X5O!P%@AP");
+        Path ok = Files.writeString(tmp.resolve("ok.txt"), "hello");
+        Database db = db(tmp);
+        try (var s1 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            fakeReply(s1, "stream: Eicar-Test-Signature FOUND");
+            ScanService svc = new ScanService(db, new ClamdClient("127.0.0.1", s1.getLocalPort(), 5000), true);
+            assertEquals("Eicar-Test-Signature", svc.scanUploadNow("/bad.txt", store, bad));
+            assertEquals(false, Files.exists(bad));
+            assertEquals("file is infected", svc.blockReason("/bad.txt"));
+        }
+        try (var s2 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            fakeReply(s2, "stream: OK");
+            ScanService svc = new ScanService(db, new ClamdClient("127.0.0.1", s2.getLocalPort(), 5000), true);
+            assertNull(svc.scanUploadNow("/ok.txt", store, ok));
+            assertEquals(true, Files.exists(ok));
+            assertNull(svc.blockReason("/ok.txt"));
+        }
+    }
+
+    private static void fakeReply(java.net.ServerSocket server, String reply) {
+        Thread.startVirtualThread(() -> {
+            try (java.net.Socket c = server.accept()) {
+                var in = new java.io.DataInputStream(c.getInputStream());
+                in.readNBytes(10);
+                int len;
+                while ((len = in.readInt()) > 0) {
+                    in.readNBytes(len);
+                }
+                c.getOutputStream().write((reply + "\0").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            } catch (java.io.IOException ignored) {
+            }
+        });
+    }
 }

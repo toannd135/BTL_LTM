@@ -19,8 +19,23 @@
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <version>42.7.4</version>
+            <version>42.7.12</version>
             <scope>runtime</scope>
+        </dependency>
+        <!-- Client S3 cho SeaweedFS (HTTP client nhe, khong keo Netty) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>2.30.31</version>
+            <exclusions>
+                <exclusion><groupId>software.amazon.awssdk</groupId><artifactId>apache-client</artifactId></exclusion>
+                <exclusion><groupId>software.amazon.awssdk</groupId><artifactId>netty-nio-client</artifactId></exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+            <version>2.30.31</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

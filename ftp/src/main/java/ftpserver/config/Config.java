@@ -26,11 +26,16 @@ public class Config {
     private final Path auditLog;
     private final List<String> scanCommand;
     private final boolean scanEnforce;
+    private final S3Settings s3;
+    private final String scanClamd;
+
+    /** Cau hinh object storage S3 (SeaweedFS). */
+    public record S3Settings(String endpoint, String region, String accessKey, String secretKey, String bucket, String prefix) {}
 
     private Config(int controlPort, Path rootDir, int dataPortMin, int dataPortMax,
                    int idleTimeoutSeconds, Path dbPath, String dbUrl, String dbUser, String dbPassword, String pasvAddress,
                    Path tlsKeystore, String tlsKeystorePassword, boolean tlsRequired, Path auditLog,
-                   List<String> scanCommand, boolean scanEnforce) {
+                   List<String> scanCommand, boolean scanEnforce, S3Settings s3, String scanClamd) {
         this.controlPort = controlPort;
         this.rootDir = rootDir;
         this.dataPortMin = dataPortMin;
@@ -47,6 +52,8 @@ public class Config {
         this.auditLog = auditLog;
         this.scanCommand = scanCommand;
         this.scanEnforce = scanEnforce;
+        this.s3 = s3;
+        this.scanClamd = scanClamd;
     }
 
     public int controlPort() { return controlPort; }
@@ -71,6 +78,11 @@ public class Config {
     public List<String> scanCommand() { return scanCommand; }
     /** true: tep chua quet xong (PENDING) cung khong duoc tai ve. */
     public boolean scanEnforce() { return scanEnforce; }
+    /** Cau hinh S3/SeaweedFS; null = luu tren dia cuc bo tai root.dir. */
+    public S3Settings s3() { return s3; }
+    /** "host[:port]" cua clamd tu xa (quet INSTREAM, khong can ClamAV trong image); null = khong dung. */
+    public String scanClamd() { return scanClamd; }
+    public boolean s3Enabled() { return s3 != null; }
 
     public static Config load(Path confFile) throws IOException {
         if (!Files.exists(confFile)) {
@@ -82,10 +94,33 @@ public class Config {
         }
 
         int controlPort = requireInt(props, "control.port");
-        String rootDirStr = requireString(props, "root.dir");
-        Path rootDir = Path.of(rootDirStr);
-        if (!Files.isDirectory(rootDir)) {
-            Files.createDirectories(rootDir);
+        String storage = envOr("FTP_STORAGE", props.getProperty("storage.type", "local")).trim().toLowerCase();
+        if (!storage.equals("local") && !storage.equals("s3")) {
+            throw new IllegalArgumentException("storage.type must be 'local' or 's3', got: " + storage);
+        }
+        Path rootDir;
+        S3Settings s3 = null;
+        if (storage.equals("s3")) {
+            // thu muc goc "ao" trong bucket; khong co gi tren dia
+            rootDir = Path.of("/");
+            String endpoint = envOr("FTP_S3_ENDPOINT", optional(props, "s3.endpoint"));
+            String accessKey = envOr("FTP_S3_ACCESS_KEY", optional(props, "s3.access.key"));
+            String secretKey = envOr("FTP_S3_SECRET_KEY", optional(props, "s3.secret.key"));
+            if (endpoint == null || accessKey == null || secretKey == null) {
+                throw new IllegalArgumentException(
+                        "storage.type=s3 needs s3.endpoint (FTP_S3_ENDPOINT), FTP_S3_ACCESS_KEY and FTP_S3_SECRET_KEY");
+            }
+            s3 = new S3Settings(endpoint,
+                    envOr("FTP_S3_REGION", props.getProperty("s3.region", "us-east-1")).trim(),
+                    accessKey, secretKey,
+                    envOr("FTP_S3_BUCKET", props.getProperty("s3.bucket", "ftp-files")).trim(),
+                    envOr("FTP_S3_PREFIX", props.getProperty("s3.prefix", "")).trim());
+        } else {
+            String rootDirStr = requireString(props, "root.dir");
+            rootDir = Path.of(rootDirStr);
+            if (!Files.isDirectory(rootDir)) {
+                Files.createDirectories(rootDir);
+            }
         }
         int dataPortMin = requireInt(props, "data.port.min");
         int dataPortMax = requireInt(props, "data.port.max");
@@ -118,12 +153,13 @@ public class Config {
         String scanCmd = envOr("FTP_SCAN_COMMAND", optional(props, "scan.command"));
         List<String> scanCommand = scanCmd == null ? List.of() : Arrays.asList(scanCmd.trim().split("\\s+"));
         boolean scanEnforce = Boolean.parseBoolean(envOr("FTP_SCAN_ENFORCE", props.getProperty("scan.enforce", "false")).trim());
-        if (scanEnforce && scanCommand.isEmpty()) {
-            throw new IllegalArgumentException("scan.enforce=true needs scan.command (otherwise no file would ever be downloadable)");
+        String scanClamd = envOr("FTP_CLAMD", optional(props, "scan.clamd"));
+        if (scanEnforce && scanCommand.isEmpty() && scanClamd == null) {
+            throw new IllegalArgumentException("scan.enforce=true needs scan.command or scan.clamd (otherwise no file would ever be downloadable)");
         }
 
         return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds,
-                dbPath, dbUrl, dbUser, dbPassword, pasvAddress, tlsKeystore, keystorePassword, tlsRequired, auditLog, scanCommand, scanEnforce);
+                dbPath, dbUrl, dbUser, dbPassword, pasvAddress, tlsKeystore, keystorePassword, tlsRequired, auditLog, scanCommand, scanEnforce, s3, scanClamd);
     }
 
     private static String optional(Properties props, String key) {

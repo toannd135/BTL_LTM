@@ -101,7 +101,7 @@ Production dùng chứng chỉ thật (Let's Encrypt) rồi đóng gói PKCS12 b
 
 - Mở trong NSG: TCP **2121** và **50000–50100**; đặt `pasv.address` là IP public của VM.
 - Cloudflare: bản ghi **A** → IP VM ở chế độ **DNS only** (đám mây xám); proxy của Cloudflare không chuyển được FTP.
-- Dữ liệu (`ftproot`, `data`, `logs`) nằm trên đĩa của VM/container: cần gắn volume và tự sao lưu.
+- Tệp người dùng lưu trong **SeaweedFS** (object storage, S3 API, dữ liệu ở `/srv/ftp/seaweedfs`); `data`, `logs` nằm trên đĩa của VM. Cần gắn volume và tự sao lưu. Đặt `vault_ftp_s3_access_key` / `vault_ftp_s3_secret_key` trong `ansible/group_vars/ftpserver/vault.yml` (xem `vault.yml.example`).
 - Trang quản trị chỉ bind `127.0.0.1`; truy cập từ xa thì đặt sau reverse proxy HTTPS.
 
 ## Chi tiết server (`ftp/`)
@@ -110,7 +110,10 @@ Production dùng chứng chỉ thật (Let's Encrypt) rồi đóng gói PKCS12 b
 
 ```properties
 control.port=2121            # cổng kênh điều khiển
-root.dir=./ftproot           # thư mục gốc được chia sẻ
+storage.type=local           # local: đĩa tại root.dir | s3: object storage SeaweedFS
+root.dir=./ftproot           # thư mục gốc được chia sẻ (storage.type=local)
+#s3.endpoint=http://localhost:8333   # storage.type=s3; khóa qua env FTP_S3_ACCESS_KEY / FTP_S3_SECRET_KEY
+#s3.bucket=ftp-files
 data.port.min=50000          # dải cổng cho chế độ PASV
 data.port.max=50100
 idle.timeout.seconds=300     # ngắt client im lặng quá thời gian này
@@ -118,6 +121,8 @@ db.path=./data/ftpserver.db  # SQLite (mặc định)
 #db.url=jdbc:postgresql://localhost:5432/ftpserver   # hoặc PostgreSQL
 #scan.command=clamdscan --no-summary --fdpass
 ```
+
+**Lưu tệp trong SeaweedFS.** `storage.type=s3` (hoặc `FTP_STORAGE=s3`) đưa toàn bộ tệp vào một bucket S3 của SeaweedFS thay vì đĩa; `docker compose up` trong `ftp/` đã dựng sẵn container `seaweedfs`. Mỗi tệp là một object (key = đường dẫn ảo), thư mục là tiền tố (`mkdir` tạo object rỗng `dir/`), upload được đệm ở file tạm rồi `PutObject` một lần nên tệp chỉ xuất hiện khi tải xong. `admin-web` dùng cùng bucket khi đặt `FTP_S3_ENDPOINT`/`FTP_S3_ACCESS_KEY`/`FTP_S3_SECRET_KEY`; tệp cách ly chuyển sang bucket `<bucket>-quarantine`. Giới hạn: mỗi tệp tối đa 5 GB, đổi tên thư mục là copy+xóa từng object (không nguyên tử), `STOR` kèm `REST`/`APPE` ghi lại cả tệp.
 
 Tài khoản, vai trò, ACL, audit nằm trong CSDL, schema tạo bằng migration khi server khởi động (`src/main/resources/db/migration/sqlite/` hoặc `postgres/`). Tài khoản mẫu là **tài khoản thử nghiệm** — đổi mật khẩu trước khi dùng ngoài môi trường học tập.
 

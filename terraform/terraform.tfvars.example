@@ -2,5 +2,6 @@
 # subscription_id   = "00000000-0000-0000-0000-000000000000"
 ssh_allowed_cidr = "1.2.3.4/32" # curl -s ifconfig.me
 # location          = "southeastasia"
-# vm_size           = "Standard_B2s"
+# vm_size           = "Standard_B2ats_v2"   # VM-A (FTP + admin)
+# storage_vm_size   = "Standard_B2als_v2"  # VM-B (SeaweedFS + clamd), can >= 2 GB RAM
 # ftp_allowed_cidr  = "0.0.0.0/0"

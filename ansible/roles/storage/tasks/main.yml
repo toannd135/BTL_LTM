@@ -1,0 +1,55 @@
+- name: Kiem tra bien bat buoc
+  ansible.builtin.assert:
+    that:
+      - storage_private_ip is defined and storage_private_ip | length > 0
+      - ftp_s3_access_key | length >= 8
+      - ftp_s3_secret_key | length >= 16
+    fail_msg: "Thieu storage_private_ip (inventory) hoac vault_ftp_s3_access_key / vault_ftp_s3_secret_key (>= 8 / >= 16 ky tu)"
+    quiet: true
+
+- name: Tao thu muc du lieu (SeaweedFS va clamd chay root / uid rieng cua image)
+  ansible.builtin.file:
+    path: "{{ ftp_base_dir }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: [seaweedfs, clamav-db, config]
+
+- name: Ghi clamd.conf
+  ansible.builtin.template:
+    src: clamd.conf.j2
+    dest: "{{ ftp_base_dir }}/config/clamd.conf"
+    mode: "0644"
+  notify: Khoi dong lai clamd
+
+- name: Ghi .env (bi mat)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ ftp_base_dir }}/.env"
+    mode: "0600"
+  no_log: true
+
+- name: Ghi docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ ftp_base_dir }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Keo image va chay SeaweedFS + clamd
+  community.docker.docker_compose_v2:
+    project_src: "{{ ftp_base_dir }}"
+    pull: always
+    remove_orphans: true
+    state: present
+
+- name: Cho cong S3 SeaweedFS
+  ansible.builtin.wait_for:
+    host: "{{ storage_private_ip }}"
+    port: 8333
+    timeout: 120
+
+# lan dau clamd phai tai + nap CSDL chu ky (freshclam), co the vai phut
+- name: Cho clamd san sang
+  ansible.builtin.wait_for:
+    host: "{{ storage_private_ip }}"
+    port: 3310
+    timeout: 900

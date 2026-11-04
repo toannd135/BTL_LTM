@@ -47,6 +47,8 @@ resource "azurerm_network_security_group" "main" {
     destination_address_prefix = "*"
   }
 
+  # FTP phuc vu client bat ky (sinh vien, may demo): mo cong khai co chu y; thu hep bang ftp_allowed_cidr
+  #trivy:ignore:AZU-0047
   security_rule {
     name                       = "ftp-control"
     priority                   = 110
@@ -59,6 +61,7 @@ resource "azurerm_network_security_group" "main" {
     destination_address_prefix = "*"
   }
 
+  #trivy:ignore:AZU-0047
   security_rule {
     name                       = "ftp-passive-data"
     priority                   = 120
@@ -96,7 +99,8 @@ resource "azurerm_network_interface" "main" {
   ip_configuration {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.main.id
-    private_ip_address_allocation = "Dynamic"
+    private_ip_address_allocation = "Static"
+    private_ip_address            = local.app_ip # VM-B chi cho dia chi nay vao
     public_ip_address_id          = azurerm_public_ip.main.id
   }
 }
@@ -173,19 +177,27 @@ resource "azurerm_dev_test_global_vm_shutdown_schedule" "main" {
   }
 }
 
-# Sinh inventory cho Ansible
+# Sinh inventory cho Ansible. VM-B khong co cong SSH ra ngoai: Ansible di qua VM-A (ProxyCommand)
 resource "local_file" "ansible_inventory" {
   filename        = "${path.module}/../ansible/inventory/hosts.ini"
   file_permission = "0600" # chua mat khau Postgres
   content         = <<-EOT
     # Sinh boi Terraform, khong sua tay
-    [ftpserver]
+    [app]
     ${azurerm_public_ip.main.ip_address} ansible_user=${var.admin_username} ansible_ssh_private_key_file=${pathexpand(var.ssh_private_key_path)}
+
+    [storage]
+    ${local.storage_ip} ansible_user=${var.admin_username} ansible_ssh_private_key_file=${pathexpand(var.ssh_private_key_path)} ansible_ssh_common_args='-o ProxyCommand="ssh -W %h:%p -q -i ${pathexpand(var.ssh_private_key_path)} -o StrictHostKeyChecking=accept-new ${var.admin_username}@${azurerm_public_ip.main.ip_address}"'
+
+    [ftpserver:children]
+    app
+    storage
 
     [ftpserver:vars]
     ftp_public_ip=${azurerm_public_ip.main.ip_address}
     ftpadmin_bind=${var.admin_web_allowed_cidr == null ? "127.0.0.1" : "0.0.0.0"}
     ftp_db_host=${azurerm_postgresql_flexible_server.main.fqdn}
     tf_ftp_db_password=${random_password.db.result}
+    storage_private_ip=${local.storage_ip}
   EOT
 }
