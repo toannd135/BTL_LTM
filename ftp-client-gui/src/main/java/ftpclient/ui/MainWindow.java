@@ -99,6 +99,7 @@ public class MainWindow {
     private Button deleteBtn;
     private Button shareBtn;
     private Button cancelBtn;
+    private volatile boolean cancelRequested;
     private TableView<RemoteFile> remoteTable;
     private TableView<LocalFile> localTable;
     private TextField localPathField;
@@ -355,6 +356,7 @@ public class MainWindow {
         cancelBtn.setOnAction(e -> {
             cancelBtn.setDisable(true);
             progressLabel.setText("Đang hủy…");
+            cancelRequested = true;   // dừng cả tác vụ thư mục/hàng đợi giữa các file
             session.cancelTransfer();
         });
         Region spacer = new Region();
@@ -631,13 +633,10 @@ public class MainWindow {
 
             @Override
             protected String call() throws Exception {
-                String home = s.pwd();
-                try {
-                    for (Path d : dirs) {
-                        uploadTree(d);
-                    }
-                } finally {
-                    s.cwd(home);
+                // mỗi uploadTree tự cwd vào rồi cdup ra, nên kết thúc là về đúng thư mục ban đầu
+                // (không cwd về pwd: với user có home riêng pwd là "/" và CWD "/" bị từ chối)
+                for (Path d : dirs) {
+                    uploadTree(d);
                 }
                 return count + " file";
             }
@@ -649,10 +648,16 @@ public class MainWindow {
                 } catch (FtpException ignored) {
                     // đã tồn tại: dùng lại; nếu lỗi thật thì cwd bên dưới sẽ báo
                 }
-                s.cwd(name);
+                try {
+                    s.cwd(name);
+                } catch (FtpException e) {
+                    throw new FtpException(e.code(), "Không vào được thư mục '" + name
+                            + "' trên máy chủ: tên này đã tồn tại nhưng là tệp hoặc thư mục của người khác "
+                            + "(bạn không có quyền đọc). Hãy đổi tên thư mục rồi tải lại.");
+                }
                 try (var stream = Files.list(dir)) {
                     for (Path p : stream.sorted().toList()) {
-                        if (isCancelled()) {
+                        if (cancelRequested) {
                             throw new RemoteSession.CancelledException("Đã hủy tải thư mục");
                         }
                         if (Files.isDirectory(p)) {
@@ -663,9 +668,15 @@ public class MainWindow {
                             count++;
                         }
                     }
-                } finally {
-                    s.cdup();
+                } catch (Exception e) {
+                    try {
+                        s.cdup();
+                    } catch (Exception ignored) {
+                        // giữ lỗi gốc, không để lỗi dọn dẹp che mất
+                    }
+                    throw e;
                 }
+                s.cdup();
             }
         };
         task.messageProperty().addListener((o, a, b) -> progressLabel.setText("Tải lên " + b));
@@ -800,6 +811,7 @@ public class MainWindow {
 
     /** Gắn tiến trình, nút Hủy và xử lý kết quả cho một tác vụ truyền file. */
     private void runTransfer(Task<String> task, String label, Runnable afterSuccess) {
+        cancelRequested = false;
         progressLabel.setText(label);
         progressBar.progressProperty().bind(task.progressProperty());
         cancelBtn.setDisable(false);
