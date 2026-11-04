@@ -61,7 +61,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/w -v "$HOME/.m2":/root/.m2 -w /w aquasec/trivy:0.58.1 fs \
             --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
-            --skip-dirs ftp/target,terraform/.terraform \
+            --ignorefile .trivyignore.yaml --skip-dirs ftp/target,terraform/.terraform \
             --skip-files terraform/terraform.tfstate,terraform/terraform.tfstate.backup .
 
   infra-check:
