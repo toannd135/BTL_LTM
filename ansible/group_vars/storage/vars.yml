@@ -1,0 +1,2 @@
+# VM-B (SeaweedFS + clamd): swap lam dem khi clamd nap CSDL chu ky
+swap_size: 4G

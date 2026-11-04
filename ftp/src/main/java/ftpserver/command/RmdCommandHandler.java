@@ -2,7 +2,6 @@ package ftpserver.command;
 
 import java.io.IOException;
 import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import ftpserver.acl.Perm;
@@ -23,7 +22,7 @@ public final class RmdCommandHandler implements CommandHandler {
         }
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (!Files.isDirectory(target)) {
+            if (!session.store().isDirectory(target)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Not a directory");
                 return;
             }
@@ -36,7 +35,7 @@ public final class RmdCommandHandler implements CommandHandler {
                 session.audit("RMDIR", arg + " (denied: no file:delete permission)", false);
                 return;
             }
-            Files.delete(target);
+            session.store().delete(target);
             session.acl().removeTree(session.aclPath(target));
             session.scan().removed(session.aclPath(target));
             session.reply(FtpReply.FILE_ACTION_OK, "Directory removed");

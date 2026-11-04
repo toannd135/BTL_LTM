@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import ftpserver.acl.Perm;
@@ -32,7 +31,7 @@ public final class RetrCommandHandler implements CommandHandler {
             session.audit("DOWNLOAD", arg + " (path rejected)", false);
             return;
         }
-        if (!Files.isRegularFile(target) || !session.can(target, Perm.READ)) {
+        if (!session.store().isFile(target) || !session.can(target, Perm.READ)) {
             // khong co quyen xem thi coi nhu khong ton tai (khong lo su ton tai cua tep)
             session.reply(FtpReply.FILE_UNAVAILABLE, "File not found");
             return;
@@ -54,11 +53,11 @@ public final class RetrCommandHandler implements CommandHandler {
         }
         long offset = session.consumeRestartOffset();
         try {
-            if (offset > Files.size(target)) {
+            if (offset > session.store().size(target)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Invalid restart offset");
                 return;
             }
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "File not found");
             return;
         }
@@ -66,10 +65,9 @@ public final class RetrCommandHandler implements CommandHandler {
         long sent = 0;
         String vpath = session.pathResolver().toVirtualPath(target);
         try (Socket dataSocket = session.getDataConnection().establish(10_000);
-             InputStream in = Files.newInputStream(target);
+             InputStream in = session.store().read(target, offset);
              OutputStream out = dataSocket.getOutputStream()) {
             session.setState(SessionState.TRANSFERRING);
-            in.skipNBytes(offset);
             byte[] buf = new byte[8192];
             int n;
             while ((n = in.read(buf)) != -1) {
@@ -77,7 +75,7 @@ public final class RetrCommandHandler implements CommandHandler {
                 sent += n;
             }
             out.flush();
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             session.reply(FtpReply.CONN_CLOSED_ABORTED, "Transfer aborted");
             session.audit("DOWNLOAD", vpath + " aborted after " + sent + " bytes", false);
             return;

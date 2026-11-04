@@ -6,7 +6,6 @@ import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 public final class RntoCommandHandler implements CommandHandler {
@@ -29,7 +28,7 @@ public final class RntoCommandHandler implements CommandHandler {
         String from = session.pathResolver().toVirtualPath(source);
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (Files.exists(target)) {
+            if (session.store().exists(target)) {
                 session.reply(FtpReply.FILE_NAME_NOT_ALLOWED, "Target already exists");
                 return;
             }
@@ -38,7 +37,7 @@ public final class RntoCommandHandler implements CommandHandler {
                 return;
             }
             String oldKey = session.aclPath(source);
-            Files.move(source, target);
+            session.store().move(source, target);
             session.acl().moveTree(oldKey, session.aclPath(target));
             session.scan().moved(oldKey, session.aclPath(target));
             session.reply(FtpReply.FILE_ACTION_OK, "Rename successful");

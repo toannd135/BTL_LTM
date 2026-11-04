@@ -6,6 +6,16 @@ output "ssh" {
   value = "ssh ${var.admin_username}@${azurerm_public_ip.main.ip_address}"
 }
 
+output "storage_private_ip" {
+  description = "VM-B (SeaweedFS + clamd), chi truy cap duoc tu VM-A"
+  value       = local.storage_ip
+}
+
+output "storage_ssh" {
+  description = "SSH vao VM-B qua VM-A"
+  value       = "ssh -J ${var.admin_username}@${azurerm_public_ip.main.ip_address} ${var.admin_username}@${local.storage_ip}"
+}
+
 output "ftp" {
   value = "ftp://${azurerm_public_ip.main.ip_address}:2121"
 }

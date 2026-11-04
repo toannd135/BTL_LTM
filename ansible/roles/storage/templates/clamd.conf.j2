@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# clamd khong co xac thuc: cong 3310 chi duoc NSG cho VM-A vao (xem terraform/storage.tf)
+Foreground yes
+LocalSocket /tmp/clamd.sock
+TCPSocket 3310
+TCPAddr 0.0.0.0
+StreamMaxLength {{ clamd_max_file_size }}
+MaxFileSize {{ clamd_max_file_size }}
+MaxScanSize {{ clamd_max_file_size }}
+MaxThreads 4

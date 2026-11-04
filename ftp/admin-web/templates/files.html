@@ -7,6 +7,7 @@
 </div>
 {% if not can_manage %}<div class="alert alert-info">Chế độ chỉ xem kết quả quét (cần quyền <code>scan:manage</code> để thao tác).</div>{% endif %}
 {% if not clamav %}<div class="alert alert-warning">Chưa cài ClamAV (clamscan/clamdscan): nút "Quét" sẽ để tệp ở trạng thái PENDING, admin duyệt thủ công.</div>{% endif %}
+{% if clamd_stale %}<div class="alert alert-warning">CSDL virus của clamd đã cũ {{ clamd_stale }} ngày — kiểm tra <code>freshclam</code> trên VM-B.</div>{% endif %}
 <ul class="nav nav-pills mb-3">
   <li class="nav-item"><a class="nav-link {{ 'active' if not status }}" href="/files">Tất cả</a></li>
   {% for s in statuses %}<li class="nav-item"><a class="nav-link {{ 'active' if status == s }}" href="/files?status={{ s }}">{{ s }}</a></li>{% endfor %}

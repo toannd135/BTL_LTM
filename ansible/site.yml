@@ -1,10 +1,22 @@
-# Trien khai ftpserver + admin-web + Postgres len VM do Terraform tao
+# Trien khai: VM-B (storage: SeaweedFS + clamd) truoc, roi VM-A (app: ftpserver + admin-web + ket noi Azure PostgreSQL)
 #   ansible-galaxy collection install -r requirements.yml
 #   ansible-playbook site.yml --ask-vault-pass
-- name: Trien khai FTP server
+# Inventory do Terraform sinh (nhom app, storage; ca hai thuoc nhom ftpserver de dung chung group_vars/ftpserver)
+- name: Co ban cho ca hai VM
   hosts: ftpserver
   become: true
   roles:
     - base
     - docker
+
+- name: VM-B - kho tep va quet ma doc
+  hosts: storage
+  become: true
+  roles:
+    - storage
+
+- name: VM-A - FTP server va trang quan tri
+  hosts: app
+  become: true
+  roles:
     - ftpserver

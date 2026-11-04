@@ -3,6 +3,10 @@
 {% block main_class %}{% endblock %}
 {% block content %}
 <h3 class="mb-3 flex-shrink-0">Dashboard</h3>
+{% if malware %}<div class="alert alert-danger flex-shrink-0"><strong>Cảnh báo mã độc (24 giờ qua):</strong> {{ malware|length }}{{ '+' if malware|length >= 5 }} lần upload bị từ chối/xóa.
+  <ul class="mb-0 small">{% for m in malware %}<li><code>{{ m.ts }}</code> {{ m.user }} — {{ m.detail }}</li>{% endfor %}</ul>
+  <a href="/audit?event=MALWARE" class="alert-link small">Xem nhật ký</a></div>{% endif %}
+{% if clamd_stale %}<div class="alert alert-warning flex-shrink-0">CSDL virus của clamd đã cũ {{ clamd_stale }} ngày — kiểm tra <code>freshclam</code> trên VM-B.</div>{% endif %}
 {% set files = files or {} %}{% set pending = files.get('PENDING', 0) %}{% set infected = files.get('INFECTED', 0) %}
 <div class="row g-3 mb-3 flex-shrink-0">
   {% if users %}<div class="col-6 col-lg-3"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>{% endif %}

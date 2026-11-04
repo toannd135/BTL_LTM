@@ -1,6 +1,5 @@
 package ftpserver.command;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import ftpserver.acl.Perm;
@@ -21,7 +20,7 @@ public final class CwdCommandHandler implements CommandHandler {
         }
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (!Files.isDirectory(target) || !session.can(target, Perm.READ)) {
+            if (!session.store().isDirectory(target) || !session.can(target, Perm.READ)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Directory not found");
                 return;
             }

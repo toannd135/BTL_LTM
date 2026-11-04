@@ -1,5 +1,7 @@
 # Luồng dữ liệu trong FTP Server — đi qua đoạn code nào
 
+> **Cập nhật lưu trữ:** mọi thao tác tệp nay đi qua `fs/FileStore` (`session.store()`), có hai backend: `LocalFileStore` (đĩa, `storage.type=local`) và `S3FileStore` (SeaweedFS qua S3, `storage.type=s3`). Các đoạn `Files.*` dưới đây mô tả backend local; với S3 thì `Files.newInputStream` ↔ `FileStore.read` (GetObject), `.part-<id>` + `Files.move` ↔ `FileStore.beginUpload` + `commit` (tệp tạm cục bộ rồi PutObject một lần).
+
 Tài liệu này bám theo đúng code thật trong `src/main/java/ftpserver/`, không phải sơ đồ lý thuyết. Mỗi mục ghi rõ file, method, và **byte thực sự chảy qua đâu**.
 
 ---
