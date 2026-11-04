@@ -1,7 +1,6 @@
 package ftpserver.command;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import ftpserver.auth.User;
@@ -66,7 +65,7 @@ public final class PassCommandHandler implements CommandHandler {
         if (!home.startsWith(root)) {
             throw new SecurityException("home escapes root: " + user.home());
         }
-        Files.createDirectories(home);
-        return new PathResolver(home);
+        session.store().mkdirs(home);
+        return session.pathResolver().child(home);
     }
 }

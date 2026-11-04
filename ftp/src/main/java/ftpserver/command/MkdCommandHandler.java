@@ -1,7 +1,6 @@
 package ftpserver.command;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import ftpserver.acl.Perm;
@@ -22,7 +21,7 @@ public final class MkdCommandHandler implements CommandHandler {
         }
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (Files.exists(target)) {
+            if (session.store().exists(target)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Directory already exists");
                 return;
             }
@@ -30,7 +29,7 @@ public final class MkdCommandHandler implements CommandHandler {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
                 return;
             }
-            Files.createDirectory(target);
+            session.store().mkdir(target);
             session.acl().recordOwner(session.aclPath(target), session.getUser().name());
             session.reply(FtpReply.DIR_ACTION_OK, "\"" + session.pathResolver().toVirtualPath(target) + "\" created");
             session.audit("MKDIR", session.pathResolver().toVirtualPath(target), true);

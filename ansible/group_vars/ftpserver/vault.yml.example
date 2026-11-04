@@ -2,6 +2,8 @@
 # Sinh gia tri ngau nhien: openssl rand -hex 32
 vault_ftp_db_password: "doi-gia-tri-nay"
 vault_ftpadmin_secret: "doi-gia-tri-nay"
+vault_ftp_s3_access_key: "doi-gia-tri-nay"   # SeaweedFS S3 (ftp_storage: s3)
+vault_ftp_s3_secret_key: "doi-gia-tri-nay"   # openssl rand -hex 24
 # vault_ftp_tls_keystore_password: ""
 # vault_ghcr_username: "toannd135"
 # vault_ghcr_token: "ghp_..."

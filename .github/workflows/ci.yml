@@ -42,6 +42,32 @@ jobs:
           name: ftpserver-jar
           path: ftp/target/ftpserver.jar   # bo original-ftpserver.jar (jar chua shade)
 
+  # Quét lỗ hổng: CVE của thư viện (Maven, pip) + cấu hình Dockerfile/Terraform. Chạy trên runner, không tốn RAM VM
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      # Trivy tự phân giải pom.xml qua Maven Central và bị giới hạn tốc độ (429); nạp sẵn ~/.m2 cho nó dùng
+      - name: Nạp cache Maven
+        run: |
+          mvn -B -q -f ftp/pom.xml dependency:resolve
+          mvn -B -q -f ftp-client-gui/pom.xml dependency:resolve || true
+      - name: Trivy (CVE thư viện + misconfig), lỗi khi có HIGH/CRITICAL đã có bản vá
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          skip-dirs: ftp/target,terraform/.terraform
+          skip-files: terraform/terraform.tfstate,terraform/terraform.tfstate.backup
+          exit-code: '1'
+
   infra-check:
     runs-on: ubuntu-latest
     steps:
@@ -96,6 +122,14 @@ jobs:
         run: python test_admin.py
       - name: Kiểm tra build Docker image
         run: docker build -t ftpadmin:ci .
+      # Báo cáo CVE của OS/Python trong image (không chặn: lỗi lớp nền thường chờ bản vá của image gốc)
+      - name: Trivy quét image admin
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ftpadmin:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
 
 
   ui-package:

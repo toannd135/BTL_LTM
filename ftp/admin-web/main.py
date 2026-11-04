@@ -22,9 +22,12 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+
+import storage
 
 BASE = Path(__file__).parent
 # thu muc ftp/ cua server: canh admin-web/ (repo goc) hoac la thu muc cha (admin-web/ nam trong ftp/)
@@ -33,6 +36,7 @@ DB_PATH = Path(os.environ.get("FTP_DB", FTP_HOME / "data" / "ftpserver.db"))
 ROOT = Path(os.environ.get("FTP_ROOT", FTP_HOME / "ftproot")).resolve()
 AUDIT_LOG = Path(os.environ.get("FTP_AUDIT_LOG", FTP_HOME / "logs" / "audit.log"))
 QUARANTINE = Path(os.environ.get("FTP_QUARANTINE", FTP_HOME / "quarantine")).resolve()
+STORE = storage.from_env(ROOT, QUARANTINE)  # local (FTP_ROOT) hoac SeaweedFS/S3 (FTP_S3_ENDPOINT)
 SECRET = os.environ.get("FTPADMIN_SECRET") or secrets.token_hex(32)  # khong dat -> phien mat khi restart
 
 TRUST_PROXY = os.environ.get("FTPADMIN_TRUST_PROXY") == "1"
@@ -214,8 +218,11 @@ def _audit_where(event="", user="", result="") -> tuple[str, tuple]:
     return (" WHERE " + " AND ".join(conds) if conds else ""), tuple(args)
 
 
-def read_audit(limit=500, event="", user="", result="", offset=0) -> list[dict]:
+def read_audit(limit=500, event="", user="", result="", offset=0, since_hours=0) -> list[dict]:
     where, args = _audit_where(event, user, result)
+    if since_hours:
+        since = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+        where, args = (where + " AND" if where else " WHERE") + " ts >= ?", args + (since,)
     with db() as c:
         rows = c.execute(f"SELECT {AUDIT_COLS} FROM audit_events{where} ORDER BY id DESC LIMIT ? OFFSET ?",
                          args + (limit, offset)).fetchall()
@@ -426,7 +433,8 @@ def logout(request: Request, csrf: str = Form(...)):
 @app.get("/")
 def dashboard(request: Request, admin: str = Depends(require())):
     perms = set(request.session["perms"])
-    ctx = {"users": None, "files": None, "rows": [], "failed_logins": 0, "activity": None}
+    ctx = {"users": None, "files": None, "rows": [], "failed_logins": 0, "activity": None,
+           "malware": [], "clamd_stale": clamd_stale_days()}
     with db() as c:
         if "user:manage" in perms:
             ctx["users"] = c.execute("SELECT COUNT(*) total, COUNT(CASE WHEN enabled=0 THEN 1 END) locked FROM users").fetchone()
@@ -434,6 +442,7 @@ def dashboard(request: Request, admin: str = Depends(require())):
             ctx["files"] = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM files GROUP BY status")}
     if "audit:view" in perms:
         since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+        ctx["malware"] = read_audit(limit=5, event="MALWARE", since_hours=24)
         ctx.update(rows=read_audit(limit=5),  # dashboard co dinh khong cuon: chi vua 5 dong, xem them o trang Nhat ky
                    failed_logins=count_audit(event="LOGIN", result="FAIL", since=since), activity=activity_by_hour())
     return render(request, "dashboard.html", **ctx)
@@ -576,40 +585,31 @@ def reset_password(username: str, request: Request, admin: str = Depends(require
 
 
 # ---------- files ----------
-def _sha256(p: Path) -> str:
-    h = hashlib.sha256()
-    with open(p, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _abs(rel: str) -> Path:
-    p = (ROOT / rel).resolve()
-    if ROOT not in p.parents:
-        raise HTTPException(400, "Duong dan ngoai root")
-    return p
+@app.exception_handler(storage.StorageError)
+async def storage_error(request: Request, exc: storage.StorageError):
+    return PlainTextResponse(str(exc), status_code=400)
 
 
 def sync_files() -> tuple[int, int]:
-    """Quet thu muc root: tep moi/doi noi dung -> PENDING; tep da bien mat khoi dia -> xoa ban ghi (tru QUARANTINED)."""
+    """Quet kho tep (dia hoac S3): tep moi/doi noi dung -> PENDING; tep da bien mat -> xoa ban ghi (tru QUARANTINED).
+
+    Duong dan trong bang files co dang "/sv/x" (giong server FTP); ban ghi cu dang "sv/x" duoc chuan hoa de khong bi trung."""
     added = changed = 0
     seen = set()
     with db() as c:
-        for p in ROOT.rglob("*"):
-            if not p.is_file() or ".part-" in p.name:
-                continue
-            rel = p.relative_to(ROOT).as_posix()
-            st = p.stat()
-            seen.add(rel)
-            row = c.execute("SELECT * FROM files WHERE path=?", (rel,)).fetchone()
+        c.execute("DELETE FROM files WHERE path NOT LIKE '/%' AND '/' || path IN (SELECT path FROM files)")
+        c.execute("UPDATE files SET path = '/' || path WHERE path NOT LIKE '/%'")
+        for rel, size, mtime in STORE.iter_files():
+            vp = "/" + rel.lstrip("/")
+            seen.add(vp)
+            row = c.execute("SELECT * FROM files WHERE path=?", (vp,)).fetchone()
             if row is None:
                 c.execute("INSERT INTO files(path,size,mtime,sha256,updated_at) VALUES (?,?,?,?,?)",
-                          (rel, st.st_size, int(st.st_mtime), _sha256(p), utc_now()))
+                          (vp, size, mtime, STORE.sha256(rel), utc_now()))
                 added += 1
-            elif row["size"] != st.st_size or row["mtime"] != int(st.st_mtime):
+            elif row["size"] != size or row["mtime"] != mtime:
                 c.execute("UPDATE files SET size=?, mtime=?, sha256=?, status='PENDING', detail=NULL, scanned_at=NULL, "
-                          "updated_at=? WHERE id=?", (st.st_size, int(st.st_mtime), _sha256(p), utc_now(), row["id"]))
+                          "updated_at=? WHERE id=?", (size, mtime, STORE.sha256(rel), utc_now(), row["id"]))
                 changed += 1
         for row in c.execute("SELECT id, path FROM files WHERE status<>'QUARANTINED'").fetchall():
             if row["path"] not in seen:
@@ -617,8 +617,58 @@ def sync_files() -> tuple[int, int]:
     return added, changed
 
 
+CLAMD = os.environ.get("FTP_CLAMD", "").strip()  # "host[:port]" cua clamd tu xa; dat thi khong can ClamAV trong image
+
+
+def clamd_stale_days(max_age: int = 3) -> int | None:
+    """So ngay CSDL virus cua clamd da cu (> max_age ngay), hoac None neu moi / khong hoi duoc. Dung zVERSION."""
+    if not CLAMD:
+        return None
+    import socket
+    from email.utils import parsedate_to_datetime
+    host, _, port = CLAMD.partition(":")
+    try:
+        with socket.create_connection((host, int(port or 3310)), timeout=3) as s:
+            s.sendall(b"zVERSION\0")
+            reply = s.recv(1024).decode("ascii", "ignore").strip("\0 \n")
+        # "ClamAV 1.4.2/27800/Tue Nov  4 08:25:03 2026"
+        stamp = reply.rsplit("/", 1)[-1]
+        age = (datetime.now(timezone.utc) - parsedate_to_datetime(stamp.replace("  ", " ") + " +0000")).days
+        return age if age > max_age else None
+    except Exception:
+        return None
+
+
+def scan_with_clamd(p: Path, hostport: str, timeout: float = 120.0) -> tuple[str, str]:
+    """Gui noi dung tep thang vao clamd (zINSTREAM). Loi ket noi/giao thuc -> PENDING, khong bao gio coi la sach."""
+    import socket
+    import struct
+    host, _, port = hostport.partition(":")
+    try:
+        with socket.create_connection((host, int(port or 3310)), timeout=timeout) as s, open(p, "rb") as f:
+            s.sendall(b"zINSTREAM\0")
+            while chunk := f.read(64 * 1024):
+                s.sendall(struct.pack(">I", len(chunk)) + chunk)
+            s.sendall(struct.pack(">I", 0))
+            reply = b""
+            while (b := s.recv(1024)):
+                reply += b
+                if reply.endswith(b"\0"):
+                    break
+    except OSError as e:
+        return "PENDING", f"clamd {hostport}: {e}"
+    text = reply.rstrip(b"\0").decode(errors="replace").strip()
+    if text.endswith("OK"):
+        return "CLEAN", "clamd: OK"
+    if text.endswith("FOUND"):
+        return "INFECTED", text.removeprefix("stream:").removesuffix("FOUND").strip()
+    return "PENDING", f"clamd: {text or 'empty reply'}"
+
+
 def scan_with_clamav(p: Path) -> tuple[str, str]:
     """-> (status, detail). Dung clamdscan/clamscan neu co; khong co -> PENDING."""
+    if CLAMD:
+        return scan_with_clamd(p, CLAMD)
     error = "Chua cai ClamAV (clamscan/clamdscan)"
     for exe in ("clamdscan", "clamscan"):  # clamd chua chay -> thu clamscan
         if not shutil.which(exe):
@@ -646,7 +696,8 @@ def files_page(request: Request, status: str = "", page: str = "1", per_page: st
         rows = c.execute("SELECT * FROM files" + where + " ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
                          args + (pg["per_page"], pg["offset"])).fetchall()
     return render(request, "files.html", files=rows, statuses=STATUSES, status=status, pg=pg,
-                  clamav=bool(shutil.which("clamdscan") or shutil.which("clamscan")))
+                  clamav=bool(CLAMD or shutil.which("clamdscan") or shutil.which("clamscan")),
+                  clamd_stale=clamd_stale_days())
 
 
 @app.post("/files/sync")
@@ -670,11 +721,14 @@ def file_scan(file_id: int, request: Request, admin: str = Depends(require("scan
     check_csrf(request, csrf)
     with db() as c:
         row = _file(c, file_id)
-        if row["status"] == "QUARANTINED":
-            flash(request, "Tep dang cach ly", "danger")
-            return back("/files")
-        status, detail = scan_with_clamav(_abs(row["path"]))
-        now = utc_now()
+    if row["status"] == "QUARANTINED":
+        flash(request, "Tep dang cach ly", "danger")
+        return back("/files")
+    # tai + quet co the mat nhieu phut: khong giu ket noi/giao dich DB trong luc do
+    with STORE.local_copy(row["path"]) as local:
+        status, detail = scan_with_clamav(local)
+    now = utc_now()
+    with db() as c:
         c.execute("UPDATE files SET status=?, detail=?, scanned_at=?, updated_at=? WHERE id=?",
                   (status, detail, now, now, file_id))
     audit(admin, "ADMIN_FILE_SCAN", f"{row['path']} -> {status} ({detail})", ok=status != "INFECTED")
@@ -704,12 +758,9 @@ def file_quarantine(file_id: int, request: Request, admin: str = Depends(require
         row = _file(c, file_id)
         if row["status"] == "QUARANTINED":
             return back("/files")
-        src = _abs(row["path"])
-        QUARANTINE.mkdir(parents=True, exist_ok=True)
-        dest = QUARANTINE / f"{file_id}_{src.name}"
-        shutil.move(str(src), dest)
+        qpath = STORE.quarantine(row["path"], file_id)
         c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, updated_at=? WHERE id=?",
-                  (str(dest), utc_now(), file_id))
+                  (qpath, utc_now(), file_id))
     audit(admin, "ADMIN_FILE_QUARANTINE", row["path"])
     flash(request, f"Da cach ly {row['path']}")
     return back("/files")
@@ -722,12 +773,10 @@ def file_restore(file_id: int, request: Request, admin: str = Depends(require("s
         row = _file(c, file_id)
         if row["status"] != "QUARANTINED":
             return back("/files")
-        dest = _abs(row["path"])
-        if dest.exists():
+        if STORE.exists(row["path"]):
             flash(request, "Vi tri goc da co tep khac", "danger")
             return back("/files")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(row["quarantine_path"], dest)
+        STORE.restore(row["path"], row["quarantine_path"])
         c.execute("UPDATE files SET status='PENDING', quarantine_path=NULL, detail='Khoi phuc tu cach ly', "
                   "updated_at=? WHERE id=?", (utc_now(), file_id))
     audit(admin, "ADMIN_FILE_RESTORE", row["path"])
@@ -744,7 +793,7 @@ def file_delete(file_id: int, request: Request, admin: str = Depends(require("sc
         if row["status"] != "QUARANTINED":
             flash(request, "Chi xoa han duoc tep dang cach ly", "danger")
             return back("/files")
-        Path(row["quarantine_path"]).unlink(missing_ok=True)
+        STORE.purge(row["quarantine_path"])
         c.execute("DELETE FROM files WHERE id=?", (file_id,))
     audit(admin, "ADMIN_FILE_DELETE", row["path"])
     flash(request, f"Da xoa han {row['path']}")

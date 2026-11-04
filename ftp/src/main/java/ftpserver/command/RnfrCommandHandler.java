@@ -5,7 +5,6 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 public final class RnfrCommandHandler implements CommandHandler {
@@ -21,7 +20,7 @@ public final class RnfrCommandHandler implements CommandHandler {
         }
         try {
             Path source = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (!Files.exists(source) || source.equals(session.pathResolver().rootDir())) {
+            if (!session.store().exists(source) || source.equals(session.pathResolver().rootDir())) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "File or directory not found");
                 return;
             }

@@ -44,7 +44,7 @@ public class FtpServer {
         listener = new ServerSocket(config.controlPort());
         running = true;
         System.out.println("FTP server listening on port " + config.controlPort()
-                + ", root=" + config.rootDir()
+                + ", storage=" + (config.s3Enabled() ? "s3://" + config.s3().bucket() : config.rootDir())
                 + ", tls=" + (tls == null ? "off" : config.tlsRequired() ? "required" : "optional"));
 
         while (running) {

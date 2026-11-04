@@ -143,16 +143,16 @@ t = token(c, "/files")
 c.post("/files/sync", data={"csrf": t})
 with main.db() as d:
     files = {r["path"]: r for r in d.execute("SELECT * FROM files")}
-check("dong bo tim thay 2 tep, trang thai PENDING", set(files) == {"sv/ok.txt", "sv/eicar.txt"} and all(f["status"] == "PENDING" for f in files.values()))
+check("dong bo tim thay 2 tep, trang thai PENDING", set(files) == {"/sv/ok.txt", "/sv/eicar.txt"} and all(f["status"] == "PENDING" for f in files.values()))
 if main.shutil.which("clamscan") or main.shutil.which("clamdscan"):
-    c.post(f"/files/{files['sv/eicar.txt']['id']}/scan", data={"csrf": t})
+    c.post(f"/files/{files['/sv/eicar.txt']['id']}/scan", data={"csrf": t})
     with main.db() as d:
-        st = d.execute("SELECT status FROM files WHERE path='sv/eicar.txt'").fetchone()[0]
+        st = d.execute("SELECT status FROM files WHERE path='/sv/eicar.txt'").fetchone()[0]
     print("INFO ClamAV quet EICAR ->", st)
-c.post(f"/files/{files['sv/ok.txt']['id']}/approve", data={"csrf": t})
+c.post(f"/files/{files['/sv/ok.txt']['id']}/approve", data={"csrf": t})
 with main.db() as d:
-    check("duyet tep sach", d.execute("SELECT status FROM files WHERE path='sv/ok.txt'").fetchone()[0] == "CLEAN")
-fid = files["sv/eicar.txt"]["id"]
+    check("duyet tep sach", d.execute("SELECT status FROM files WHERE path='/sv/ok.txt'").fetchone()[0] == "CLEAN")
+fid = files["/sv/eicar.txt"]["id"]
 c.post(f"/files/{fid}/quarantine", data={"csrf": t})
 check("cach ly: tep roi khoi thu muc FTP", not (main.ROOT / "sv" / "eicar.txt").exists() and any(main.QUARANTINE.iterdir()))
 c.post("/files/sync", data={"csrf": t})
@@ -165,7 +165,7 @@ check("xoa han tep cach ly", not any(main.QUARANTINE.iterdir()))
 (main.ROOT / "sv" / "ok.txt").write_text("doi noi dung!")
 c.post("/files/sync", data={"csrf": t})
 with main.db() as d:
-    check("tep doi noi dung quay ve PENDING", d.execute("SELECT status FROM files WHERE path='sv/ok.txt'").fetchone()[0] == "PENDING")
+    check("tep doi noi dung quay ve PENDING", d.execute("SELECT status FROM files WHERE path='/sv/ok.txt'").fetchone()[0] == "PENDING")
 
 # phan trang
 with main.db() as d:
@@ -251,6 +251,8 @@ with main.db() as d:
     check("break-glass: thu hoi OK", d.execute("SELECT revoked FROM breakglass_grants WHERE id=?", (g["id"],)).fetchone()[0] == 1
           and d.execute("SELECT detail FROM audit_events WHERE event='BREAKGLASS_REVOKE'").fetchone()[0] == f"#{g['id']}")
 check("break-glass: thu hoi xong khong con trong danh sach", "su co INC-1" not in c.get("/breakglass").text)
+main.audit("sv", "MALWARE", "/sv/x.exe infected: Eicar-Test-Signature - upload rejected", ok=False)
+check("dashboard canh bao ma doc 24h", "Eicar-Test-Signature" in a.get("/").text)
 c.post("/logout", data={"csrf": token(c, "/users")})
 check("dang xuat", c.get("/users").status_code == 303)
 print("\nALL ADMIN TESTS PASSED")

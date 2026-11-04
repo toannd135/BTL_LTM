@@ -1,7 +1,6 @@
 package ftpserver.command;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import ftpserver.acl.Perm;
@@ -22,7 +21,7 @@ public final class DeleCommandHandler implements CommandHandler {
         }
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (!Files.isRegularFile(target)) {
+            if (!session.store().isFile(target)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Not a regular file");
                 return;
             }
@@ -31,7 +30,7 @@ public final class DeleCommandHandler implements CommandHandler {
                 session.audit("DELETE", arg + " (denied: no file:delete permission)", false);
                 return;
             }
-            Files.delete(target);
+            session.store().delete(target);
             session.acl().removeTree(session.aclPath(target));
             session.scan().removed(session.aclPath(target));
             session.reply(FtpReply.FILE_ACTION_OK, "Delete successful");

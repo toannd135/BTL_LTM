@@ -27,7 +27,7 @@ public final class NlstCommandHandler implements CommandHandler {
         session.reply(FtpReply.FILE_STATUS_OK_OPENING, "About to open data connection");
         try (Socket dataSocket = session.getDataConnection().establish(10_000)) {
             session.setState(SessionState.TRANSFERRING);
-            ListingFormatter.writeListing(session.getCurrentDir(), dataSocket, false, p -> session.can(p, Perm.READ));
+            ListingFormatter.writeListing(session.store(), session.getCurrentDir(), dataSocket, false, p -> session.can(p, Perm.READ));
         } catch (IOException e) {
             session.reply(FtpReply.CONN_CLOSED_ABORTED, "Transfer aborted");
             return;

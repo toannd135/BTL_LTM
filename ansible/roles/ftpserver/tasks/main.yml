@@ -4,7 +4,10 @@
       - ftp_public_ip is defined and ftp_public_ip | length > 0
       - ftp_db_password | length >= 12
       - ftpadmin_secret | length >= 32
-    fail_msg: "Thieu ftp_public_ip (inventory) hoac bi mat trong group_vars/ftpserver/vault.yml qua ngan"
+      - ftp_storage in ['s3', 'local']
+      - (ftp_storage != 's3' and not clamav_enabled) or storage_private_ip is defined
+      - ftp_storage != 's3' or (ftp_s3_access_key | length >= 8 and ftp_s3_secret_key | length >= 16)
+    fail_msg: "Thieu ftp_public_ip / storage_private_ip (inventory), bi mat trong group_vars/ftpserver/vault.yml qua ngan, hoac thieu vault_ftp_s3_access_key/vault_ftp_s3_secret_key (ftp_storage: s3)"
     quiet: true
 
 - name: Tao thu muc du lieu ung dung (uid {{ ftp_app_uid }} dung chung cho ftpserver va admin-web)
@@ -42,15 +45,6 @@
     mode: "0644"
   notify: Khoi dong lai ftpserver
 
-- name: Ghi clamd.conf cho clamdscan trong admin-web (tro toi container clamd)
-  ansible.builtin.copy:
-    dest: "{{ ftp_base_dir }}/config/clamd.conf"
-    mode: "0644"
-    content: |
-      TCPSocket 3310
-      TCPAddr clamd
-  when: clamav_enabled
-
 - name: Ghi .env (bi mat)
   ansible.builtin.template:
     src: env.j2
@@ -86,7 +80,7 @@
         src: "{{ ftp_src_dir }}/admin-web/{{ item }}"
         dest: "{{ ftp_base_dir }}/build/admin-web/"
         mode: "0644"
-      loop: [Dockerfile, requirements.txt, main.py, templates, static]
+      loop: [Dockerfile, requirements.txt, main.py, storage.py, templates, static]
 
 - name: Dang nhap GHCR (image private)
   ansible.builtin.command:
@@ -101,7 +95,7 @@
     project_src: "{{ ftp_base_dir }}"
     build: "{{ 'always' if ftp_image_source == 'build' else 'never' }}"
     pull: "{{ 'missing' if ftp_image_source == 'build' else 'always' }}"
-    remove_orphans: true   # xoa container cua service da bo (vd clamd khi clamav_enabled=false)
+    remove_orphans: true   # xoa container cua service da bo (vd seaweedfs/clamd cu tren VM-A)
     state: present
 
 - name: Cho cong FTP mo

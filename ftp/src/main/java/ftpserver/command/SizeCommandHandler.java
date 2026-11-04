@@ -6,7 +6,6 @@ import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 public final class SizeCommandHandler implements CommandHandler {
@@ -22,11 +21,11 @@ public final class SizeCommandHandler implements CommandHandler {
         }
         try {
             Path target = session.pathResolver().resolve(session.getCurrentDir(), arg);
-            if (!Files.isRegularFile(target) || !session.can(target, Perm.READ)) {
+            if (!session.store().isFile(target) || !session.can(target, Perm.READ)) {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Not a regular file");
                 return;
             }
-            session.reply(FtpReply.FILE_STATUS, String.valueOf(Files.size(target)));
+            session.reply(FtpReply.FILE_STATUS, String.valueOf(session.store().size(target)));
         } catch (SecurityException e) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
         } catch (IOException e) {

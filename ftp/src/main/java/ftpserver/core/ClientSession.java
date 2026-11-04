@@ -24,6 +24,7 @@ import ftpserver.auth.UserManager;
 import ftpserver.config.Config;
 import ftpserver.data.DataConnection;
 import ftpserver.data.TransferType;
+import ftpserver.fs.FileStore;
 import ftpserver.fs.PathResolver;
 import ftpserver.tls.TlsSupport;
 
@@ -49,6 +50,7 @@ public class ClientSession implements Runnable {
     private final AclService acl;
     private final RbacService rbac;
     private final ScanService scan;
+    private final FileStore store;
     private RbacService.Grants grants;
     private final Set<Long> breakglassLogged = new java.util.HashSet<>();
 
@@ -83,6 +85,7 @@ public class ClientSession implements Runnable {
         this.acl = services.acl();
         this.rbac = services.rbac();
         this.scan = services.scan();
+        this.store = services.store();
         this.ioSocket = controlSocket;
     }
 
@@ -301,6 +304,8 @@ public class ClientSession implements Runnable {
 
     public RbacService rbac() { return rbac; }
     public ScanService scan() { return scan; }
+    /** Noi luu tru tep (dia cuc bo hoac SeaweedFS/S3). */
+    public FileStore store() { return store; }
     public AuditLog auditLog() { return audit; }
     public void setGrants(RbacService.Grants g) { this.grants = g; }
     public RbacService.Grants grants() { return grants; }

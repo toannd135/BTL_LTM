@@ -11,9 +11,9 @@ ftp_data_disk: /dev/disk/azure/scsi1/lun0
 ftp_base_dir: /srv/ftp
 ftp_app_uid: 10001           # trung uid user admin trong image ftpadmin
 
-# VM B2ats_v2 (1 GB RAM): swap + gioi han heap Java. 4G vi clamd nap CSDL chu ky ~1-1.5 GB
-swap_size: 4G
-ftp_java_opts: "-Xmx256m -XX:+UseSerialGC"
+# VM-A B2ats_v2 (1 GB RAM): swap + gioi han heap Java (VM-B dat swap rieng trong group_vars/storage)
+swap_size: 2G
+ftp_java_opts: "-Xmx192m -XX:+UseSerialGC"
 
 ftp_control_port: 2121
 ftp_pasv_min: 50000
@@ -31,6 +31,12 @@ ftp_tls_keystore_src: "{{ playbook_dir }}/../ftp/certs/ftps.p12"
 ftp_db_password: "{{ tf_ftp_db_password | default(vault_ftp_db_password) }}"
 ftpadmin_secret: "{{ vault_ftpadmin_secret }}"
 ftp_tls_keystore_password: "{{ vault_ftp_tls_keystore_password | default('') }}"
+# Noi luu tru tep: s3 = SeaweedFS tren VM-B (role storage, S3 API qua IP private storage_private_ip); local = o dia ./ftproot
+ftp_storage: s3
+seaweedfs_image: chrislusf/seaweedfs:4.50
+ftp_s3_bucket: ftp-files
+ftp_s3_access_key: "{{ vault_ftp_s3_access_key | default('') }}"
+ftp_s3_secret_key: "{{ vault_ftp_s3_secret_key | default('') }}"
 # Image GHCR private thi can token (scope read:packages); public thi bo trong
 ghcr_username: "{{ vault_ghcr_username | default('') }}"
 ghcr_token: "{{ vault_ghcr_token | default('') }}"

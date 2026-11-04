@@ -1,0 +1,5 @@
+- name: Khoi dong lai clamd
+  community.docker.docker_compose_v2:
+    project_src: "{{ ftp_base_dir }}"
+    services: [clamd]
+    state: restarted
