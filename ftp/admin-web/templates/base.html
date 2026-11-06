@@ -38,7 +38,7 @@
 </nav>
 {% endif %}
 <main class="container-xxl {% block main_class %}pb-5{% endblock %}">
-  {% if flash %}<div class="alert alert-{{ flash.kind }}">{{ flash.msg }}</div>{% endif %}
+  {% if flash %}<div class="alert alert-{{ flash.kind }} alert-dismissible" role="alert">{{ flash.msg }}<button type="button" class="btn-close" aria-label="Đóng" onclick="this.parentElement.remove()"></button></div>{% endif %}
   {% block content %}{% endblock %}
 </main>
 <script>

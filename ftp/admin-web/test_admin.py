@@ -84,7 +84,7 @@ c.post("/users", data={"username": "bad2", "password": "pw1234", "role": "employ
 with main.db() as d:
     check("tao user voi vai tro/scope sai bi tu choi", d.execute("SELECT COUNT(*) FROM users WHERE username IN ('bad1','bad2')").fetchone()[0] == 0)
 c.post("/users", data={"username": "sv2", "password": "pw1234", "role": "employee", "home": "/", "csrf": t})
-check("trung ten bi tu choi", "da ton tai" in c.get("/users").text)
+check("trung ten bi tu choi", "đã tồn tại" in c.get("/users").text)
 c.post("/users", data={"username": "../x", "password": "pw1234", "role": "employee", "home": "/", "csrf": t})
 with main.db() as d:
     check("ten khong hop le bi tu choi", d.execute("SELECT COUNT(*) FROM users WHERE username='../x'").fetchone()[0] == 0)

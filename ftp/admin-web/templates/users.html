@@ -20,7 +20,7 @@
       <td>{{ u.username }}</td>
       <td>
         {% for r, sc in assigned[u.username] %}
-          {% if 'role:manage' in perms %}<form method="post" action="/users/{{ u.username }}/roles/remove" class="d-inline">
+          {% if 'role:manage' in perms %}<form method="post" action="/users/{{ u.username }}/roles/remove" class="d-inline" onsubmit="return confirm('Gỡ vai trò {{ r }} khỏi {{ u.username }}?')">
             <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="role" value="{{ r }}"><input type="hidden" name="scope" value="{{ sc }}">
             <span class="badge text-bg-light border">{{ r }}@{{ sc }} <button class="btn btn-link btn-sm p-0 text-danger text-decoration-none" title="Gỡ vai trò">✕</button></span></form>
           {% else %}<span class="badge text-bg-light border">{{ r }}@{{ sc }}</span>{% endif %}
@@ -33,11 +33,11 @@
       </td>
       <td>{{ u.home }}</td>
       <td>{% if u.enabled %}<span class="badge text-bg-success">Hoạt động</span>{% else %}<span class="badge text-bg-secondary">Bị khóa</span>{% endif %}</td>
-      <td><form method="post" action="/users/{{ u.username }}/password" class="d-flex gap-1">
+      <td><form method="post" action="/users/{{ u.username }}/password" class="d-flex gap-1" onsubmit="return confirm('Đặt lại mật khẩu cho {{ u.username }}?')">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input name="password" type="password" class="form-control form-control-sm" placeholder="Mật khẩu mới" required>
         <button class="btn btn-sm btn-outline-secondary">Đặt</button></form></td>
-      <td><form method="post" action="/users/{{ u.username }}/toggle">
+      <td><form method="post" action="/users/{{ u.username }}/toggle" onsubmit="return confirm('{{ 'Khóa' if u.enabled else 'Mở khóa' }} tài khoản {{ u.username }}?')">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <button class="btn btn-sm btn-outline-{{ 'danger' if u.enabled else 'success' }}">{{ 'Khóa' if u.enabled else 'Mở khóa' }}</button></form></td>
     </tr>
