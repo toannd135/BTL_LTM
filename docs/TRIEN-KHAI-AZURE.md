@@ -47,7 +47,7 @@ terraform -chdir=terraform output                        # IP, lệnh ssh, tunne
 ftp -p <public_ip> 2121                                  # hoặc FileZilla, chế độ passive
 ssh -N -L 8080:127.0.0.1:8080 azureuser@<public_ip>      # rồi mở http://localhost:8080
 ```
-Tài khoản seed `admin/admin`, `sv/sv` — **đổi mật khẩu ngay** sau lần chạy đầu.
+Tài khoản seed (`admin`, `sv`, `fm`, `auditor`) có mật khẩu mặc định. Đặt `vault_ftp_seed_password` (≥ 8 ký tự) để server tự đổi mật khẩu các tài khoản còn mật khẩu mặc định khi khởi động; không đặt thì server in cảnh báo.
 
 FTPS: tạo keystore bằng `ftp/scripts/gen-keystore.sh` vào `ftp/certs/ftps.p12`, đặt `ftp_tls_enabled: true`
 (và `ftp_tls_required: true` nếu bắt buộc) trong `group_vars/ftpserver/vars.yml`, thêm `vault_ftp_tls_keystore_password`.
