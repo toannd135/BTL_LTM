@@ -30,6 +30,8 @@ ftp_tls_keystore_src: "{{ playbook_dir }}/../ftp/certs/ftps.p12"
 # Terraform ghi tf_ftp_db_password (mat khau Azure PostgreSQL) vao inventory; khong co thi dung vault
 ftp_db_password: "{{ tf_ftp_db_password | default(vault_ftp_db_password) }}"
 ftpadmin_secret: "{{ vault_ftpadmin_secret }}"
+# Mat khau thay cho admin/admin, sv/sv, fm/fm, auditor/auditor o lan chay dau (>= 8 ky tu); rong = giu mac dinh va server canh bao
+ftp_seed_password: "{{ vault_ftp_seed_password | default('') }}"
 ftp_tls_keystore_password: "{{ vault_ftp_tls_keystore_password | default('') }}"
 # Noi luu tru tep: s3 = SeaweedFS tren VM-B (role storage, S3 API qua IP private storage_private_ip); local = o dia ./ftproot
 ftp_storage: s3
