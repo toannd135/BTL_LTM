@@ -3,7 +3,6 @@ package ftpserver.command;
 import java.io.IOException;
 import java.nio.file.Path;
 
-import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -25,9 +24,9 @@ public final class DeleCommandHandler implements CommandHandler {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Not a regular file");
                 return;
             }
-            if (!session.canDo("file:delete", target, Perm.WRITE)) {
-                session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied (requires file:delete)");
-                session.audit("DELETE", arg + " (denied: no file:delete permission)", false);
+            if (!session.canDelete(target)) {
+                session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied (only the owner or a file manager can delete)");
+                session.audit("DELETE", arg + " (denied: not owner and no file:delete permission)", false);
                 return;
             }
             session.store().delete(target);

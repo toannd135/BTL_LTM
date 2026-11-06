@@ -3,7 +3,9 @@
 Cach dung: python bench_throughput.py [--host 127.0.0.1] [--port 2121] [--user fm] [--password fm]
                                        [--size-mb 20] [--clients 1,5,10,25] [--tls]
 Tai khoan phai co quyen ghi (vd file_manager). Moi client tai len roi tai ve file rieng cua minh, sau do xoa.
-In bang: so client | tong MB/s upload | tong MB/s download | thoi gian trung binh 1 lan | loi.
+In bang: so client | tong MB/s upload | tong MB/s download | thoi gian trung binh 1 lan | loi | thoi gian ca dot | MB/s thuc (wall-clock).
+Hai cot MB/s dau tinh theo thoi gian trung binh cua tung client nen bi thoi phong khi cac client khong chay chong nhau;
+cot "MB/s thuc" = tong byte (len + xuong) / thoi gian ca dot, dung cot nay de bao cao.
 """
 import argparse
 import hashlib
@@ -61,11 +63,12 @@ def bench(n, payload, digest, args):
     errors = n - len(ok)
     mb = len(payload) / 1e6
     if not ok:
-        return n, 0, 0, 0, errors, [r for r in out if isinstance(r, Exception)][:1]
+        return n, 0, 0, 0, errors, wall, 0, [r for r in out if isinstance(r, Exception)][:1]
     up = statistics.mean(r[0] for r in ok)
     down = statistics.mean(r[1] for r in ok)
     # tong thong luong = tong byte cua cac client thanh cong / thoi gian trung binh moi pha
-    return n, len(ok) * mb / up, len(ok) * mb / down, (up + down) / 2, errors, [r for r in out if isinstance(r, Exception)][:1]
+    real = len(ok) * 2 * mb / wall
+    return n, len(ok) * mb / up, len(ok) * mb / down, (up + down) / 2, errors, wall, real, [r for r in out if isinstance(r, Exception)][:1]
 
 
 def main():
@@ -82,10 +85,10 @@ def main():
     payload = os.urandom(args.size_mb * 1_000_000)
     digest = hashlib.sha256(payload).hexdigest()
     print("File %d MB, %s" % (args.size_mb, "FTPS" if args.tls else "FTP"))
-    print("%8s %14s %16s %12s %6s" % ("clients", "upload MB/s", "download MB/s", "avg sec", "loi"))
+    print("%8s %14s %16s %12s %6s %10s %14s" % ("clients", "upload MB/s", "download MB/s", "avg sec", "loi", "wall sec", "MB/s thuc"))
     for n in (int(x) for x in args.clients.split(",")):
-        n, up, down, avg, errors, sample = bench(n, payload, digest, args)
-        print("%8d %14.1f %16.1f %12.2f %6d" % (n, up, down, avg, errors))
+        n, up, down, avg, errors, wall, real, sample = bench(n, payload, digest, args)
+        print("%8d %14.1f %16.1f %12.2f %6d %10.2f %14.0f" % (n, up, down, avg, errors, wall, real))
         if sample:
             print("         vi du loi:", repr(sample[0]))
 
