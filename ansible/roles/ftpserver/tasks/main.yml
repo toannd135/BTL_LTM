@@ -26,7 +26,7 @@
     mode: "{{ item.mode }}"
   loop:
     - { path: config, mode: "0755" }
-    - { path: certs, mode: "0750" }
+    - { path: certs, mode: "0755" }    # uid ung dung can di qua thu muc; tep ftps.p12 van 0400 chu uid ung dung
     - { path: pgdata, mode: "0700" }   # entrypoint postgres tu chown
 
 - name: Chep keystore FTPS
