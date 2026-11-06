@@ -40,6 +40,7 @@ services:
       FTP_DB_URL: jdbc:postgresql://{{ ftp_db_url_suffix }}
       FTP_DB_USER: ftp
       FTP_DB_PASSWORD: ${FTP_DB_PASSWORD}
+      FTP_SEED_PASSWORD: ${FTP_SEED_PASSWORD:-}
 {% if ftp_storage == 's3' %}
       FTP_S3_ACCESS_KEY: ${FTP_S3_ACCESS_KEY}
       FTP_S3_SECRET_KEY: ${FTP_S3_SECRET_KEY}
