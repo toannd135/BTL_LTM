@@ -382,7 +382,8 @@ public class FtpSession implements RemoteSession {
 
     @Override
     public boolean canDelete() {
-        return roles.isEmpty() || hasRole("file_manager");
+        // employee được bật nút để thu hồi tệp mình tải nhầm; server chỉ cho xóa tệp do chính họ tải lên (acl.isOwner).
+        return roles.isEmpty() || hasRole("file_manager") || hasRole("employee");
     }
 
     @Override
