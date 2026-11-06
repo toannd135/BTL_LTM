@@ -1,6 +1,8 @@
 package ftpserver;
 
 import java.nio.file.Path;
+import java.sql.SQLException;
+import java.util.List;
 
 import ftpserver.acl.AclService;
 import ftpserver.core.Services;
@@ -8,6 +10,7 @@ import ftpserver.rbac.RbacService;
 import ftpserver.scan.ClamdClient;
 import ftpserver.scan.ScanService;
 import ftpserver.audit.AuditLog;
+import ftpserver.auth.SeedAccounts;
 import ftpserver.auth.UserManager;
 import ftpserver.config.Config;
 import ftpserver.core.CommandRegistrations;
@@ -35,6 +38,22 @@ public final class Main {
         return new ScanService(database, config.scanCommand(), config.scanEnforce());
     }
 
+    /** Đổi mật khẩu tài khoản mẫu theo FTP_SEED_PASSWORD, hoặc cảnh báo nếu chúng còn mật khẩu mặc định. */
+    private static void warnDefaultPasswords(Database database) throws SQLException {
+        String seedPassword = System.getenv("FTP_SEED_PASSWORD");
+        if (seedPassword != null && seedPassword.isBlank()) {
+            seedPassword = null;
+        }
+        List<String> weak = SeedAccounts.harden(database, seedPassword);
+        if (seedPassword != null) {
+            System.out.println("Seed accounts: mat khau mac dinh da duoc thay bang FTP_SEED_PASSWORD");
+        }
+        if (!weak.isEmpty()) {
+            System.err.println("CANH BAO: tai khoan " + weak + " con mat khau mac dinh. Dat FTP_SEED_PASSWORD (>= 8 ky tu) "
+                    + "hoac doi mat khau qua admin web truoc khi dua len moi truong that.");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("--version")) {
             System.out.println(VERSION);
@@ -58,6 +77,7 @@ public final class Main {
         int applied = new Migrator(database).migrate();
         String dbName = config.dbUrl() == null ? config.dbPath().toString() : config.dbUrl().replaceAll("[?;].*$", "");
         System.out.println("Database " + database.dialect() + " " + dbName + " ready (" + applied + " migration(s) applied)");
+        warnDefaultPasswords(database);
         UserManager userManager = new UserManager(database);
         FileStore store = config.s3Enabled()
                 ? S3FileStore.connect(config.s3().endpoint(), config.s3().region(), config.s3().accessKey(),
