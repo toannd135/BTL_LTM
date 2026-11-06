@@ -347,6 +347,18 @@ public class ClientSession implements Runnable {
         return breakglass(key); // neu vai tro/ACL khong cho, cap quyen dac biet con han van co the cho phep
     }
 
+    /**
+     * Xoa tep/thu muc: nguoi co file:delete (file_manager) theo ACL, hoac chu so huu (nguoi da tai len/tao, hoac chu
+     * thu muc cha) co file:upload — de nguoi dung go duoc tep minh tai nham ma khong can nho nguoi quan ly.
+     */
+    public boolean canDelete(Path real) {
+        if (canDo("file:delete", real, Perm.WRITE)) {
+            return true;
+        }
+        String key = aclPath(real);
+        return grants != null && grants.has("file:upload", key) && acl.isOwner(user, key);
+    }
+
     /** Chia se tep: chu so huu co file:share, hoac nguoi quan ly. */
     public boolean canShare(Path real) {
         String key = aclPath(real);

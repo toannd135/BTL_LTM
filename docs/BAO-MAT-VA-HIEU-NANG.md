@@ -39,6 +39,13 @@ Bật TLS phía server: xem mục FTPS trong `TRIEN-KHAI-AZURE.md` và `ftp/scri
 khi `scan.enforce=true` (Ansible bật mặc định, biến `ftp_scan_enforce`). Upload được quét bằng clamd **trước** khi
 commit vào kho nên tệp nhiễm không bao giờ được lưu (xem mục 10 trong `ftp/LUONG-DU-LIEU.md`).
 
+## 2b. Quyền xóa tệp
+
+`DELE` và `RMD` cho phép xóa khi người dùng thỏa **một trong hai**: (1) có quyền `file:delete` (vai trò `file_manager`) và ACL cho phép;
+(2) có quyền `file:upload` và là **chủ sở hữu** tệp/thư mục (người đã tải lên hoặc tạo, hoặc chủ thư mục cha).
+Nhờ vậy nhân viên (`employee`) tự gỡ được tệp mình tải nhầm lên; tệp của người khác vẫn chỉ `file_manager` xóa được.
+Mã nguồn: `ClientSession.canDelete`. Lần từ chối được ghi audit: `denied: not owner and no file:delete permission`.
+
 ## 3. Tài khoản mẫu
 
 Migration tạo 4 tài khoản có mật khẩu mặc định: `admin`, `sv`, `fm`, `auditor` (mật khẩu trùng tên đăng nhập).
@@ -71,13 +78,16 @@ python3 scripts/bench_throughput.py --host <ip> --port 2121 --user fm --password
 Mỗi client tải lên rồi tải về một tệp riêng, kiểm tra SHA-256, xóa tệp; in MB/s tổng, thời gian trung bình và số lỗi.
 Tài khoản cần quyền ghi (ví dụ `fm`). Số dải cổng PASV phải đủ cho số client (mỗi client dùng một cổng cho mỗi lần truyền).
 
-Kết quả tham khảo (loopback, một máy, file 20 MB, 0 lỗi):
+Kết quả đo ngày 2026-11-06 (loopback, một máy 16 nhân, file 20 MB, FTP thường, storage local, không quét virus; 0 lỗi, SHA-256 khớp):
 
-| Số client | FTP up / down (MB/s) | FTPS up / down (MB/s) |
+| Số client | Thời gian cả đợt | Thông lượng thực (lên+xuống) |
 |---|---|---|
-| 1 | 313 / 373 | 87 / 313 |
-| 10 | 1498 / 1706 | 1762 / 1496 |
-| 25 | 2909 / 1915 | — |
+| 1 | 0,16 s | 252 MB/s |
+| 10 | 0,75 s | 535 MB/s |
+| 50 | 3,26 s | 613 MB/s |
+| 100 | 6,71 s | 596 MB/s |
+| 200 | 13,70 s | 584 MB/s |
 
-Loopback không có độ trễ và băng thông mạng thật nên chỉ phản ánh chi phí phần mềm (và chi phí TLS ở 1 client).
-Số liệu cho báo cáo nên đo lại giữa hai máy hoặc từ client tới VM Azure.
+- Server chịu được 200 kết nối đồng thời không lỗi; thông lượng bão hòa ~600 MB/s từ khoảng 10 client; thời gian cả đợt tăng tuyến tính theo số client.
+- Cột "MB/s up/down" của script (tổng byte / thời gian trung bình mỗi client) **bị thổi phồng** khi client không chạy chồng nhau (vd. 100 client cho 13.888 MB/s upload), nên báo cáo dùng cột "MB/s thực" (wall-clock).
+- Loopback không có độ trễ và băng thông mạng thật nên chỉ phản ánh chi phí phần mềm. Chưa đo FTPS, S3/SeaweedFS, clamd; số liệu cho báo cáo nên đo lại giữa hai máy hoặc từ client tới VM Azure.
