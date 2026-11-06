@@ -96,7 +96,6 @@ public class MainWindow {
     private TextField userField;
     private PasswordField passField;
     private Button connectButton;
-    private Label roleLabel;
     private Button refreshBtn;
     private Button localMkdBtn;
     private Button mkdBtn;
@@ -186,8 +185,6 @@ public class MainWindow {
         connectButton.getStyleClass().add("primary");
         connectButton.setDefaultButton(true);
         connectButton.setOnAction(e -> onConnectClicked());
-        roleLabel = new Label();
-        roleLabel.setMinWidth(0);
 
         refreshBtn = iconButton("Làm mới", "refresh");
         refreshBtn.setTooltip(new Tooltip("Làm mới cả hai bảng"));
@@ -216,7 +213,7 @@ public class MainWindow {
                 labeled("Mật khẩu:", passField),
                 connectButton,
                 new Separator(Orientation.VERTICAL),
-                refreshBtn, showHiddenBox, spacer, roleLabel);
+                refreshBtn, showHiddenBox, spacer);
         bar.setAlignment(Pos.CENTER_LEFT);
         VBox top = new VBox(bar);
         top.getStyleClass().add("top-bar");
@@ -613,15 +610,11 @@ public class MainWindow {
         cancelBtn.setDisable(true);
         if (isConnected) {
             RemoteSession s = session;
-            roleLabel.setText((s.isSecure() ? "🔒 Mã hóa TLS — " : "⚠ Chưa mã hóa — ")
-                    + (s.roles().isEmpty() ? "Vai trò: (máy chủ không báo vai trò)"
-                    : "Vai trò: " + String.join(", ", s.roles())));
-            progressLabel.setText("Đã đăng nhập — " + roleLabel.getText());
+            progressLabel.setText("Đã đăng nhập — " + (s.isSecure() ? "🔒 Mã hóa TLS" : "⚠ Chưa mã hóa"));
             mkdBtn.setDisable(!s.canWrite());
             uploadBtn.setDisable(!s.canWrite());
             deleteBtn.setDisable(!s.canDelete());
         } else {
-            roleLabel.setText("");
             mkdBtn.setDisable(true);
             uploadBtn.setDisable(true);
             deleteBtn.setDisable(true);
