@@ -27,7 +27,8 @@ public final class ListCommandHandler implements CommandHandler {
         session.reply(FtpReply.FILE_STATUS_OK_OPENING, "About to open data connection");
         try (Socket dataSocket = session.getDataConnection().establish(10_000)) {
             session.setState(SessionState.TRANSFERRING);
-            ListingFormatter.writeListing(session.store(), session.getCurrentDir(), dataSocket, true, p -> session.can(p, Perm.READ));
+            ListingFormatter.writeListing(session.store(), session.getCurrentDir(), dataSocket, true, p -> session.can(p, Perm.READ),
+                    p -> session.acl().ownerOf(session.aclPath(p)));
         } catch (IOException e) {
             session.reply(FtpReply.CONN_CLOSED_ABORTED, "Transfer aborted");
             return;

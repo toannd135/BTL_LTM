@@ -11,7 +11,10 @@ import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.ZoneId;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.prefs.Preferences;
@@ -30,6 +33,7 @@ import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
+import javafx.geometry.Side;
 import javafx.scene.Cursor;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
@@ -58,6 +62,7 @@ import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -125,8 +130,15 @@ public class MainWindow {
     public Scene buildScene() {
         BorderPane root = new BorderPane();
         root.setTop(buildTopArea());
-        root.setCenter(buildCenterArea());
-        root.setBottom(buildBottomArea());
+        // Thanh chia ngang: kéo lên/xuống để đổi chiều cao ô nhật ký; cửa sổ phóng to thì bảng tệp giãn ra, nhật ký giữ nguyên.
+        SplitPane center = buildCenterArea();
+        VBox bottom = buildBottomArea();
+        bottom.setMinHeight(110);
+        SplitPane vertical = new SplitPane(center, bottom);
+        vertical.setOrientation(Orientation.VERTICAL);
+        vertical.setDividerPositions(0.74);
+        SplitPane.setResizableWithParent(bottom, false);
+        root.setCenter(vertical);
 
         refreshLocalTable();
         setConnected(false, "");
@@ -225,6 +237,9 @@ public class MainWindow {
         localTable.getColumns().add(textColumn("Chủ sở hữu", LocalFile::owner, 90, false));
         localTable.getColumns().add(textColumn("Nhóm", LocalFile::group, 90, false));
         localTable.getColumns().add(textColumn("Ngày tạo", LocalFile::created, 130, false));
+        localTable.getColumns().add(textColumn("Kích thước (byte)", f -> f.directory() ? "" : String.valueOf(f.size()), 110, false));
+        localTable.getColumns().add(textColumn("Phần mở rộng", f -> extensionOf(f.name(), f.directory()), 100, false));
+        localTable.setTableMenuButtonVisible(true);
         installColumnChooser(localTable, "local");
         setupLocalDrag();
         localTable.setOnMouseClicked(e -> {
@@ -283,8 +298,11 @@ public class MainWindow {
         remoteTable.getColumns().add(textColumn("Loại", f -> FileIcons.typeName(f.name(), f.directory()), 120, false));
         remoteTable.getColumns().add(textColumn("Ngày sửa", f -> Formats.remoteDate(f.modified()), 130));
         remoteTable.getColumns().add(textColumn("Quyền", RemoteFile::permissions, 95, false));
-        remoteTable.getColumns().add(textColumn("Chủ sở hữu", RemoteFile::owner, 90, false));
+        remoteTable.getColumns().add(textColumn("Chủ sở hữu", RemoteFile::owner, 100));
         remoteTable.getColumns().add(textColumn("Nhóm", RemoteFile::group, 90, false));
+        remoteTable.getColumns().add(textColumn("Kích thước (byte)", f -> f.directory() ? "" : String.valueOf(f.size()), 110, false));
+        remoteTable.getColumns().add(textColumn("Phần mở rộng", f -> extensionOf(f.name(), f.directory()), 100, false));
+        remoteTable.setTableMenuButtonVisible(true);
         installColumnChooser(remoteTable, "remote");
         setupRemoteDrop();
         remoteTable.setOnMouseClicked(e -> {
@@ -384,6 +402,8 @@ public class MainWindow {
         VBox logBox = new VBox(6, logHeader, logArea);
         logBox.getStyleClass().add("log-box");
         VBox.setMargin(logBox, new Insets(0, 8, 8, 8));
+        VBox.setVgrow(logArea, Priority.ALWAYS);
+        VBox.setVgrow(logBox, Priority.ALWAYS);
 
         return new VBox(4, progressBox, logBox);
     }
@@ -432,7 +452,7 @@ public class MainWindow {
             p = null;
         }
         if (p == null || !java.nio.file.Files.isDirectory(p)) {
-            logArea.appendText("Đường dẫn không hợp lệ: " + text + "\n");
+            appendLog("Đường dẫn không hợp lệ: " + text);
             localPathField.setText(localDir.toString());
             return;
         }
@@ -638,7 +658,74 @@ public class MainWindow {
         dialog.setHeaderText("Chia sẻ \"" + file + "\""
                 + (sel.directory() ? "\nQuyền áp dụng cho mọi tệp và thư mục con bên trong." : ""));
         TextField userBox = new TextField();
-        userBox.setPromptText("tên người dùng");
+        userBox.setPromptText("gõ để tìm người dùng…");
+        Set<String> picked = new LinkedHashSet<>();
+        FlowPane chips = new FlowPane(6, 6);
+        ContextMenu suggest = new ContextMenu();
+        AtomicInteger querySeq = new AtomicInteger();
+        Runnable[] renderChips = new Runnable[1];
+        java.util.function.Consumer<String> pick = name -> {
+            picked.add(name);
+            userBox.clear();
+            suggest.hide();
+            renderChips[0].run();
+        };
+        renderChips[0] = () -> {
+            chips.getChildren().clear();
+            for (String u : picked) {
+                Button chip = new Button(u + "  ✕");
+                chip.setOnAction(ev -> {
+                    picked.remove(u);
+                    renderChips[0].run();
+                });
+                chips.getChildren().add(chip);
+            }
+        };
+        userBox.textProperty().addListener((o, was, now) -> {
+            String q = now.trim();
+            int seq = querySeq.incrementAndGet();
+            if (q.isEmpty() || q.contains(" ")) {
+                suggest.hide();
+                return;
+            }
+            worker.submit(() -> {
+                List<String> names = new java.util.ArrayList<>();
+                try {
+                    for (String line : session.site("USERS " + q).split("\n")) {
+                        if (!line.isEmpty() && !Character.isDigit(line.charAt(0))) {
+                            names.add(line.trim());
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+                Platform.runLater(() -> {
+                    if (seq != querySeq.get()) {
+                        return; // kết quả cũ, người dùng đã gõ tiếp
+                    }
+                    suggest.getItems().clear();
+                    for (String n : names) {
+                        if (!picked.contains(n)) {
+                            MenuItem mi = new MenuItem(n);
+                            mi.setOnAction(ev -> pick.accept(n));
+                            suggest.getItems().add(mi);
+                        }
+                    }
+                    if (suggest.getItems().isEmpty()) {
+                        MenuItem none = new MenuItem("Không có người dùng khớp");
+                        none.setDisable(true);
+                        suggest.getItems().add(none);
+                    }
+                    if (userBox.isFocused()) {
+                        suggest.show(userBox, Side.BOTTOM, 0, 0);
+                    }
+                });
+            });
+        });
+        userBox.setOnAction(ev -> {
+            if (!suggest.getItems().isEmpty() && !suggest.getItems().get(0).isDisable()) {
+                pick.accept(suggest.getItems().get(0).getText());
+            }
+        });
         ComboBox<String> permBox = new ComboBox<>(FXCollections.observableArrayList("READ", "DOWNLOAD", "WRITE", "NONE"));
         permBox.setValue("READ");
         permBox.setTooltip(new Tooltip("NONE = thu hồi quyền"));
@@ -652,7 +739,8 @@ public class MainWindow {
 
         HBox form = new HBox(8, labeled("Người dùng:", userBox), labeled("Quyền:", permBox), applyBtn);
         form.setAlignment(Pos.CENTER_LEFT);
-        VBox content = new VBox(8, form, result, new Label("Quyền hiện tại (SITE ACL):"), aclArea);
+        VBox content = new VBox(8, form, new Label("Người nhận đã chọn (bấm để bỏ):"), chips, result,
+                new Label("Quyền hiện tại (SITE ACL):"), aclArea);
         content.setPrefWidth(520);
         dialog.getDialogPane().setContent(content);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
@@ -668,29 +756,41 @@ public class MainWindow {
             Platform.runLater(() -> aclArea.setText(shown));
         });
         applyBtn.setOnAction(e -> {
-            String user = userBox.getText().trim();
-            if (user.isEmpty() || user.contains(" ")) {
-                result.setText("Nhập một tên người dùng (không có dấu cách).");
+            String typed = userBox.getText().trim();
+            if (!typed.isEmpty() && !typed.contains(" ")) {
+                picked.add(typed);   // gõ tên đầy đủ rồi bấm Áp dụng luôn
+                userBox.clear();
+                renderChips[0].run();
+            }
+            if (picked.isEmpty()) {
+                result.setText("Chọn ít nhất một người dùng (gõ để tìm).");
                 return;
             }
+            List<String> targets = List.copyOf(picked);
             String perm = permBox.getValue();
             applyBtn.setDisable(true);
             worker.submit(() -> {
-                String msg;
-                try {
-                    String reply = session.site("SHARE " + file + " " + user + " " + perm);
-                    msg = "Thành công: " + (reply.length() > 4 ? reply.substring(4) : reply);
-                } catch (Exception ex) {
-                    msg = ErrorText.of(ex);
+                StringBuilder msg = new StringBuilder();
+                List<String> done = new java.util.ArrayList<>();
+                for (String user : targets) {
+                    try {
+                        session.site("SHARE " + file + " " + user + " " + perm);
+                        done.add(user);
+                        msg.append("✓ ").append(user).append(": ").append(perm).append('\n');
+                    } catch (Exception ex) {
+                        msg.append("✗ ").append(user).append(": ").append(ErrorText.of(ex)).append('\n');
+                    }
                 }
-                String shown = msg;
+                String shown = msg.toString().trim();
                 Platform.runLater(() -> {
                     result.setText(shown);
                     appendLog(shown);
+                    picked.removeAll(done);   // người lỗi giữ lại để thử lại
+                    renderChips[0].run();
                     applyBtn.setDisable(false);
                 });
+                loadAcl.run();
             });
-            loadAcl.run();
         });
         loadAcl.run();
         dialog.show();
@@ -1165,8 +1265,20 @@ public class MainWindow {
         });
     }
 
+    /** Thêm dòng nhật ký; chỉ tự cuộn xuống cuối khi người dùng đang ở cuối, đang kéo lên xem thì giữ nguyên vị trí. */
     private void appendLog(String line) {
+        javafx.scene.control.ScrollBar bar = null;
+        for (javafx.scene.Node n : logArea.lookupAll(".scroll-bar")) {
+            if (n instanceof javafx.scene.control.ScrollBar sb && sb.getOrientation() == Orientation.VERTICAL) {
+                bar = sb;
+            }
+        }
+        boolean atBottom = bar == null || bar.getValue() >= bar.getMax() - 2;
+        double top = logArea.getScrollTop();
         logArea.appendText(line + "\n");
+        if (!atBottom) {
+            Platform.runLater(() -> logArea.setScrollTop(top));
+        }
     }
 
     /** Cột Tên: icon thư mục/loại file + tên; sắp xếp thư mục trước, ".." trên cùng. */
@@ -1243,6 +1355,11 @@ public class MainWindow {
             menu.getItems().add(item);
         }
         cols.forEach(c -> c.setContextMenu(menu));
+    }
+
+    private static String extensionOf(String name, boolean dir) {
+        int i = name.lastIndexOf('.');
+        return dir || i <= 0 || i == name.length() - 1 ? "" : name.substring(i + 1).toLowerCase();
     }
 
     /** Đọc thuộc tính một tệp cục bộ; hệ không có POSIX (Windows) thì để trống quyền/nhóm. */

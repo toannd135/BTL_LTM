@@ -192,6 +192,27 @@ public class AclService {
         }
     }
 
+    /** Goi y ten nguoi dung de chia se: khop tien to, chi tai khoan dang bat, tru `exclude`; toi da `limit` ket qua. */
+    public List<String> searchUsers(String prefix, String exclude, int limit) {
+        String esc = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
+                "SELECT username FROM users WHERE enabled = 1 AND username <> ? "
+                        + "AND LOWER(username) LIKE ? ESCAPE '\\' ORDER BY username LIMIT ?")) {
+            ps.setString(1, exclude);
+            ps.setString(2, esc.toLowerCase() + "%");
+            ps.setInt(3, limit);
+            List<String> out = new java.util.ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    out.add(rs.getString(1));
+                }
+            }
+            return out;
+        } catch (SQLException e) {
+            return List.of();
+        }
+    }
+
     /** Cap (hoac doi) quyen cho user tren path. */
     public void grant(String path, String username, Perm perm, String grantedBy) throws SQLException {
         try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
