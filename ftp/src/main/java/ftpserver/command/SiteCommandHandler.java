@@ -25,7 +25,7 @@ import ftpserver.core.FtpReply;
  */
 public final class SiteCommandHandler implements CommandHandler {
 
-    private static final String USAGE = "Usage: SITE SHARE|ACL|AUDIT|SCAN|BREAKGLASS ...";
+    private static final String USAGE = "Usage: SITE SHARE|USERS|ACL|AUDIT|SCAN|BREAKGLASS ...";
 
     @Override public boolean requiresAuth()  { return true; }
     @Override public boolean requiresWrite() { return false; }
@@ -37,6 +37,7 @@ public final class SiteCommandHandler implements CommandHandler {
         String rest = parts.length > 1 ? parts[1].trim() : "";
         switch (sub) {
             case "SHARE" -> share(session, rest);
+            case "USERS" -> users(session, rest);
             case "ACL" -> acl(session, rest);
             case "AUDIT" -> audit(session, rest);
             case "SCAN" -> scan(session);
@@ -93,6 +94,16 @@ public final class SiteCommandHandler implements CommandHandler {
         }
         session.reply(FtpReply.COMMAND_OK, (revoke ? "Revoked access of " + target : "Granted " + perm + " to " + target) + " on " + key);
         session.audit("SHARE", key + " user=" + target + " perm=" + (revoke ? "NONE" : perm), true);
+    }
+
+    /** SITE USERS <tien to>: goi y nguoi nhan khi chia se. Khong liet ke toan bo: can >= 1 ky tu, toi da 10 ket qua. */
+    private void users(ClientSession session, String prefix) {
+        if (prefix.isEmpty() || prefix.length() > 32 || prefix.contains(" ")) {
+            session.reply(FtpReply.SYNTAX_ERROR_PARAMS, "Usage: SITE USERS <prefix>");
+            return;
+        }
+        List<String> found = session.acl().searchUsers(prefix, session.getUser().name(), 10);
+        session.replyMulti(FtpReply.FILE_STATUS, "Users matching " + prefix, found, "End");
     }
 
     private void acl(ClientSession session, String fileArg) {
