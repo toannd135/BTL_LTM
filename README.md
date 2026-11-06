@@ -268,6 +268,7 @@ python3 scripts/smoke_test.py         # kiểm thử chức năng cơ bản
 python3 scripts/concurrency_test.py   # nhiều client đồng thời
 python3 scripts/pasv_leak_test.py     # kiểm tra rò rỉ cổng PASV
 python3 scripts/ftps_test.py          # FTPS (cần keystore)
+python3 scripts/bench_throughput.py --port 2121 --clients 1,5,10,25 [--tls]   # đo MB/s theo số client
 
 cd admin-web && python test_admin.py  # trang quản trị
 ```
