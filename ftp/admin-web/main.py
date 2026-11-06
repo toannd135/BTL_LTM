@@ -66,6 +66,8 @@ async def remember_client_ip(request: Request, call_next):
 
 app.add_middleware(SessionMiddleware, secret_key=SECRET, https_only=False, same_site="strict", max_age=3600)
 templates = Jinja2Templates(directory=str(BASE / "templates"))
+STATUS_LABELS = {"PENDING": "Chờ quét", "CLEAN": "Sạch", "INFECTED": "Nhiễm mã độc", "QUARANTINED": "Đã cách ly"}
+templates.env.globals["status_label"] = lambda s: STATUS_LABELS.get(s, s)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
 
@@ -364,7 +366,7 @@ def require(*needed: str):
             raise HTTPException(status_code=303, headers={"Location": "/login"})
         request.session["perms"] = sorted(perms)
         if needed and not perms & set(needed):
-            raise HTTPException(status_code=403, detail="Khong du quyen: can " + " hoac ".join(needed))
+            raise HTTPException(status_code=403, detail="Không đủ quyền: cần " + " hoặc ".join(needed))
         return name
     return dep
 
@@ -378,7 +380,7 @@ def csrf_token(request: Request) -> str:
 
 def check_csrf(request: Request, token: str) -> None:
     if not hmac.compare_digest(token or "", request.session.get("csrf", "")):
-        raise HTTPException(status_code=403, detail="CSRF token khong hop le")
+        raise HTTPException(status_code=403, detail="Phiên làm việc đã hết hạn, vui lòng tải lại trang rồi thử lại")
 
 
 def render(request: Request, name: str, **ctx):
@@ -415,7 +417,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         audit(row["username"], "ADMIN_LOGIN", "web admin login perms=" + ",".join(sorted(perms)))
         return back("/")
     audit(username, "ADMIN_LOGIN", "web admin login failed" + (": no web permission" if ok and row else ""), ok=False)
-    flash(request, "Sai tai khoan/mat khau hoac tai khoan khong co quyen quan tri", "danger")
+    flash(request, "Sai tài khoản hoặc mật khẩu, hoặc tài khoản không có quyền quản trị", "danger")
     return back("/login")
 
 
@@ -474,7 +476,7 @@ def create_user(request: Request, admin: str = Depends(require("user:manage")), 
     with db() as c:
         valid_role = role in all_roles(c)
     if not USERNAME_RE.match(username) or not valid_role or len(password) < 4 or home is None or scope is None:
-        flash(request, "Du lieu khong hop le (ten 3-32 ky tu a-z0-9_.-, mat khau >= 4 ky tu, vai tro co that, khong '..')", "danger")
+        flash(request, "Dữ liệu chưa hợp lệ: tên đăng nhập 3-32 ký tự (chữ thường, số, _ . -), mật khẩu từ 4 ký tự, vai trò phải có thật", "danger")
         return back("/users")
     compat, ro = ROLE_COMPAT.get(role, ("user", 0))
     try:
@@ -483,10 +485,10 @@ def create_user(request: Request, admin: str = Depends(require("user:manage")), 
                       (username, hash_password(password), compat, ro, home, utc_now()))
             c.execute("INSERT INTO user_roles(username, role, scope) VALUES (?,?,?)", (username, role, scope))
     except DB_INTEGRITY_ERRORS:
-        flash(request, "Ten dang nhap da ton tai", "danger")
+        flash(request, "Tên đăng nhập đã tồn tại", "danger")
         return back("/users")
     audit(admin, "ADMIN_CREATE_USER", f"{username} role={role}@{scope} home={home}")
-    flash(request, f"Da tao {username}")
+    flash(request, f"Đã tạo tài khoản {username}")
     return back("/users")
 
 
@@ -499,11 +501,11 @@ def toggle_user(username: str, request: Request, admin: str = Depends(require("u
             raise HTTPException(404)
         locking = row["enabled"] == 1
         if locking and (username == admin or (is_sysadmin(c, username) and _other_active_admins(c, username) == 0)):
-            flash(request, "Khong the khoa chinh minh hoac system_admin cuoi cung", "danger")
+            flash(request, "Không thể khóa chính mình hoặc quản trị viên hệ thống cuối cùng", "danger")
             return back("/users")
         c.execute("UPDATE users SET enabled=? WHERE username=?", (0 if locking else 1, username))
     audit(admin, "ADMIN_LOCK_USER" if locking else "ADMIN_UNLOCK_USER", username)
-    flash(request, f"Da {'khoa' if locking else 'mo khoa'} {username}")
+    flash(request, f"Đã {'khóa' if locking else 'mở khóa'} {username}")
     return back("/users")
 
 
@@ -536,10 +538,10 @@ def add_role(username: str, request: Request, admin: str = Depends(require("role
                           (username, role, scope)).rowcount
         sync_compat_role(c, username)
     if not added:
-        flash(request, f"{username} da co {role}@{scope}", "info")
+        flash(request, f"{username} đã có vai trò {role}@{scope}", "info")
         return back("/users")
     audit(admin, "ADMIN_GRANT_ROLE", f"{username} +{role}@{scope}")
-    flash(request, f"Da gan {role}@{scope} cho {username}")
+    flash(request, f"Đã gán {role}@{scope} cho {username}")
     return back("/users")
 
 
@@ -556,16 +558,16 @@ def remove_role(username: str, request: Request, admin: str = Depends(require("r
             row = c.execute("SELECT enabled FROM users WHERE username=?", (username,)).fetchone()
             if username == admin or (row["enabled"] == 1 and _other_active_admins(c, username) == 0):
                 audit(admin, "ADMIN_REVOKE_ROLE", f"{username} -{role}@{scope} refused", ok=False)
-                flash(request, "Khong the tu go system_admin cua chinh minh hoac go system_admin cuoi cung", "danger")
+                flash(request, "Không thể tự gỡ quyền quản trị của chính mình hoặc gỡ quản trị viên hệ thống cuối cùng", "danger")
                 return back("/users")
         removed = c.execute("DELETE FROM user_roles WHERE username=? AND role=? AND scope=?",
                             (username, role, scope)).rowcount
         sync_compat_role(c, username)
     if not removed:
-        flash(request, f"{username} khong co {role}@{scope}", "info")
+        flash(request, f"{username} không có vai trò {role}@{scope}", "info")
         return back("/users")
     audit(admin, "ADMIN_REVOKE_ROLE", f"{username} -{role}@{scope}")
-    flash(request, f"Da go {role}@{scope} khoi {username}")
+    flash(request, f"Đã gỡ {role}@{scope} khỏi {username}")
     return back("/users")
 
 
@@ -574,13 +576,13 @@ def reset_password(username: str, request: Request, admin: str = Depends(require
                    password: str = Form(...), csrf: str = Form(...)):
     check_csrf(request, csrf)
     if len(password) < 4:
-        flash(request, "Mat khau >= 4 ky tu", "danger")
+        flash(request, "Mật khẩu phải từ 4 ký tự", "danger")
         return back("/users")
     with db() as c:
         if c.execute("UPDATE users SET password_hash=? WHERE username=?", (hash_password(password), username)).rowcount == 0:
             raise HTTPException(404)
     audit(admin, "ADMIN_RESET_PASSWORD", username)
-    flash(request, f"Da dat lai mat khau cho {username}")
+    flash(request, f"Đã đặt lại mật khẩu cho {username}")
     return back("/users")
 
 
@@ -705,7 +707,7 @@ def files_sync(request: Request, admin: str = Depends(require("scan:manage")), c
     check_csrf(request, csrf)
     added, changed = sync_files()
     audit(admin, "ADMIN_FILE_SYNC", f"added={added} changed={changed}")
-    flash(request, f"Dong bo xong: {added} tep moi, {changed} tep thay doi")
+    flash(request, f"Đồng bộ xong: {added} tệp mới, {changed} tệp thay đổi")
     return back("/files")
 
 
@@ -722,7 +724,7 @@ def file_scan(file_id: int, request: Request, admin: str = Depends(require("scan
     with db() as c:
         row = _file(c, file_id)
     if row["status"] == "QUARANTINED":
-        flash(request, "Tep dang cach ly", "danger")
+        flash(request, "Tệp đang được cách ly", "danger")
         return back("/files")
     # tai + quet co the mat nhieu phut: khong giu ket noi/giao dich DB trong luc do
     with STORE.local_copy(row["path"]) as local:
@@ -742,12 +744,12 @@ def file_approve(file_id: int, request: Request, admin: str = Depends(require("s
     with db() as c:
         row = _file(c, file_id)
         if row["status"] not in ("PENDING", "INFECTED"):
-            flash(request, "Chi duyet duoc tep PENDING/INFECTED", "danger")
+            flash(request, "Chỉ duyệt được tệp đang chờ quét hoặc nhiễm mã độc", "danger")
             return back("/files")
         c.execute("UPDATE files SET status='CLEAN', detail=?, updated_at=? WHERE id=?",
                   (f"Duyet thu cong boi {admin}", utc_now(), file_id))
     audit(admin, "ADMIN_FILE_APPROVE", row["path"])
-    flash(request, f"Da duyet {row['path']}")
+    flash(request, f"Đã duyệt {row['path']}")
     return back("/files")
 
 
@@ -762,7 +764,7 @@ def file_quarantine(file_id: int, request: Request, admin: str = Depends(require
         c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, updated_at=? WHERE id=?",
                   (qpath, utc_now(), file_id))
     audit(admin, "ADMIN_FILE_QUARANTINE", row["path"])
-    flash(request, f"Da cach ly {row['path']}")
+    flash(request, f"Đã cách ly {row['path']}")
     return back("/files")
 
 
@@ -774,13 +776,13 @@ def file_restore(file_id: int, request: Request, admin: str = Depends(require("s
         if row["status"] != "QUARANTINED":
             return back("/files")
         if STORE.exists(row["path"]):
-            flash(request, "Vi tri goc da co tep khac", "danger")
+            flash(request, "Vị trí gốc đã có tệp khác", "danger")
             return back("/files")
         STORE.restore(row["path"], row["quarantine_path"])
         c.execute("UPDATE files SET status='PENDING', quarantine_path=NULL, detail='Khoi phuc tu cach ly', "
                   "updated_at=? WHERE id=?", (utc_now(), file_id))
     audit(admin, "ADMIN_FILE_RESTORE", row["path"])
-    flash(request, f"Da khoi phuc {row['path']} (chuyen ve PENDING, can quet lai)")
+    flash(request, f"Da khoi phuc {row['path']} (chuyển về trạng thái chờ quét, cần quét lại)")
     return back("/files")
 
 
@@ -791,12 +793,12 @@ def file_delete(file_id: int, request: Request, admin: str = Depends(require("sc
     with db() as c:
         row = _file(c, file_id)
         if row["status"] != "QUARANTINED":
-            flash(request, "Chi xoa han duoc tep dang cach ly", "danger")
+            flash(request, "Chỉ xóa hẳn được tệp đang cách ly", "danger")
             return back("/files")
         STORE.purge(row["quarantine_path"])
         c.execute("DELETE FROM files WHERE id=?", (file_id,))
     audit(admin, "ADMIN_FILE_DELETE", row["path"])
-    flash(request, f"Da xoa han {row['path']}")
+    flash(request, f"Đã xóa hẳn {row['path']}")
     return back("/files")
 
 
