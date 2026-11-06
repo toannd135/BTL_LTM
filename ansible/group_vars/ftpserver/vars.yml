@@ -22,8 +22,8 @@ ftpadmin_port: 8080
 # ftpadmin_bind: mac dinh 127.0.0.1 (roles/ftpserver/defaults), Terraform ghi 0.0.0.0 vao inventory khi mo NSG
 
 # FTPS: dat true va tro toi keystore tao bang ftp/scripts/gen-keystore.sh
-ftp_tls_enabled: false
-ftp_tls_required: false
+ftp_tls_enabled: true
+ftp_tls_required: true
 ftp_tls_keystore_src: "{{ playbook_dir }}/../ftp/certs/ftps.p12"
 
 # Bi mat: dat trong vault.yml (xem vault.yml.example)
