@@ -113,6 +113,7 @@ public class MainWindow {
     private TextArea logArea;
     private ProgressBar progressBar;
     private Label progressLabel;
+    private Label percentLabel;
     private SplitPane split;
     private VBox localBox;
     private VBox remoteBox;
@@ -367,6 +368,9 @@ public class MainWindow {
     private VBox buildBottomArea() {
         progressBar = new ProgressBar(0);
         progressBar.setPrefWidth(300);
+        percentLabel = new Label("");
+        percentLabel.setMinWidth(210);
+        percentLabel.setAlignment(Pos.CENTER_RIGHT);
         progressLabel = new Label("Sẵn sàng");
         progressLabel.setMinWidth(0);
         cancelBtn = iconButton("Hủy truyền", "cancel");
@@ -380,7 +384,7 @@ public class MainWindow {
         });
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        HBox progressBox = new HBox(10, progressLabel, spacer, progressBar, cancelBtn);
+        HBox progressBox = new HBox(10, progressLabel, spacer, percentLabel, progressBar, cancelBtn);
         progressBox.setAlignment(Pos.CENTER_LEFT);
         progressBox.getStyleClass().add("status-bar");
 
@@ -816,9 +820,24 @@ public class MainWindow {
         RemoteSession s = session;
         Task<String> task = new Task<>() {
             private int count;
+            private long totalBytes;
+            private long doneBytes;
 
             @Override
             protected String call() throws Exception {
+                for (Path d : dirs) {
+                    try (var walk = Files.walk(d)) {
+                        totalBytes += walk.filter(Files::isRegularFile).mapToLong(f -> {
+                            try {
+                                return Files.size(f);
+                            } catch (IOException ex) {
+                                return 0;
+                            }
+                        }).sum();
+                    }
+                }
+                totalBytes = Math.max(totalBytes, 1);
+                updateProgress(0, totalBytes);
                 // mỗi uploadTree tự cwd vào rồi cdup ra, nên kết thúc là về đúng thư mục ban đầu
                 // (không cwd về pwd: với user có home riêng pwd là "/" và CWD "/" bị từ chối)
                 for (Path d : dirs) {
@@ -850,7 +869,9 @@ public class MainWindow {
                             uploadTree(p);
                         } else if (Files.isRegularFile(p)) {
                             updateMessage(p.getFileName().toString());
-                            s.upload(p.getFileName().toString(), p, (done, total) -> { });
+                            long base = doneBytes;
+                            s.upload(p.getFileName().toString(), p, (done, total) -> updateProgress(base + done, totalBytes));
+                            doneBytes = base + Files.size(p);
                             count++;
                         }
                     }
@@ -1004,17 +1025,29 @@ public class MainWindow {
     private void runTransfer(Task<String> task, String label, Runnable afterSuccess) {
         cancelRequested = false;
         progressLabel.setText(label);
-        progressBar.progressProperty().bind(task.progressProperty());
+        // không bind trực tiếp: Task báo -1 (thanh chạy vô định) tới khi có byte đầu tiên; ép về 0% cho rõ ràng
+        progressBar.setProgress(0);
+        percentLabel.setText("0%");
+        Runnable showProgress = () -> {
+            double p = task.getProgress();
+            double total = task.getTotalWork();
+            progressBar.setProgress(p < 0 ? 0 : p);
+            percentLabel.setText(p < 0 ? "0%" : (int) Math.round(p * 100) + "%"
+                    + (total > 1 ? "  (" + Formats.humanSize((long) task.getWorkDone()) + " / "
+                            + Formats.humanSize((long) total) + ")" : ""));
+        };
+        task.progressProperty().addListener((o, a, b) -> showProgress.run());
         cancelBtn.setDisable(false);
         task.setOnSucceeded(e -> {
-            progressBar.progressProperty().unbind();
+            progressBar.setProgress(1);
+            percentLabel.setText("100%");
             cancelBtn.setDisable(true);
             progressLabel.setText("Xong: " + label + " — " + task.getValue());
             appendLog(label + ": " + task.getValue());
             afterSuccess.run();
         });
         task.setOnFailed(e -> {
-            progressBar.progressProperty().unbind();
+            percentLabel.setText("");
             cancelBtn.setDisable(true);
             progressLabel.setText("Lỗi: " + label);
             Throwable ex = task.getException();
