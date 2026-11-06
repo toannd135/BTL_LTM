@@ -12,6 +12,8 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.prefs.Preferences;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -211,7 +213,7 @@ public class MainWindow {
 
     private SplitPane buildCenterArea() {
         localPathField = new TextField();
-        localPathField.setEditable(false);
+        localPathField.setOnAction(e -> goLocal(localPathField.getText()));
         localTable = new TableView<>();
         localTable.setPlaceholder(new Label("Thư mục rỗng"));
         localTable.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
@@ -267,12 +269,13 @@ public class MainWindow {
         localTable.setContextMenu(localMenu);
         HBox localButtons = new HBox(uploadBtn);
         localButtons.getStyleClass().add("action-bar");
-        localBox = new VBox(6, panelHeader("Máy cục bộ", localMkdBtn), localPathField, localTable, localButtons);
+        localBox = new VBox(6, panelHeader("Máy cục bộ", localMkdBtn),
+                pathBar(localPathField, this::goLocalUp), localTable, localButtons);
         localBox.getStyleClass().add("panel");
         VBox.setVgrow(localTable, Priority.ALWAYS);
 
         remotePathField = new TextField("(chưa kết nối)");
-        remotePathField.setEditable(false);
+        remotePathField.setOnAction(e -> goRemote(remotePathField.getText()));
         remoteTable = new TableView<>();
         remoteTable.setPlaceholder(new Label("Chưa kết nối đến máy chủ"));
         remoteTable.getColumns().add(nameColumn(RemoteFile::name, RemoteFile::directory, 220));
@@ -335,7 +338,8 @@ public class MainWindow {
         remoteTable.setContextMenu(remoteMenu);
         HBox remoteButtons = new HBox(downloadBtn, openBtn, deleteBtn, shareBtn);
         remoteButtons.getStyleClass().add("action-bar");
-        remoteBox = new VBox(6, panelHeader("Máy chủ", mkdBtn), remotePathField, remoteTable, remoteButtons);
+        remoteBox = new VBox(6, panelHeader("Máy chủ", mkdBtn),
+                pathBar(remotePathField, this::goRemoteUp), remoteTable, remoteButtons);
         remoteBox.getStyleClass().add("panel");
         VBox.setVgrow(remoteTable, Priority.ALWAYS);
 
@@ -400,12 +404,67 @@ public class MainWindow {
                 String pwd = session.pwd();
                 Platform.runLater(() -> showRemote(pwd, files));
             } catch (Exception ex) {
-                Platform.runLater(() -> showError(ex));
+                Platform.runLater(() -> {
+                    remotePathField.setText(remotePwd);
+                    showError(ex);
+                });
             }
         });
     }
 
+    /** Thư mục hiện tại trên máy chủ (ô đường dẫn có thể đang được gõ dở). */
+    private String remotePwd = "";
+
+    /** Ô đường dẫn + nút "Lên" (thư mục cha). */
+    private HBox pathBar(TextField field, Runnable up) {
+        Button upBtn = new Button("↑");
+        upBtn.setTooltip(new javafx.scene.control.Tooltip("Lên thư mục cha"));
+        upBtn.setOnAction(e -> up.run());
+        HBox.setHgrow(field, Priority.ALWAYS);
+        return new HBox(4, field, upBtn);
+    }
+
+    private void goLocal(String text) {
+        Path p;
+        try {
+            p = Paths.get(text.trim()).toAbsolutePath().normalize();
+        } catch (RuntimeException ex) {
+            p = null;
+        }
+        if (p == null || !java.nio.file.Files.isDirectory(p)) {
+            logArea.appendText("Đường dẫn không hợp lệ: " + text + "\n");
+            localPathField.setText(localDir.toString());
+            return;
+        }
+        localDir = p;
+        refreshLocalTable();
+    }
+
+    private void goLocalUp() {
+        Path parent = localDir.getParent();
+        if (parent != null) {
+            localDir = parent;
+            refreshLocalTable();
+        }
+    }
+
+    private void goRemote(String text) {
+        String path = text.trim();
+        if (!connected || path.isEmpty()) {
+            remotePathField.setText(connected ? remotePwd : "(chưa kết nối)");
+            return;
+        }
+        runRemote(() -> session.cwd(path));
+    }
+
+    private void goRemoteUp() {
+        if (connected && !remotePwd.isEmpty() && !remotePwd.equals("/")) {
+            runRemote(() -> session.cdup());
+        }
+    }
+
     private void showRemote(String pwd, List<RemoteFile> files) {
+        remotePwd = pwd;
         remotePathField.setText(pwd);
         remoteAll = files;
         applyRemoteFilter();
@@ -414,7 +473,7 @@ public class MainWindow {
     private void applyRemoteFilter() {
         boolean showHidden = showHiddenBox.isSelected();
         ObservableList<RemoteFile> items = FXCollections.observableArrayList();
-        String pwd = remotePathField.getText();
+        String pwd = remotePwd;
         if (connected && !pwd.isEmpty() && !pwd.equals("/")) {
             items.add(new RemoteFile("..", 0, "", true));
         }
@@ -430,8 +489,15 @@ public class MainWindow {
 
     private void showError(Throwable ex) {
         appendLog("LỖI: " + ex.getMessage());
-        Alert a = new Alert(Alert.AlertType.ERROR, String.valueOf(ex.getMessage()), ButtonType.OK);
-        a.setHeaderText("Thao tác thất bại");
+        boolean malware = ErrorText.isMalware(ex);
+        // Có nút CLOSE (CANCEL_CLOSE) thì nút X / Esc mới đóng được hộp thoại (chỉ có OK thì JavaFX bỏ qua X)
+        Alert a = new Alert(malware ? Alert.AlertType.WARNING : Alert.AlertType.ERROR, ErrorText.of(ex), ButtonType.CLOSE);
+        a.setHeaderText(malware ? "Phát hiện mã độc" : "Thao tác thất bại");
+        a.setResizable(true);
+        a.getDialogPane().setMinHeight(Region.USE_PREF_SIZE);
+        if (remoteTable.getScene() != null) {
+            a.initOwner(remoteTable.getScene().getWindow());
+        }
         AppIcon.apply(a);
         a.show();
     }
@@ -457,6 +523,14 @@ public class MainWindow {
             worker.submit(() -> {
                 try {
                     s.connect(host, port);
+                    if (!s.isSecure() && !confirmPlainLogin()) {
+                        s.close();
+                        Platform.runLater(() -> {
+                            appendLog("Đã hủy: máy chủ không hỗ trợ mã hóa TLS.");
+                            connectButton.setDisable(false);
+                        });
+                        return;
+                    }
                     String role = s.login(user, pass);
                     List<RemoteFile> files = s.list();
                     String pwd = s.pwd();
@@ -484,6 +558,23 @@ public class MainWindow {
         }
     }
 
+    /** Máy chủ không có TLS: hỏi người dùng trước khi gửi mật khẩu dạng rõ. Gọi từ luồng nền, chờ trả lời. */
+    private boolean confirmPlainLogin() throws InterruptedException, ExecutionException {
+        CompletableFuture<Boolean> answer = new CompletableFuture<>();
+        Platform.runLater(() -> {
+            Alert a = new Alert(Alert.AlertType.WARNING,
+                    "Máy chủ này không hỗ trợ mã hóa (TLS). Tên đăng nhập, mật khẩu và nội dung tệp sẽ được gửi dạng "
+                            + "văn bản thường, người khác trên mạng có thể đọc được.\n\nVẫn tiếp tục đăng nhập?",
+                    ButtonType.YES, ButtonType.NO);
+            a.setHeaderText("Kết nối chưa được mã hóa");
+            ((Button) a.getDialogPane().lookupButton(ButtonType.YES)).setDefaultButton(false);
+            ((Button) a.getDialogPane().lookupButton(ButtonType.NO)).setDefaultButton(true);
+            AppIcon.apply(a);
+            answer.complete(a.showAndWait().orElse(ButtonType.NO) == ButtonType.YES);
+        });
+        return answer.get();
+    }
+
     private void setConnected(boolean isConnected, String role) {
         connected = isConnected;
         connectButton.setText(isConnected ? "Ngắt kết nối" : "Kết nối");
@@ -502,8 +593,9 @@ public class MainWindow {
         cancelBtn.setDisable(true);
         if (isConnected) {
             RemoteSession s = session;
-            roleLabel.setText(s.roles().isEmpty() ? "Vai trò: (máy chủ không báo vai trò)"
-                    : "Vai trò: " + String.join(", ", s.roles()));
+            roleLabel.setText((s.isSecure() ? "🔒 Mã hóa TLS — " : "⚠ Chưa mã hóa — ")
+                    + (s.roles().isEmpty() ? "Vai trò: (máy chủ không báo vai trò)"
+                    : "Vai trò: " + String.join(", ", s.roles())));
             progressLabel.setText("Đã đăng nhập — " + roleLabel.getText());
             mkdBtn.setDisable(!s.canWrite());
             uploadBtn.setDisable(!s.canWrite());
@@ -515,6 +607,7 @@ public class MainWindow {
             deleteBtn.setDisable(true);
             remoteAll = List.of();
             remoteTable.getItems().clear();
+            remotePwd = "";
             remotePathField.setText("(chưa kết nối)");
         }
         updateShareButton();
@@ -588,7 +681,7 @@ public class MainWindow {
                     String reply = session.site("SHARE " + file + " " + user + " " + perm);
                     msg = "Thành công: " + (reply.length() > 4 ? reply.substring(4) : reply);
                 } catch (Exception ex) {
-                    msg = "Máy chủ từ chối: " + ex.getMessage();
+                    msg = ErrorText.of(ex);
                 }
                 String shown = msg;
                 Platform.runLater(() -> {
@@ -699,6 +792,11 @@ public class MainWindow {
         Alert confirm = new Alert(Alert.AlertType.CONFIRMATION,
                 "Xóa " + (sel.directory() ? "thư mục " : "file ") + sel.name() + " trên máy chủ?",
                 ButtonType.YES, ButtonType.NO);
+        confirm.setContentText("Xóa " + (sel.directory() ? "thư mục " : "file ") + sel.name() + " trên máy chủ?"
+                + (sel.directory() ? "\nToàn bộ nội dung bên trong cũng sẽ bị xóa." : "")
+                + "\nThao tác này không thể hoàn tác.");
+        ((Button) confirm.getDialogPane().lookupButton(ButtonType.YES)).setDefaultButton(false);
+        ((Button) confirm.getDialogPane().lookupButton(ButtonType.NO)).setDefaultButton(true);
         confirm.setHeaderText("Xác nhận xóa");
         AppIcon.apply(confirm);
         if (confirm.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) {
@@ -830,7 +928,7 @@ public class MainWindow {
             if (ex instanceof RemoteSession.CancelledException) {
                 // dừng cả hàng đợi (không gọi afterSuccess), chỉ nạp lại hai bảng
                 appendLog(ex.getMessage());
-                progressLabel.setText(ex.getMessage());
+                progressLabel.setText(ErrorText.of(ex));
                 progressBar.setProgress(0);
                 refreshLocalTable();
                 if (connected) {

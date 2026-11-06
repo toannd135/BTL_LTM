@@ -13,6 +13,7 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.LongConsumer;
@@ -34,6 +35,9 @@ public class FtpSession implements RemoteSession {
     /** Socket data của lần truyền đang chạy (để nút Hủy cắt được từ luồng giao diện). */
     private volatile Socket activeData;
     private volatile boolean cancelled;
+    private String host;
+    /** Khác null khi kênh điều khiển đã lên TLS; lúc đó kênh data cũng được bọc TLS (PROT P). */
+    private TlsClient tls;
     private BufferedReader reader;
     private PrintWriter writer;
     private LogListener logListener = (dir, line) -> {
@@ -46,11 +50,48 @@ public class FtpSession implements RemoteSession {
 
     @Override
     public void connect(String host, int port) throws IOException {
+        this.host = host;
+        this.tls = null;
         control = new Socket();
         control.connect(new InetSocketAddress(host, port), 5000);
-        reader = new BufferedReader(new InputStreamReader(control.getInputStream(), StandardCharsets.US_ASCII));
-        writer = new PrintWriter(new OutputStreamWriter(control.getOutputStream(), StandardCharsets.US_ASCII), false);
+        attachStreams(control);
         readReply(); // 220 greeting
+        negotiateTls(host, port);
+    }
+
+    private void attachStreams(Socket socket) throws IOException {
+        reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+        writer = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.US_ASCII), false);
+    }
+
+    /** Thử AUTH TLS: máy chủ không hỗ trợ (502/500...) thì giữ kết nối thường, giao diện cảnh báo qua isSecure(). */
+    private void negotiateTls(String host, int port) throws IOException {
+        if (codeOf(sendAndRead("AUTH TLS")) != 234) {
+            return;
+        }
+        try {
+            TlsClient client = new TlsClient(host, port);
+            control = client.wrap(control, host, port);
+            attachStreams(control);
+            tls = client;
+            logListener.onLine("INFO", (client.firstUse() ? "Tin chứng chỉ máy chủ lần đầu, " : "Chứng chỉ khớp lần trước, ")
+                    + "SHA-256: " + client.fingerprint());
+            requireOkUnchecked(sendAndRead("PBSZ 0"), 200);
+            requireOkUnchecked(sendAndRead("PROT P"), 200);
+        } catch (GeneralSecurityException e) {
+            throw new IOException("Không khởi tạo được TLS: " + e.getMessage(), e);
+        }
+    }
+
+    private void requireOkUnchecked(String reply, int ok) throws IOException {
+        if (codeOf(reply) != ok) {
+            throw new IOException("Máy chủ từ chối thiết lập kênh mã hóa: " + reply);
+        }
+    }
+
+    @Override
+    public boolean isSecure() {
+        return tls != null;
     }
 
     private String readReply() throws IOException {
@@ -183,6 +224,11 @@ public class FtpSession implements RemoteSession {
         requireOk(sendAndRead("RNTO " + to), 250);
     }
 
+    /** Sau khi server trả 150: nếu đang PROT P thì bắt tay TLS trên kênh data (server bắt tay ngay sau khi gửi 150). */
+    private Socket secureData(Socket data) throws IOException {
+        return tls == null ? data : tls.wrap(data, host, data.getPort());
+    }
+
     private Socket openPassiveDataSocket() throws IOException, FtpException {
         String reply = requireOk(sendAndRead("PASV"), 227);
         Matcher m = PASV_PATTERN.matcher(reply);
@@ -201,6 +247,7 @@ public class FtpSession implements RemoteSession {
     public List<RemoteFile> list() throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("LIST"), 150, 125);
+        data = secureData(data);
         List<RemoteFile> result = new ArrayList<>();
         try (BufferedReader dr = new BufferedReader(
                 new InputStreamReader(data.getInputStream(), StandardCharsets.US_ASCII))) {
@@ -238,6 +285,7 @@ public class FtpSession implements RemoteSession {
     public void retr(String remoteName, OutputStream out, LongConsumer onBytes) throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("RETR " + remoteName), 150, 125);
+        data = secureData(data);
         pump(data, data.getInputStream(), out, onBytes);
         requireOk(readReply(), 226);
     }
@@ -245,6 +293,7 @@ public class FtpSession implements RemoteSession {
     public void stor(String remoteName, InputStream in, LongConsumer onBytes) throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("STOR " + remoteName), 150, 125);
+        data = secureData(data);
         pump(data, in, data.getOutputStream(), onBytes);
         requireOk(readReply(), 226);
     }
@@ -309,7 +358,7 @@ public class FtpSession implements RemoteSession {
             Files.deleteIfExists(dest); // không để lại tệp tải dở
             throw e;
         }
-        return "FTP chuẩn (không có kiểm tra checksum)";
+        return transferNote();
     }
 
     @Override
@@ -318,7 +367,11 @@ public class FtpSession implements RemoteSession {
         try (InputStream in = Files.newInputStream(src)) {
             stor(name, in, bytes -> progress.update(bytes, total));
         }
-        return "FTP chuẩn (không có kiểm tra checksum)";
+        return transferNote();
+    }
+
+    private String transferNote() {
+        return tls != null ? "FTPS (mã hóa TLS)" : "FTP thường (không mã hóa)";
     }
 
     // Chi de an/hien nut: server van kiem tra RBAC/ACL. Khong biet vai tro -> cho phep, de server quyet.

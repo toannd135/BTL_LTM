@@ -69,6 +69,11 @@ public interface RemoteSession extends Closeable {
 
     boolean canDelete();
 
+    /** Kênh điều khiển và kênh dữ liệu đã được mã hóa TLS (FTPS) hay chưa. */
+    default boolean isSecure() {
+        return false;
+    }
+
     /** Hỗ trợ hủy giữa chừng + tải tiếp (resume) + kiểm tra checksum. */
     boolean supportsResume();
 
