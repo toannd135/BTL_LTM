@@ -242,38 +242,42 @@ Byte đi **thẳng** từ `InputStream` (đọc đĩa) sang `OutputStream` (ghi 
 
 ---
 
-## 10. `STOR` — tải file lên, có thêm bước file tạm
+## 10. `STOR` — tải file lên: bản ghi tạm, quét clamd, rồi mới commit
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant CS as ClientSession (control)
     participant DC as DataConnection (data)
-    participant FS as Đĩa (ftproot/)
+    participant FS as FileStore (SeaweedFS S3 / đĩa)
+    participant AV as clamd (VM-B)
 
     C->>CS: STOR bao_cao.pdf
-    CS->>CS: resolve path, tinh temp = "bao_cao.pdf.part-S7"
-    CS->>CS: reply(150, ...)
+    CS->>CS: resolve path, kiem tra quyen ghi
+    CS->>C: reply(150, ...)
     CS->>DC: establish(10000)
-    DC-->>CS: Socket dataSocket
     loop moi vong doc 8192 byte
-        C->>DC: byte file (client gui len)
-        DC-->>CS: dataSocket.getInputStream().read(buf)
-        CS->>FS: Files.newOutputStream(temp).write(buf)  -- ghi vao FILE TAM
+        C->>DC: byte file
+        CS->>FS: beginUpload(...).stream().write(buf)  -- ban ghi TAM
     end
     CS->>DC: dataConnection.close()
-    alt truyen thanh cong
-        CS->>FS: Files.move(temp, target, ATOMIC_MOVE, REPLACE_EXISTING)
-        Note over FS: doi ten nguyen tu -- khong ai doc duoc file dang do dang
-        CS->>C: reply(226, ...)
-    else loi giua chung
-        CS->>FS: Files.deleteIfExists(temp)
+    alt loi giua chung
+        CS->>FS: up.abort()
         CS->>C: reply(426, "Transfer aborted")
-        Note over FS: file DICH giu nguyen noi dung CU
+    else truyen xong
+        CS->>AV: prescan(up.reopen())
+        alt INFECTED
+            CS->>FS: up.abort() -- tep nhiem KHONG bao gio vao kho
+            CS->>C: reply(550, "WARNING: malware detected ...")
+        else CLEAN / khong quet duoc
+            CS->>FS: up.commit() -- tep cu (neu ghi de) con nguyen cho den luc nay
+            CS->>CS: recordPrescanned hoac scanUploadNow, recordOwner (tep moi)
+            CS->>C: reply(226, ...)
+        end
     end
 ```
 
-File `StorCommandHandler.java` — điểm khác biệt cốt lõi so với `RETR`: dữ liệu **không bao giờ ghi thẳng vào file đích**, luôn qua file `.part-<sessionId>` rồi mới `Files.move(..., ATOMIC_MOVE, ...)`. Đây là cách chặn lỗi "hai client cùng `STOR` một tên file thì file hỏng" — hai file tạm mang tên khác nhau (`sessionId` khác nhau), không ai ghi đè ai giữa chừng.
+File `StorCommandHandler.java` — dữ liệu **không bao giờ ghi thẳng vào file đích**: luôn đi qua `FileStore.beginUpload` (bản ghi tạm theo `sessionId`), được quét bằng clamd (`ScanService.prescan`) **trước** `commit()`. Nhờ vậy hai client cùng `STOR` một tên không làm hỏng file, và tệp nhiễm mã độc không bao giờ vào kho. Ngoại lệ: `APPE`/`REST` (`direct`) ghi tiếp trực tiếp, bỏ qua prescan và được quét sau commit (`scanUploadNow`); nếu quét sau commit phát hiện mã độc thì tệp bị xoá.
 
 ---
 
@@ -306,5 +310,5 @@ finally {
 | `PASV`/`PORT` | `PasvCommandHandler`, `PortCommandHandler` | `data/DataConnection.java` |
 | `LIST`/`NLST` | `ListCommandHandler`, `NlstCommandHandler` | `data/DataConnection.java` + `command/ListingFormatter.java` |
 | `RETR` | `RetrCommandHandler` | `data/DataConnection.java` + đọc file qua `Files.newInputStream` |
-| `STOR` | `StorCommandHandler` | `data/DataConnection.java` + ghi file tạm + `Files.move` |
+| `STOR` | `StorCommandHandler` | `data/DataConnection.java` + `FileStore.beginUpload` + prescan clamd + `commit` |
 | `QUIT` | `QuitCommandHandler` | chỉ đổi `state`, việc đóng socket thật nằm ở `ClientSession.cleanup()` |

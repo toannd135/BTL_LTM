@@ -5,15 +5,14 @@ Ngày: 2026-10-30. Repo: /mnt/01DC7E1E309A75E0/CODE/BTL_LTM (chưa commit gì, n
 ## Đã xong (đã test, trừ khi ghi khác)
 - Server `ftp/`: FTPS explicit (AUTH TLS, PBSZ, PROT), REST/APPE/SIZE/MDTM/RNFR/RNTO/REIN, cô lập thư mục theo user, audit log (`logs/audit.log`), PBKDF2.
 - Tài khoản trong SQLite (`ftp/data/ftpserver.db`), migration V001-V003 chạy lúc khởi động. Seed: admin/admin (role admin, home /), sv/sv (role user, home /sv).
-- Admin web FastAPI: `admin-web/` (nằm ở gốc repo, ai đó đã chuyển từ ftp/admin-web). Dashboard, Users, Files (ClamAV, cách ly), Audit. `python test_admin.py` qua 27/27.
+- Admin web FastAPI: `ftp/admin-web/`. Dashboard, Users, Files (ClamAV, cách ly), Audit. `python test_admin.py` qua 27/27.
 - GUI JavaFX `ftp-client-gui`: khoảng cách/căn hàng, ngày thống nhất, ẩn/hiện file ẩn, kích thước KB/MB, icon SVG, kéo-thả giữa hai bảng và từ OS, đổi chỗ hai bảng bằng kéo tiêu đề. Chỉ `mvn compile` + `javafx:run` không lỗi; CHƯA xem bằng mắt, CHƯA thử kéo-thả bằng tay.
 - Test: `mvn verify` 20/20; scripts `smoke_test`, `concurrency_test`, `pasv_leak_test`, `ftps_test.py` qua (smoke cần `ftproot/readme.txt`, không có `uploads`).
 
 ## Đã biết là chưa ổn (kiểm tra khi đánh giá demo)
-- GUI chưa nói được FTPS: nếu bật `tls.required=true` thì GUI không đăng nhập được. Mặc định conf để TLS comment.
-- FTP server chưa chặn tải file PENDING/INFECTED (chỉ admin web cách ly).
-- Mật khẩu seed yếu (admin/admin, sv/sv). Mật khẩu cũ toannd/123456 còn trong lịch sử git.
-- Chưa có: Terraform, Ansible, Azure, Managed Disk/Blob, sao lưu/khôi phục, test qua Internet, đo hiệu năng, build Docker thử.
+- (Đã xử lý) GUI nói được FTPS (AUTH TLS + PROT P, ghim chứng chỉ TOFU); server chặn RETR file INFECTED/QUARANTINED (và PENDING khi scan.enforce).
+- Mật khẩu seed mặc định: đặt FTP_SEED_PASSWORD (>= 8 ký tự) để tự đổi; mật khẩu cũ toannd/123456 vẫn còn trong lịch sử git.
+- Đã có Terraform/Ansible/Azure (xem docs/TRIEN-KHAI-AZURE.md). Chưa có: sao lưu/khôi phục, test qua Internet, đo hiệu năng, build Docker thử.
 - CI (.github/workflows/ci.yml) chưa chạy test Python; GUI chưa có test tự động.
 - Admin web chạy HTTP, bind 127.0.0.1; cần HTTPS khi đưa ra ngoài.
 
