@@ -37,10 +37,10 @@
       <td class="fw-medium">{{ u.username }}</td>
       <td><div class="kv">
         {% for r, sc in assigned[u.username] %}
-          {% if 'role:manage' in perms %}<form method="post" action="/users/{{ u.username }}/roles/remove" class="d-inline" onsubmit="return confirm('Gỡ vai trò {{ r }}@{{ sc }} khỏi người dùng {{ u.username }}?')">
+          {% if 'role:manage' in perms and u.username != admin %}<form method="post" action="/users/{{ u.username }}/roles/remove" class="d-inline" onsubmit="return confirm('Gỡ vai trò {{ r }}@{{ sc }} khỏi người dùng {{ u.username }}?')">
             <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="role" value="{{ r }}"><input type="hidden" name="scope" value="{{ sc }}">
             <span class="tag mono role-tag">{{ r }}@{{ sc }}<button class="tag-x" title="Gỡ vai trò" aria-label="Gỡ vai trò {{ r }}@{{ sc }} khỏi {{ u.username }}">×</button></span></form>
-          {% else %}<span class="tag mono role-tag">{{ r }}@{{ sc }}</span>{% endif %}
+          {% else %}<span class="tag mono role-tag"{% if u.username == admin %} title="Không thể tự gỡ vai trò của chính mình"{% endif %}>{{ r }}@{{ sc }}</span>{% endif %}
         {% endfor %}
       </div></td>
       <td class="font-monospace small">{{ u.home }}</td>
@@ -50,24 +50,36 @@
         <details class="menu row-menu d-inline-block text-start">
           <summary class="btn btn-xs btn-outline-secondary">Thao tác ▾</summary>
           <div class="menu-pop menu-form">
-            {% if 'role:manage' in perms %}
+            {% set uh = held[u.username] %}
+            {% if 'role:manage' in perms and u.username == admin %}
+            <div class="menu-sec"><div class="menu-label">Gán vai trò</div>
+              <div class="small text-muted">Không thể tự gán vai trò cho chính mình</div></div>
+            {% elif 'role:manage' in perms %}
             <form method="post" action="/users/{{ u.username }}/roles" class="menu-sec">
               <input type="hidden" name="csrf" value="{{ csrf }}">
               <div class="menu-label">Gán vai trò</div>
               <div class="d-flex gap-1">
-                <select name="role" class="form-select form-select-sm" aria-label="Vai trò">{% for r in roles %}<option>{{ r }}</option>{% endfor %}</select>
+                <select name="role" class="form-select form-select-sm" aria-label="Vai trò">{% for r in roles if not sod_conflict(r, uh) %}<option>{{ r }}</option>{% endfor %}</select>
                 <input name="scope" class="form-control form-control-sm" value="/" style="width:80px" aria-label="Phạm vi vai trò">
                 <button class="btn btn-sm btn-outline-primary">Gán</button></div></form>
             {% endif %}
+            {% set upriv = uh.intersection(privileged_roles) if u.username != admin else none %}
+            {% if upriv %}
+            <div class="menu-sec" title="Tài khoản đặc quyền ({{ upriv|sort|join(', ') }}) phải tự đổi mật khẩu">
+              <div class="menu-label">Đặt lại mật khẩu</div>
+              <div class="small text-muted">Không áp dụng cho tài khoản đặc quyền</div></div>
+            {% else %}
             <form method="post" action="/users/{{ u.username }}/password" class="menu-sec" onsubmit="return confirm('Đặt lại mật khẩu cho {{ u.username }}?')">
               <input type="hidden" name="csrf" value="{{ csrf }}">
               <label class="menu-label" for="pw-{{ loop.index }}">Đặt lại mật khẩu</label>
               <div class="d-flex gap-1">
                 <input id="pw-{{ loop.index }}" name="password" type="password" class="form-control form-control-sm" autocomplete="new-password" required>
                 <button class="btn btn-sm btn-outline-secondary">Đặt</button></div></form>
+            {% endif %}
             <form method="post" action="/users/{{ u.username }}/toggle" onsubmit="return confirm('{{ 'Khóa' if u.enabled else 'Mở khóa' }} tài khoản {{ u.username }}?{{ ' Người dùng sẽ không đăng nhập FTP được nữa.' if u.enabled }}')">
               <input type="hidden" name="csrf" value="{{ csrf }}">
-              <button class="{{ 'danger' if u.enabled else '' }}">{{ 'Khóa tài khoản' if u.enabled else 'Mở khóa tài khoản' }}</button></form>
+              {% if u.enabled and 'security_auditor' in uh %}<button type="button" disabled title="Không thể khóa kiểm toán viên (tách nhiệm vụ)">Khóa tài khoản</button>
+              {% else %}<button class="{{ 'danger' if u.enabled else '' }}">{{ 'Khóa tài khoản' if u.enabled else 'Mở khóa tài khoản' }}</button>{% endif %}</form>
           </div>
         </details></td>
     </tr>

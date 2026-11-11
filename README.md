@@ -1082,6 +1082,10 @@ Danh sách 13 quyền: `file:list`, `file:upload`, `file:download`, `file:rename
 
 Tính **tách biệt nhiệm vụ** (separation of duties, migration `V007`): người quản trị hệ thống không thể đọc dữ liệu người dùng; kiểm toán viên chỉ xem log; người quản lý tệp không quản lý tài khoản.
 
+Trang quản trị web chặn thêm các đường leo thang đặc quyền (kiểm tra trên server, giao diện chỉ ẩn/vô hiệu nút tương ứng; mỗi lần bị chặn ghi nhật ký `result=FAIL` kèm `reason=`):
+- Không ai tự gán/gỡ vai trò của chính mình (`reason=self`); `system_admin` và `security_auditor` loại trừ nhau trên cùng một tài khoản (`SOD_CONFLICTS`, `reason=sod_conflict`).
+- Quyền `user:manage` không đặt lại mật khẩu cho tài khoản đặc quyền khác (`system_admin`, `security_auditor` — `PRIVILEGED_ROLES`, `reason=privileged_target`) và không khóa kiểm toán viên (`reason=auditor_target`; mở khóa vẫn được).
+
 ### 9.3 ACL theo từng tệp/thư mục
 
 - Mỗi tệp/thư mục có **chủ sở hữu** (người tải lên hoặc tạo) — bảng `file_owner`. Tệp đã có chủ mặc định **riêng tư**: chỉ chủ, `file_manager` (có `file:manage`) và người được cấp quyền mới thấy (không hiện trong `LIST`/`NLST`, `RETR` trả "File not found").
