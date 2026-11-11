@@ -4,6 +4,7 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/** PWD: tra loi 257 kem duong dan ao cua thu muc hien tai. Can dang nhap. */
 public final class PwdCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

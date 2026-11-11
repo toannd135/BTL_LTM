@@ -21,14 +21,33 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Lop thuan Java, KHONG import javafx.* — tach hoan toan logic mang khoi giao dien,
- * de test duoc bang JUnit / chay tay ma khong can mo cua so nao ca.
+ * Cài đặt {@link RemoteSession} bằng socket thuần (FTP/FTPS explicit, chế độ bị động).
+ *
+ * <p>Lớp thuần Java, KHÔNG import javafx.* — tách hoàn toàn logic mạng khỏi giao diện,
+ * để test được bằng JUnit / chạy tay mà không cần mở cửa sổ nào cả.
+ *
+ * <p>Luồng chính:
+ * <ol>
+ *   <li>{@link #connect}: mở kênh điều khiển, đọc lời chào 220, gửi AUTH TLS; nếu được 234 thì bắt tay TLS
+ *       rồi gửi PBSZ 0 và PROT P (kênh dữ liệu cũng mã hóa). Máy chủ từ chối AUTH thì giữ kết nối thường.</li>
+ *   <li>{@link #login}: USER rồi PASS; đọc danh sách vai trò từ trả lời 230.</li>
+ *   <li>Mỗi lệnh dữ liệu (LIST/RETR/STOR): PASV → mở socket dữ liệu → gửi lệnh → chờ 150/125 → bắt tay
+ *       TLS trên socket dữ liệu nếu đang PROT P → chép dữ liệu → đọc 226.</li>
+ * </ol>
+ *
+ * <p>Không an toàn đa luồng: mọi lệnh phải gọi tuần tự từ một luồng nền; riêng {@link #cancelTransfer()}
+ * được gọi từ luồng giao diện.
  */
 public class FtpSession implements RemoteSession {
 
     private static final Pattern PASV_PATTERN = Pattern.compile("\\((\\d+,\\d+,\\d+,\\d+,\\d+,\\d+)\\)");
 
     private static final Pattern ROLES_PATTERN = Pattern.compile("\\(roles:\\s*([^)]*)\\)");
+
+    private static final int CONNECT_TIMEOUT_MS = 5000;
+    private static final int TRANSFER_BUFFER_SIZE = 8192;
+    /** Vai trò trả về từ {@link #login} khi máy chủ không báo vai trò. */
+    private static final String DEFAULT_ROLE = "ftp";
 
     private List<String> roles = new ArrayList<>();
     private Socket control;
@@ -53,7 +72,7 @@ public class FtpSession implements RemoteSession {
         this.host = host;
         this.tls = null;
         control = new Socket();
-        control.connect(new InetSocketAddress(host, port), 5000);
+        control.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
         attachStreams(control);
         readReply(); // 220 greeting
         negotiateTls(host, port);
@@ -83,6 +102,7 @@ public class FtpSession implements RemoteSession {
         }
     }
 
+    /** Như {@link #requireOk} nhưng ném IOException: lỗi khi dựng TLS là lỗi kết nối, không phải lỗi lệnh. */
     private void requireOkUnchecked(String reply, int ok) throws IOException {
         if (codeOf(reply) != ok) {
             throw new IOException("Máy chủ từ chối thiết lập kênh mã hóa: " + reply);
@@ -94,13 +114,16 @@ public class FtpSession implements RemoteSession {
         return tls != null;
     }
 
+    /**
+     * Đọc một trả lời trên kênh điều khiển. Trả lời nhiều dòng "xxx-..." kết thúc ở dòng "xxx ...";
+     * khi đó trả về cả khối (nối bằng '\n'), dòng đầu giữ mã.
+     */
     private String readReply() throws IOException {
         String line = reader.readLine();
         if (line == null) {
             throw new EOFException("Server da dong ket noi");
         }
         logListener.onLine("RECV", line);
-        // tra loi nhieu dong "xxx-..." ket thuc o dong "xxx ..."; tra ve ca khoi, dong dau giu ma
         if (line.length() >= 4 && line.charAt(3) == '-') {
             String end = line.substring(0, 3) + " ";
             StringBuilder sb = new StringBuilder(line);
@@ -118,6 +141,7 @@ public class FtpSession implements RemoteSession {
         return line;
     }
 
+    /** Gửi một lệnh (kết thúc CRLF) và đọc trả lời; mật khẩu được che trong nhật ký. */
     private String sendAndRead(String command) throws IOException {
         String logged = command.startsWith("PASS") ? "PASS ****" : command;
         logListener.onLine("SEND", logged);
@@ -130,6 +154,12 @@ public class FtpSession implements RemoteSession {
         return Integer.parseInt(reply.substring(0, 3));
     }
 
+    /** Phần nội dung sau "xxx " của trả lời (cả trả lời nếu quá ngắn). */
+    private static String replyText(String reply) {
+        return reply.length() > 4 ? reply.substring(4) : reply;
+    }
+
+    /** Trả về {@code reply} nếu mã thuộc {@code okCodes}, ngược lại ném FtpException mang mã đó. */
     private String requireOk(String reply, int... okCodes) throws FtpException {
         int code = codeOf(reply);
         for (int ok : okCodes) {
@@ -137,7 +167,7 @@ public class FtpSession implements RemoteSession {
                 return reply;
             }
         }
-        throw new FtpException(code, reply.length() > 4 ? reply.substring(4) : reply);
+        throw new FtpException(code, replyText(reply));
     }
 
     @Override
@@ -145,10 +175,10 @@ public class FtpSession implements RemoteSession {
         requireOk(sendAndRead("USER " + user), 331, 230);
         String reply = requireOk(sendAndRead("PASS " + pass), 230);
         roles = parseRoles(reply);
-        return roles.isEmpty() ? "ftp" : String.join(", ", roles);
+        return roles.isEmpty() ? DEFAULT_ROLE : String.join(", ", roles);
     }
 
-    /** Lay danh sach vai tro tu "230 ... (roles: a@/, b@/x)"; server cu khong bao thi rong. */
+    /** Lấy danh sách vai trò từ "230 ... (roles: a@/, b@/x)"; server cũ không báo thì rỗng. */
     static List<String> parseRoles(String reply) {
         Matcher m = ROLES_PATTERN.matcher(reply);
         List<String> out = new ArrayList<>();
@@ -167,6 +197,7 @@ public class FtpSession implements RemoteSession {
         return List.copyOf(roles);
     }
 
+    /** Có vai trò {@code name}, với bất kỳ scope nào ("name" hoặc "name@..."). */
     private boolean hasRole(String name) {
         for (String r : roles) {
             if (r.equals(name) || r.startsWith(name + "@")) {
@@ -180,7 +211,7 @@ public class FtpSession implements RemoteSession {
     public String site(String args) throws IOException, FtpException {
         String reply = sendAndRead("SITE " + args);
         if (codeOf(reply) >= 400) {
-            throw new FtpException(codeOf(reply), reply.length() > 4 ? reply.substring(4) : reply);
+            throw new FtpException(codeOf(reply), replyText(reply));
         }
         return reply;
     }
@@ -229,17 +260,18 @@ public class FtpSession implements RemoteSession {
         return tls == null ? data : tls.wrap(data, host, data.getPort());
     }
 
+    /** Gửi PASV, đọc "227 ... (h1,h2,h3,h4,p1,p2)" và mở socket dữ liệu tới địa chỉ đó (chưa bọc TLS). */
     private Socket openPassiveDataSocket() throws IOException, FtpException {
         String reply = requireOk(sendAndRead("PASV"), 227);
         Matcher m = PASV_PATTERN.matcher(reply);
         if (!m.find()) {
             throw new FtpException(500, "Không đọc được địa chỉ PASV: " + reply);
         }
-        String[] p = m.group(1).split(",");
-        String ip = p[0] + "." + p[1] + "." + p[2] + "." + p[3];
-        int port = Integer.parseInt(p[4]) * 256 + Integer.parseInt(p[5]);
+        String[] numbers = m.group(1).split(",");
+        String ip = numbers[0] + "." + numbers[1] + "." + numbers[2] + "." + numbers[3];
+        int port = Integer.parseInt(numbers[4]) * 256 + Integer.parseInt(numbers[5]); // p1 là byte cao, p2 là byte thấp
         Socket data = new Socket();
-        data.connect(new InetSocketAddress(ip, port), 5000);
+        data.connect(new InetSocketAddress(ip, port), CONNECT_TIMEOUT_MS);
         return data;
     }
 
@@ -265,6 +297,7 @@ public class FtpSession implements RemoteSession {
         return result;
     }
 
+    /** Tách một dòng kiểu "ls -l" (9 cột, tên có thể chứa dấu cách); dòng không đủ cột thì trả null. */
     private static RemoteFile parseLine(String line) {
         String[] parts = line.trim().split("\\s+", 9);
         if (parts.length < 9) {
@@ -282,6 +315,7 @@ public class FtpSession implements RemoteSession {
         return new RemoteFile(name, size, modified, dir, parts[0], parts[2], parts[3]);
     }
 
+    /** RETR: ghi nội dung tệp vào {@code out}; {@code onBytes} nhận tổng số byte đã nhận. */
     public void retr(String remoteName, OutputStream out, LongConsumer onBytes) throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("RETR " + remoteName), 150, 125);
@@ -290,6 +324,7 @@ public class FtpSession implements RemoteSession {
         requireOk(readReply(), 226);
     }
 
+    /** STOR: gửi nội dung {@code in} lên tệp {@code remoteName}; {@code onBytes} nhận tổng số byte đã gửi. */
     public void stor(String remoteName, InputStream in, LongConsumer onBytes) throws IOException, FtpException {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("STOR " + remoteName), 150, 125);
@@ -306,7 +341,7 @@ public class FtpSession implements RemoteSession {
         cancelled = false;
         activeData = data;
         try {
-            byte[] buf = new byte[8192];
+            byte[] buf = new byte[TRANSFER_BUFFER_SIZE];
             int n;
             long total = 0;
             while (!cancelled && (n = in.read(buf)) != -1) {
@@ -374,7 +409,7 @@ public class FtpSession implements RemoteSession {
         return tls != null ? "FTPS (mã hóa TLS)" : "FTP thường (không mã hóa)";
     }
 
-    // Chi de an/hien nut: server van kiem tra RBAC/ACL. Khong biet vai tro -> cho phep, de server quyet.
+    // Chỉ để ẩn/hiện nút: server vẫn kiểm tra RBAC/ACL. Không biết vai trò -> cho phép, để server quyết.
     @Override
     public boolean canWrite() {
         return roles.isEmpty() || hasRole("file_manager") || hasRole("employee");

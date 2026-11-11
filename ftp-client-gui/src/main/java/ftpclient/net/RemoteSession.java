@@ -5,13 +5,24 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 
-/** Giao diện phiên làm việc với FTP server (cài đặt bởi FtpSession). */
+/**
+ * Giao diện phiên làm việc với FTP server (cài đặt bởi {@link FtpSession}).
+ *
+ * <p>Thứ tự dùng: {@link #connect} (nhận lời chào, thử AUTH TLS, PBSZ/PROT) → {@link #login} (USER/PASS)
+ * → các lệnh thư mục và truyền tệp → {@link #quit} → {@link #close}.
+ *
+ * <p>Mọi phương thức trừ {@link #cancelTransfer()} đều chặn (blocking I/O) và phải gọi tuần tự từ
+ * một luồng nền duy nhất; {@link #cancelTransfer()} được gọi từ luồng giao diện để cắt lần truyền đang chạy.
+ */
 public interface RemoteSession extends Closeable {
 
+    /** Nhận từng dòng của kênh điều khiển để ghi nhật ký; được gọi trên luồng nền đang chạy lệnh. */
     interface LogListener {
-        void onLine(String direction, String line); // direction: "SEND" hoặc "RECV"
+        /** @param direction "SEND", "RECV" hoặc "INFO" (thông báo nội bộ như dấu vân tay chứng chỉ) */
+        void onLine(String direction, String line);
     }
 
+    /** Báo tiến độ truyền tệp (số byte đã truyền / tổng); được gọi trên luồng nền. */
     interface Progress {
         void update(long done, long total);
     }
@@ -25,6 +36,7 @@ public interface RemoteSession extends Closeable {
 
     void setLogListener(LogListener listener);
 
+    /** Mở kênh điều khiển, đọc lời chào 220 và nâng lên TLS nếu máy chủ hỗ trợ (xem {@link #isSecure()}). */
     void connect(String host, int port) throws IOException;
 
     /** @return vai trò của tài khoản (admin/user/readonly) hoặc "ftp" nếu giao thức không báo vai trò. */
@@ -53,20 +65,30 @@ public interface RemoteSession extends Closeable {
 
     List<RemoteFile> list() throws IOException, FtpException;
 
-    /** @return ghi chú kết quả (tiếp tục từ đâu, kết quả kiểm tra checksum...). */
+    /**
+     * Tải tệp {@code name} của thư mục hiện tại về {@code dest}.
+     *
+     * @return ghi chú kết quả (tiếp tục từ đâu, kết quả kiểm tra checksum...).
+     * @throws CancelledException khi người dùng bấm Hủy ({@link #cancelTransfer()})
+     */
     String download(String name, Path dest, long expectedSize, Progress progress) throws IOException, FtpException;
 
+    /** Tải {@code src} lên thành tệp {@code name} trong thư mục hiện tại; trả về ghi chú như {@link #download}. */
     String upload(String name, Path src, Progress progress) throws IOException, FtpException;
 
+    /** Gửi QUIT, bỏ qua lỗi (dùng khi ngắt kết nối hoặc đóng cửa sổ). */
     void quit();
 
+    /** Đóng socket điều khiển, không ném lỗi. */
     @Override
     void close();
 
     // ---- khả năng của giao thức / quyền của tài khoản ----
 
+    /** Có nên bật các nút ghi (tải lên, tạo thư mục, đổi tên) — chỉ để hiển thị, server vẫn kiểm tra quyền. */
     boolean canWrite();
 
+    /** Có nên bật nút Xóa — chỉ để hiển thị, server vẫn kiểm tra quyền. */
     boolean canDelete();
 
     /** Kênh điều khiển và kênh dữ liệu đã được mã hóa TLS (FTPS) hay chưa. */
@@ -77,5 +99,6 @@ public interface RemoteSession extends Closeable {
     /** Hỗ trợ hủy giữa chừng + tải tiếp (resume) + kiểm tra checksum. */
     boolean supportsResume();
 
+    /** Cắt lần truyền đang chạy (gọi từ luồng giao diện); lần truyền đó kết thúc bằng {@link CancelledException}. */
     void cancelTransfer();
 }

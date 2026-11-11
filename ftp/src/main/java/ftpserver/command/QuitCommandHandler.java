@@ -5,6 +5,7 @@ import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 import ftpserver.core.SessionState;
 
+/** QUIT: tra loi 221 roi dong phien. Khong can dang nhap. */
 public final class QuitCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return false; }

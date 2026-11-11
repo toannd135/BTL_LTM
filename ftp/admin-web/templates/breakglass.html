@@ -21,7 +21,7 @@
       <td>{{ g.id }}</td><td>{{ g.username }}</td><td><code>{{ g.scope }}</code></td><td class="small">{{ g.reason }}</td><td>{{ g.granted_by }}</td>
       <td class="text-nowrap small"><time class="localtime" datetime="{{ g.created_at.replace(' ', 'T') }}Z">{{ g.created_at }} UTC</time></td>
       <td class="text-nowrap small"><time class="localtime" datetime="{{ g.expires_at.replace(' ', 'T') }}Z">{{ g.expires_at }} UTC</time></td>
-      <td><form method="post" action="/breakglass/{{ g.id }}/revoke"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <td><form method="post" action="/breakglass/{{ g.id }}/revoke" onsubmit="return confirm('Thu hồi quyền khẩn cấp #{{ g.id }} của {{ g.username }} ngay bây giờ?')"><input type="hidden" name="csrf" value="{{ csrf }}">
         <button class="btn btn-sm btn-outline-danger">Thu hồi</button></form></td>
     </tr>
   {% else %}<tr><td colspan="8" class="text-center text-muted">Không có quyền khẩn cấp nào đang hiệu lực</td></tr>{% endfor %}

@@ -8,6 +8,13 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/**
+ * RMD &lt;thu-muc&gt;: xoa thu muc rong, kem ACL va ket qua quet ben trong.
+ *
+ * <p>Can dang nhap, tai khoan co quyen ghi, va la chu so huu hoac co quyen file:delete.
+ * Khong xoa duoc thu muc hien tai hay thu muc goc cua user. Tra loi: 250 khi xoa xong; 501 neu thieu tham so;
+ * 550 neu khong phai thu muc, khong rong hoac khong du quyen; 451 neu loi I/O.
+ */
 public final class RmdCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

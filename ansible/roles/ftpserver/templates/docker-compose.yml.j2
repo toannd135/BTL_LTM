@@ -21,12 +21,7 @@ services:
 
 {% endif %}
   ftp:
-{% if ftp_image_source == 'build' %}
-    build: ./build/ftp
-    image: ftpserver:local
-{% else %}
-    image: {{ ftp_image }}
-{% endif %}
+    image: {{ app_image_registry }}/ftpserver:{{ app_version }}
     restart: unless-stopped
     user: "{{ ftp_app_uid }}:{{ ftp_app_uid }}"
 {% if not ftp_db_host %}
@@ -65,12 +60,7 @@ services:
       - ./data:/app/data
 
   admin:
-{% if ftp_image_source == 'build' %}
-    build: ./build/admin-web
-    image: ftpadmin:local
-{% else %}
-    image: {{ ftpadmin_image }}
-{% endif %}
+    image: {{ app_image_registry }}/ftpadmin:{{ app_version }}
     restart: unless-stopped
 {% if not ftp_db_host %}
     depends_on:

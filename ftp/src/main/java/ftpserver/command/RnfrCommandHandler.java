@@ -7,6 +7,12 @@ import ftpserver.core.FtpReply;
 
 import java.nio.file.Path;
 
+/**
+ * RNFR &lt;nguon&gt;: chon tep/thu muc can doi ten, phai theo sau boi RNTO.
+ *
+ * <p>Can dang nhap, tai khoan co quyen ghi va quyen file:rename / WRITE tren nguon.
+ * Tra loi: 350 khi san sang; 501 neu thieu tham so; 550 neu khong ton tai, la thu muc goc hoac khong du quyen.
+ */
 public final class RnfrCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

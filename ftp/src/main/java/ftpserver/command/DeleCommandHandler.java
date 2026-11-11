@@ -7,6 +7,13 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/**
+ * DELE &lt;tep&gt;: xoa mot tep, kem ACL va ket qua quet ma doc cua no.
+ *
+ * <p>Can dang nhap, tai khoan co quyen ghi, va la chu so huu hoac co quyen file:delete
+ * ({@link ClientSession#canDelete}). Tra loi: 250 khi xoa xong; 501 neu thieu tham so;
+ * 550 neu khong phai tep thuong hoac khong du quyen; 451 neu loi I/O.
+ */
 public final class DeleCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

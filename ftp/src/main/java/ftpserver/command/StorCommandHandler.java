@@ -12,16 +12,29 @@ import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 import ftpserver.core.SessionState;
 import ftpserver.fs.FileStore;
+import ftpserver.scan.ClamdClient;
 
 /**
- * STOR / APPE. Upload thuong ghi vao vung dem (tep tam / vung spool) roi commit nguyen tu vao FileStore (huy giua chung thi khong de lai gi).
- * REST n + STOR ghi tiep tu offset n cua tep co san; APPE noi them vao cuoi tep. Hai che do nay ghi truc tiep
- * vao tep dich de co the tiep tuc sau khi bi ngat.
+ * STOR / APPE &lt;tep&gt;: nhan tep tu client qua kenh du lieu.
+ *
+ * <p>Upload thuong ghi vao vung dem (tep tam / vung spool) roi commit nguyen tu vao FileStore (huy giua chung thi
+ * khong de lai gi). REST n + STOR ghi tiep tu offset n cua tep co san; APPE noi them vao cuoi tep. Hai che do nay
+ * ghi truc tiep vao tep dich de co the tiep tuc sau khi bi ngat.
+ *
+ * <p>Can dang nhap, tai khoan co quyen ghi, quyen WRITE tren tep (ghi de) hoac thu muc cha (tep moi), va da
+ * PASV/PORT. Tra loi: 150 roi 226; 501 neu thieu tham so; 553 neu ten khong hop le; 550 neu khong du quyen,
+ * thu muc cha khong ton tai, dich la thu muc, offset REST sai hoac phat hien ma doc; 425 neu chua PASV/PORT;
+ * 426 neu kenh du lieu loi; 451 neu khong luu duoc.
  */
 public final class StorCommandHandler implements CommandHandler {
 
+    /** Thoi gian cho client ket noi kenh du lieu (ms). */
+    private static final int DATA_CONNECT_TIMEOUT_MS = 10_000;
+    private static final int BUFFER_SIZE = 8192;
+
     private final boolean append;
 
+    /** @param append true: lenh APPE (noi vao cuoi tep); false: lenh STOR */
     public StorCommandHandler(boolean append) {
         this.append = append;
     }
@@ -46,16 +59,7 @@ public final class StorCommandHandler implements CommandHandler {
         }
         FileStore store = session.store();
         boolean isNew = !store.exists(target);
-        // ghi de tep co san can WRITE tren tep; tao tep moi can WRITE tren thu muc chua no
-        Path guarded = isNew ? target.getParent() : target;
-        if (guarded == null || !session.can(guarded, Perm.WRITE)) {
-            session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
-            session.audit("UPLOAD", cmd + " " + arg + " (denied: no write permission)", false);
-            return;
-        }
-        if (isNew && !store.isDirectory(target.getParent())) {
-            session.reply(FtpReply.FILE_UNAVAILABLE, "Parent directory does not exist");
-            session.audit("UPLOAD", cmd + " " + arg + " (parent directory missing)", false);
+        if (!checkWriteAccess(session, store, target, isNew, cmd, arg)) {
             return;
         }
         if (session.getState() != SessionState.DATA_READY) {
@@ -63,7 +67,6 @@ public final class StorCommandHandler implements CommandHandler {
             return;
         }
         long offset = session.consumeRestartOffset();
-        boolean direct = append || offset > 0;
         if (store.isDirectory(target)) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Target is a directory");
             return;
@@ -75,23 +78,52 @@ public final class StorCommandHandler implements CommandHandler {
                 return;
             }
         }
+        receiveAndStore(session, store, target, isNew, offset);
+    }
 
+    /**
+     * Ghi de tep co san can WRITE tren tep; tao tep moi can WRITE tren thu muc chua no (va thu muc do phai ton tai).
+     *
+     * @return false neu da tra loi 550 cho client
+     */
+    private static boolean checkWriteAccess(ClientSession session, FileStore store, Path target, boolean isNew,
+                                            String cmd, String arg) {
+        Path guarded = isNew ? target.getParent() : target;
+        if (guarded == null || !session.can(guarded, Perm.WRITE)) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
+            session.audit("UPLOAD", cmd + " " + arg + " (denied: no write permission)", false);
+            return false;
+        }
+        if (isNew && !store.isDirectory(target.getParent())) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "Parent directory does not exist");
+            session.audit("UPLOAD", cmd + " " + arg + " (parent directory missing)", false);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Tra 150, nhan du lieu tu kenh du lieu, quet ma doc (truoc va/hoac sau commit), commit vao kho,
+     * ghi chu so huu cho tep moi, roi tra 226 kem audit UPLOAD.
+     */
+    private void receiveAndStore(ClientSession session, FileStore store, Path target, boolean isNew, long offset) {
+        boolean direct = append || offset > 0;
         session.reply(FtpReply.FILE_STATUS_OK_OPENING, "About to open data connection");
         long received = 0;
         boolean transferOk = true;
-        FileStore.Upload up = null;
-        try (Socket dataSocket = session.getDataConnection().establish(10_000);
+        FileStore.Upload upload = null;
+        try (Socket dataSocket = session.getDataConnection().establish(DATA_CONNECT_TIMEOUT_MS);
              InputStream in = dataSocket.getInputStream()) {
-            up = store.beginUpload(target, append, offset, session.sessionId());
-            OutputStream os = up.stream();
+            upload = store.beginUpload(target, append, offset, session.sessionId());
+            OutputStream out = upload.stream();
             session.setState(SessionState.TRANSFERRING);
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) != -1) {
-                os.write(buf, 0, n);
-                received += n;
+            byte[] buffer = new byte[BUFFER_SIZE];
+            int bytesRead;
+            while ((bytesRead = in.read(buffer)) != -1) {
+                out.write(buffer, 0, bytesRead);
+                received += bytesRead;
             }
-            os.flush();
+            out.flush();
         } catch (IOException | RuntimeException e) {
             transferOk = false;
         } finally {
@@ -99,58 +131,40 @@ public final class StorCommandHandler implements CommandHandler {
             session.setState(SessionState.AUTHENTICATED);
         }
 
-        String vpath = session.pathResolver().toVirtualPath(target);
+        String virtualPath = session.pathResolver().toVirtualPath(target);
         if (!transferOk) {
-            if (up != null) {
-                if (direct) {
-                    // APPE / REST giu phan da ghi de con tiep tuc duoc
-                    try {
-                        up.commit();
-                    } catch (IOException | RuntimeException ignored) {
-                        up.abort();
-                    }
-                } else {
-                    up.abort();
-                }
+            if (upload != null) {
+                finishInterrupted(upload, direct);
             }
             session.reply(FtpReply.CONN_CLOSED_ABORTED, "Transfer aborted");
-            session.audit("UPLOAD", vpath + " aborted after " + received + " bytes", false);
+            session.audit("UPLOAD", virtualPath + " aborted after " + received + " bytes", false);
             return;
         }
 
-        ftpserver.scan.ClamdClient.Result pre = null;
+        ClamdClient.Result prescanResult = null;
         if (!direct && session.scan().canPrescan()) {
             // quet ban ghi tam TRUOC khi commit: tep nhiem khong bao gio vao kho, tep cu (neu ghi de) con nguyen
-            try {
-                pre = session.scan().prescan(up.reopen());
-            } catch (IOException | RuntimeException e) {
-                pre = null; // khong doc lai duoc -> quet sau commit nhu cu
-            }
-            if (pre != null && pre.verdict() == ftpserver.scan.ClamdClient.Verdict.INFECTED) {
-                up.abort();
-                session.scan().recordRejected(session.aclPath(target), pre.detail());
-                session.reply(FtpReply.FILE_UNAVAILABLE, "WARNING: malware detected (" + pre.detail() + "). Upload rejected, file not stored");
-                session.audit("MALWARE", vpath + " infected: " + pre.detail() + " - upload rejected", false);
+            prescanResult = prescan(session, upload);
+            if (prescanResult != null && prescanResult.verdict() == ClamdClient.Verdict.INFECTED) {
+                upload.abort();
+                session.scan().recordRejected(session.aclPath(target), prescanResult.detail());
+                session.reply(FtpReply.FILE_UNAVAILABLE, "WARNING: malware detected (" + prescanResult.detail() + "). Upload rejected, file not stored");
+                session.audit("MALWARE", virtualPath + " infected: " + prescanResult.detail() + " - upload rejected", false);
                 return;
             }
         }
         try {
-            up.commit();
+            upload.commit();
         } catch (IOException | RuntimeException e) {
-            up.abort();
+            upload.abort();
             session.reply(FtpReply.LOCAL_ERROR, "Cannot save file");
-            session.audit("UPLOAD", vpath + " cannot save", false);
+            session.audit("UPLOAD", virtualPath + " cannot save", false);
             return;
         }
-        String malware = null;
-        if (pre != null && pre.verdict() == ftpserver.scan.ClamdClient.Verdict.CLEAN) {
-            session.scan().recordPrescanned(session.aclPath(target), store, target, pre);
-        } else {
-            malware = session.scan().scanUploadNow(session.aclPath(target), store, target);
-        }
+        String malware = scanAfterCommit(session, store, target, prescanResult);
         if (malware != null) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "WARNING: malware detected (" + malware + "). Upload rejected and file deleted");
-            session.audit("MALWARE", vpath + " infected: " + malware + " - file deleted", false);
+            session.audit("MALWARE", virtualPath + " infected: " + malware + " - file deleted", false);
             return;
         }
         if (isNew) {
@@ -158,8 +172,44 @@ public final class StorCommandHandler implements CommandHandler {
             session.acl().recordOwner(session.aclPath(target), session.getUser().name());
         }
         session.reply(FtpReply.CLOSING_DATA_CONN, "Closing data connection");
-        session.audit("UPLOAD", vpath + " bytes=" + received
+        session.audit("UPLOAD", virtualPath + " bytes=" + received
                 + (append ? " mode=append" : offset > 0 ? " mode=resume@" + offset : ""), true);
+    }
+
+    /** Ket thuc ban ghi khi truyen bi ngat: APPE / REST giu phan da ghi de con tiep tuc duoc, STOR thuong thi huy. */
+    private static void finishInterrupted(FileStore.Upload upload, boolean direct) {
+        if (direct) {
+            try {
+                upload.commit();
+            } catch (IOException | RuntimeException ignored) {
+                upload.abort();
+            }
+        } else {
+            upload.abort();
+        }
+    }
+
+    /** Quet ban ghi tam; null neu khong doc lai duoc (khi do se quet sau commit nhu cu). */
+    private static ClamdClient.Result prescan(ClientSession session, FileStore.Upload upload) {
+        try {
+            return session.scan().prescan(upload.reopen());
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Ghi nhan ket qua quet truoc neu tep sach, nguoc lai quet ngay sau commit.
+     *
+     * @return ten ma doc neu phat hien (tep da bi xoa), null neu tep sach
+     */
+    private static String scanAfterCommit(ClientSession session, FileStore store, Path target,
+                                          ClamdClient.Result prescanResult) {
+        if (prescanResult != null && prescanResult.verdict() == ClamdClient.Verdict.CLEAN) {
+            session.scan().recordPrescanned(session.aclPath(target), store, target, prescanResult);
+            return null;
+        }
+        return session.scan().scanUploadNow(session.aclPath(target), store, target);
     }
 
     private static long sizeOf(FileStore store, Path p) {

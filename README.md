@@ -32,6 +32,9 @@
 22. [Kết luận](#22-kết-luận)
 23. [Tài liệu tham khảo](#23-tài-liệu-tham-khảo)
 24. [Phụ lục](#24-phụ-lục)
+25. [Nhật ký thay đổi](#25-nhật-ký-thay-đổi)
+
+Mục con mới của phần 8 (giao thức client ↔ server): [8.2.1–8.2.5 Chi tiết từng lệnh FTP](#82-danh-sách-lệnh-ftp-hỗ-trợ), [8.3.1–8.3.5 Định dạng lệnh/trả lời, PASV/PORT, trình tự phiên, mã trả lời, phía client](#83-hai-kênh-của-ftp--nền-tảng-của-toàn-bộ-thiết-kế), [8.4.1–8.4.2 Máy trạng thái và thứ tự kiểm tra lệnh](#84-vòng-đời-một-phiên).
 
 ---
 
@@ -204,7 +207,7 @@ flowchart LR
 |---|---|---|
 | Bảo mật | Mật khẩu không lưu dạng rõ; phân quyền kiểm tra trên server; tách quyền quản trị khỏi dữ liệu | PBKDF2-HMAC-SHA256 120.000 vòng lặp, `RbacService`/`AclService` trên server, migration `V005`/`V007` |
 | Bảo mật | Chống thoát thư mục (`../`) | `PathResolver` + `PathResolverTest` (8 test) |
-| Bảo mật | Tiến trình không chạy bằng root, bí mật không nằm trong mã | Container user `ftp`, `.env` quyền 0600, Ansible Vault, gitleaks |
+| Bảo mật | Tiến trình không chạy bằng root, bí mật không nằm trong mã | Container user `ftp`, `.env` quyền 0600, Ansible Vault |
 | Hiệu năng | Phục vụ nhiều client đồng thời | Thread pool 20 luồng; đo loopback 200 client không lỗi, ~600 MB/s |
 | Độ tin cậy | Tệp không hỏng khi hai người cùng tải một tên hoặc khi đứt giữa chừng | Ghi tạm rồi commit (`beginUpload`/`commit`/`abort`) |
 | Độ tin cậy | Không rò rỉ tài nguyên khi client ngắt đột ngột | `cleanup()` trong `finally`; `pasv_leak_test.py` |
@@ -399,8 +402,8 @@ Server và trang quản trị **dùng chung** CSDL, kho tệp và `audit.log`, n
 | IaC | Terraform (provider `azurerm`) | RG, VNet, NSG, 2 VM, đĩa, PostgreSQL |
 | Cấu hình máy | Ansible (roles `base`, `docker`, `storage`, `ftpserver`) | Có Ansible Vault cho bí mật |
 | Container | Docker, Docker Compose | Base `eclipse-temurin:21-jre`, chạy bằng user `ftp` (không root) |
-| CI/CD | GitHub Actions | test, trivy, gitleaks, build image, jpackage, release |
-| Bảo mật mã nguồn | gitleaks, Trivy, SonarCloud | `.gitleaks.toml`, `.trivyignore.yaml`, `.sonarcloud.properties` |
+| CI/CD | GitHub Actions | test, build image, jpackage, release |
+| Chất lượng mã | SonarCloud | `.sonarcloud.properties` |
 
 ---
 
@@ -467,8 +470,8 @@ BTL_LTM/
 | `core/FtpServer` | Vòng `accept()`, đẩy `ClientSession` vào `ExecutorService` cố định 20 luồng |
 | `core/ClientSession` | Một phiên = một luồng: đọc dòng lệnh, tra `CommandRegistry`, kiểm tra xác thực/quyền ghi, gọi handler, ghi reply; dọn tài nguyên trong `finally` |
 | `core/CommandRegistry` / `CommandRegistrations` | Ánh xạ tên lệnh → handler (mẫu Command) |
-| `core/FtpReply` | Hằng số mã trả lời (RFC 959) |
-| `core/SessionState` | Trạng thái phiên: chưa đăng nhập → chờ PASS → đã xác thực → kênh dữ liệu sẵn sàng → đóng |
+| `core/FtpReply` | Hằng số mã trả lời (RFC 959, thêm `234`/`534` của RFC 4217) |
+| `core/SessionState` | Trạng thái phiên: `CONNECTED` → `WAIT_PASS` → `AUTHENTICATED` → `DATA_READY` → `TRANSFERRING` → (về `AUTHENTICATED`); `CLOSED` khi kết thúc (xem 8.4.1) |
 | `data/DataConnection` | Tạo kênh dữ liệu: PASV (`ServerSocket` trên cổng trong dải) hoặc PORT (kết nối ngược); đóng ngay sau mỗi lần truyền |
 | `fs/PathResolver` | Cửa duy nhất đổi đường dẫn người dùng gõ thành đường dẫn an toàn; chặn `../` thoát khỏi thư mục gốc của user |
 | `fs/FileStore` | Interface kho tệp (list, size, read, delete, mkdir, rename, `beginUpload`/`commit`/`abort`) |
@@ -480,16 +483,108 @@ BTL_LTM/
 
 ### 8.2 Danh sách lệnh FTP hỗ trợ
 
+Server đăng ký **31 lệnh** trong `core/CommandRegistrations` (mỗi lệnh một handler trong gói `command/`, riêng `STOR` và `APPE` dùng chung `StorCommandHandler`). Ngoài ra `ABOR` được nhận diện nhưng chưa hỗ trợ (trả `502`); mọi lệnh khác không có trong bảng đăng ký trả `500 Command unrecognized`.
+
 | Nhóm | Lệnh |
 |---|---|
-| Phiên, xác thực | `USER`, `PASS`, `QUIT`, `REIN`, `NOOP`, `SYST`, `FEAT`, `OPTS` |
-| Thư mục | `PWD`, `CWD`, `CDUP`, `MKD`, `RMD` |
-| Tệp | `DELE`, `RNFR`, `RNTO`, `SIZE`, `MDTM` |
-| Truyền dữ liệu | `PASV`, `PORT`, `TYPE`, `LIST`, `NLST`, `RETR`, `STOR`, `APPE`, `REST` |
-| Bảo mật | `AUTH`, `PBSZ`, `PROT` |
-| Mở rộng riêng | `SITE` (`SHARE`, `ACL`, `USERS`, `AUDIT`, `SCAN`, `BREAKGLASS`) |
+| Phiên, TLS | `QUIT`, `REIN`, `NOOP`, `SYST`, `FEAT`, `OPTS`, `AUTH`, `PBSZ`, `PROT` (`ABOR` → 502) |
+| Đăng nhập | `USER`, `PASS` |
+| Thư mục, tệp | `PWD`, `CWD`, `CDUP`, `MKD`, `RMD`, `DELE`, `RNFR`, `RNTO`, `SIZE`, `MDTM` |
+| Kênh dữ liệu, truyền | `TYPE`, `PASV`, `PORT`, `LIST`, `NLST`, `RETR`, `STOR`, `APPE`, `REST` |
+| Mở rộng riêng | `SITE` (`SHARE`, `USERS`, `ACL`, `AUDIT`, `SCAN`, `BREAKGLASS`) |
 
 Hỗ trợ cả **Passive** và **Active**, tiếp tục truyền (`REST`), nối thêm (`APPE`).
+
+**Cách đọc các bảng dưới đây.**
+
+- Cột **Đăng nhập**: giá trị `requiresAuth()` của handler; "có" nghĩa là chưa đăng nhập sẽ nhận `530 Not logged in` (kiểm tra chung ở `ClientSession.dispatch`, xem 8.4.2).
+- Cột **Ghi**: giá trị `requiresWrite()`; "có" nghĩa là tài khoản có cờ chỉ đọc (`read_only`) nhận `550 Permission denied (read-only account)` trước khi vào handler.
+- Cột **Quyền RBAC/ACL**: kiểm tra bên trong handler qua các hàm của `ClientSession` (mục 9):
+  - `can(p, READ)` = RBAC `file:list` **và** (`file:manage` hoặc ACL `READ` trên `p`);
+  - `can(p, DOWNLOAD)` = `file:download` và (`file:manage` hoặc ACL `DOWNLOAD`);
+  - `can(p, WRITE)` = `file:upload` và (`file:manage` hoặc ACL `WRITE`);
+  - `canDo("file:rename", p, WRITE)` = `file:rename` và (`file:manage` hoặc ACL `WRITE`);
+  - `canDelete(p)` = (`file:delete` và (`file:manage` hoặc ACL `WRITE`)) **hoặc** (chủ sở hữu và có `file:upload`);
+  - `canShare(p)` = `file:share` và (`file:manage` hoặc là chủ sở hữu).
+  - Trong mọi trường hợp trên (trừ nhánh "chủ sở hữu" của `canDelete`), nếu vai trò/ACL không cho thì một cấp quyền **break-glass** còn hạn trên đường dẫn vẫn cho phép.
+- Cột **Mã trả lời**: lấy đúng từ code handler; chưa tính các mã chung của `dispatch` (`530`, `534`, `550` read-only) và `451 Internal server error` khi handler ném `RuntimeException`.
+- Đường dẫn trong tham số luôn đi qua `PathResolver.resolve`; vượt ra ngoài thư mục home ném `SecurityException`, handler đổi thành `550 Permission denied` (riêng `STOR`/`APPE`/`RNTO` trả `553`).
+
+#### 8.2.1 Nhóm phiên và TLS
+
+| Lệnh | Cú pháp | Chức năng | Đăng nhập | Ghi | Quyền RBAC/ACL | Mã trả lời | RFC |
+|---|---|---|---|---|---|---|---|
+| `QUIT` | `QUIT` | Kết thúc phiên; `cleanup()` đóng kênh dữ liệu và socket | không | không | — | `221 Bye` | 959 |
+| `REIN` | `REIN` | Đăng xuất nhưng giữ kết nối và giữ TLS; xóa user, quyền, thư mục hiện tại, `REST`, `RNFR`, bộ đếm sai mật khẩu, đóng kênh dữ liệu; về `CONNECTED` | không | không | — | luôn `220 Service ready for new user` | 959 |
+| `NOOP` | `NOOP` | Không làm gì, giữ kết nối | **có** | không | — | `200` | 959 |
+| `SYST` | `SYST` | Báo kiểu hệ thống để client chọn cách phân tích `LIST` | **có** | không | — | `215 UNIX Type: L8` | 959 |
+| `FEAT` | `FEAT` | Liệt kê tính năng mở rộng | không | không | — | `211` nhiều dòng: `AUTH TLS`, `PBSZ`, `PROT` (chỉ khi server có keystore), `SIZE`, `MDTM`, `REST STREAM`, kết thúc `211 End` | 2389 |
+| `OPTS` | `OPTS UTF8 ON` | Chỉ chấp nhận tùy chọn bắt đầu bằng `UTF8` | không | không | — | `200 OK`; tùy chọn khác `504` | 2389 |
+| `AUTH` | `AUTH TLS` (nhận cả `TLS-C`) | Nâng cấp kênh điều khiển lên TLS: gửi `234` trên kênh thường rồi bắt tay TLS; đặt lại trạng thái `PBSZ`/`PROT` | không | không | — | `234 Proceed with negotiation`; cơ chế khác TLS `504`; server không có keystore `502`; TLS đã bật `503`; bắt tay lỗi thì ghi audit và đóng phiên | 4217 |
+| `PBSZ` | `PBSZ 0` | Kích thước vùng đệm bảo vệ, với TLS luôn là 0 (bỏ qua giá trị client gửi); bắt buộc trước `PROT` | không | không | — | `200 PBSZ=0`; chưa `AUTH TLS` `503` | 4217 |
+| `PROT` | `PROT P` \| `PROT C` | Mức bảo vệ kênh dữ liệu: `P` = TLS, `C` = không mã hóa | không | không | — | `200`; chưa `AUTH TLS`/`PBSZ` `503`; `PROT C` khi `tls.required=true` `534`; mức khác `504` | 4217 |
+| `ABOR` | `ABOR` | Không đăng ký handler; nằm trong tập `NOT_IMPLEMENTED` của `ClientSession` | — | — | — | luôn `502 Command not implemented` | 959 |
+
+Lưu ý: `NOOP` và `SYST` **cần đăng nhập** (gửi trước `PASS` nhận `530`), dù cả hai nằm trong danh sách được miễn TLS khi `tls.required=true`.
+
+#### 8.2.2 Nhóm đăng nhập
+
+| Lệnh | Cú pháp | Chức năng | Đăng nhập | Ghi | Quyền RBAC/ACL | Mã trả lời | RFC |
+|---|---|---|---|---|---|---|---|
+| `USER` | `USER <tên>` | Ghi nhận tên đăng nhập, chuyển `WAIT_PASS` | không | không | — | `331` (không tiết lộ user có tồn tại hay không); thiếu tham số `501` | 959 |
+| `PASS` | `PASS <mật khẩu>` | Xác thực PBKDF2 qua `UserManager`; thành công thì nạp quyền RBAC, nhốt user trong `home` (tự tạo nếu chưa có), về `AUTHENTICATED` | không | không | — | `230 User logged in, proceed (roles: …)`; không đi ngay sau `USER` `503`; sai mật khẩu `530` (về `CONNECTED`); sai lần thứ 3 trong phiên `421` rồi đóng kết nối; thư mục home không dùng được `530 Home directory unavailable` | 959 |
+
+Mật khẩu không bao giờ ghi log (`dispatch` in `****` thay cho tham số của `PASS`).
+
+#### 8.2.3 Nhóm thư mục và tệp
+
+| Lệnh | Cú pháp | Chức năng | Đăng nhập | Ghi | Quyền RBAC/ACL | Mã trả lời | RFC |
+|---|---|---|---|---|---|---|---|
+| `PWD` | `PWD` | Trả đường dẫn **ảo** của thư mục hiện tại (không lộ đường dẫn thật của OS) | có | không | — | `257 "/sv" is current directory` | 959 |
+| `CWD` | `CWD <thư mục>` | Đổi thư mục làm việc | có | không | `can(đích, READ)` | `250 Directory changed to …`; thiếu tham số `501`; không tồn tại hoặc không đủ quyền `550 Directory not found`; vượt ra ngoài home `550 Permission denied` | 959 |
+| `CDUP` | `CDUP` | Lên thư mục cha, gọi lại `CWD ..` | có | không | như `CWD` | như `CWD` (`250`/`550`) | 959 |
+| `MKD` | `MKD <thư mục>` | Tạo thư mục; người tạo được ghi là chủ sở hữu (ACL) | có | **có** | `can(thư mục cha, WRITE)` | `257 "<đường dẫn>" created`; thiếu tham số `501`; đã tồn tại hoặc không đủ quyền `550`; lỗi I/O `451` | 959 |
+| `RMD` | `RMD <thư mục>` | Xóa thư mục **rỗng**, xóa kèm ACL và kết quả quét bên trong; không xóa được thư mục hiện tại hay thư mục gốc của user | có | **có** | `canDelete(đích)` | `250 Directory removed`; thiếu tham số `501`; không phải thư mục, là thư mục hiện tại/gốc, không rỗng, không đủ quyền `550`; lỗi I/O `451` | 959 |
+| `DELE` | `DELE <tệp>` | Xóa tệp, xóa kèm ACL và kết quả quét mã độc | có | **có** | `canDelete(tệp)` | `250 Delete successful`; thiếu tham số `501`; không phải tệp thường hoặc không đủ quyền `550`; lỗi I/O `451` | 959 |
+| `RNFR` | `RNFR <nguồn>` | Chọn mục cần đổi tên, phải theo sau bởi `RNTO` | có | **có** | `canDo("file:rename", nguồn, WRITE)` | `350 Ready for RNTO`; thiếu tham số `501`; không tồn tại, là thư mục gốc, không đủ quyền `550` | 959 |
+| `RNTO` | `RNTO <đích>` | Đổi tên/di chuyển mục đã chọn; ACL và kết quả quét đi theo. Lựa chọn `RNFR` bị xóa kể cả khi lệnh lỗi | có | **có** | `canDo("file:rename", thư mục cha của đích, WRITE)` | `250 Rename successful`; chưa `RNFR` `503`; thiếu tham số `501`; đích đã tồn tại hoặc tên không hợp lệ `553`; không đủ quyền `550`; lỗi I/O `451` | 959 |
+| `SIZE` | `SIZE <tệp>` | Kích thước tệp (byte) | có | không | `can(tệp, READ)` | `213 <số byte>`; thiếu tham số `501`; không phải tệp thường, không đủ quyền, không đọc được `550` | 3659 |
+| `MDTM` | `MDTM <tệp>` | Thời điểm sửa đổi cuối, dạng `YYYYMMDDhhmmss` theo UTC | có | không | `can(tệp, READ)` | `213 <thời điểm>`; thiếu tham số `501`; không phải tệp thường, không đủ quyền, không đọc được `550` | 3659 |
+
+Không đủ quyền `READ` thì `CWD`/`SIZE`/`MDTM`/`RETR` trả cùng thông báo như khi không tồn tại, để không lộ sự tồn tại của tệp riêng tư của người khác.
+
+#### 8.2.4 Nhóm kênh dữ liệu và truyền tệp
+
+| Lệnh | Cú pháp | Chức năng | Đăng nhập | Ghi | Quyền RBAC/ACL | Mã trả lời | RFC |
+|---|---|---|---|---|---|---|---|
+| `TYPE` | `TYPE A` \| `TYPE I` | Ghi nhận kiểu truyền ASCII/nhị phân (mặc định của phiên là nhị phân). **Ghi chú:** giá trị chỉ lưu vào field `type`, code truyền tệp không đọc lại nên dữ liệu luôn được gửi nguyên byte, không đổi xuống dòng | có | không | — | `200 Type set to …`; kiểu khác (kể cả `A N`, `E`, `L`) `504` | 959 |
+| `PASV` | `PASV` | Đóng kênh dữ liệu cũ (nếu có), mở `ServerSocket` trên cổng rảnh đầu tiên trong dải `data.port.min..max`; chuyển `DATA_READY` | có | không | — | `227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)` với địa chỉ `pasv.address` (hoặc IP cục bộ của kênh điều khiển), cổng = `p1*256+p2`; không mở được cổng `425` | 959 |
+| `PORT` | `PORT h1,h2,h3,h4,p1,p2` | Chế độ chủ động: ghi nhớ địa chỉ client, server sẽ `connect()` khi truyền; chuyển `DATA_READY` | có | không | — | `200`; thiếu/sai số trường, số ngoài 0..255 `501`; IP khác IP của kênh điều khiển `501` (chống FTP bounce) | 959 |
+| `LIST` | `LIST` | Gửi danh sách thư mục **hiện tại** dạng `ls -l` (có tên chủ sở hữu); chỉ gồm các mục user có quyền `READ`. Tham số (nếu có) bị bỏ qua | có | không | `can(thư mục hiện tại, READ)`, lọc từng mục bằng `can(mục, READ)` | `150` rồi `226`; chưa `PASV`/`PORT` `425`; không đủ quyền `550`; lỗi kênh dữ liệu `426` | 959 |
+| `NLST` | `NLST` | Như `LIST` nhưng mỗi dòng chỉ một tên | có | không | như `LIST` | như `LIST` | 959 |
+| `RETR` | `RETR <tệp>` | Gửi nội dung tệp qua kênh dữ liệu (đệm 8192 byte), bắt đầu từ offset `REST` nếu có | có | không | `can(tệp, READ)` và `can(tệp, DOWNLOAD)`; tệp không bị chặn bởi `ScanService.blockReason` | `150` rồi `226`; thiếu tham số `501`; không tồn tại/không có `READ` `550 File not found`; không có `DOWNLOAD` `550 Permission denied`; tệp bị chặn `550 File unavailable: <lý do>`; offset `REST` lớn hơn kích thước `550`; chưa `PASV`/`PORT` `425`; lỗi kênh dữ liệu `426` | 959, 3659 |
+| `STOR` | `STOR <tệp>` | Nhận tệp; tải mới thì ghi vào vùng tạm, quét `prescan` rồi `commit` nguyên tử (8.6); `REST n` + `STOR` ghi tiếp trực tiếp từ offset `n`. Người tải tệp mới lên là chủ sở hữu | có | **có** | `can(tệp, WRITE)` nếu ghi đè, `can(thư mục cha, WRITE)` nếu tệp mới | `150` rồi `226`; thiếu tham số `501`; tên vượt ra ngoài home `553`; không đủ quyền, thư mục cha không tồn tại, đích là thư mục, offset `REST` sai `550`; phát hiện mã độc `550 WARNING: malware detected (…)`; chưa `PASV`/`PORT` `425`; lỗi kênh dữ liệu `426`; không lưu được `451` | 959 |
+| `APPE` | `APPE <tệp>` | Như `STOR` nhưng nối vào cuối tệp và ghi trực tiếp (không qua vùng tạm, quét **sau** khi ghi; tệp nhiễm bị xóa) | có | **có** | như `STOR` | như `STOR` | 959 |
+| `REST` | `REST <offset>` | Đặt vị trí bắt đầu (byte) cho đúng **một** lệnh `RETR`/`STOR`/`APPE` kế tiếp | có | không | — | `350 Restarting at <n>. Send STOR or RETR to initiate transfer`; không phải số hoặc âm `501` | 3659 |
+
+Thứ tự kiểm tra trong `RETR` và `STOR`: tham số → đường dẫn và quyền → trạng thái `DATA_READY` (`425`) → offset `REST`. Vì vậy một user không đủ quyền nhận `550` ngay cả khi chưa gửi `PASV`. Riêng `LIST`/`NLST` kiểm tra `DATA_READY` trước quyền. Sau mỗi lệnh truyền (thành công hay lỗi) kênh dữ liệu bị đóng và phiên về `AUTHENTICATED`, nên lệnh truyền tiếp theo phải gửi lại `PASV`/`PORT`.
+
+#### 8.2.5 Lệnh mở rộng `SITE`
+
+`SITE` cần đăng nhập, không bị chặn với tài khoản chỉ đọc (`requiresWrite() = false`); quyền được kiểm tra riêng ở từng lệnh con. Lệnh con không khớp (kể cả `SITE` trống) trả `504 Usage: SITE SHARE|USERS|ACL|AUDIT|SCAN|BREAKGLASS ...`. Báo cáo nhiều dòng dùng mã `213` (`213-…` … `213 End`).
+
+| Lệnh con | Cú pháp | Chức năng | Quyền kiểm tra | Mã trả lời |
+|---|---|---|---|---|
+| `SHARE` | `SITE SHARE <tệp> <user> <READ\|DOWNLOAD\|WRITE\|NONE>` | Cấp (hoặc thu hồi với `NONE`) quyền ACL trên tệp/thư mục cho user khác; tên tệp được phép chứa dấu cách (user và quyền là hai token cuối). Nếu tệp chưa có chủ và người gọi có `file:manage` thì người gọi nhận quyền sở hữu trước | `can(tệp, READ)` để thấy tệp, rồi `canShare(tệp)` | `200 Granted …`/`Revoked …`; thiếu tham số, quyền sai `501`; không thấy tệp `550 File not found`; không đủ quyền chia sẻ `550`; user nhận không tồn tại `550 No such user`; lỗi CSDL `451` |
+| `USERS` | `SITE USERS <tiền tố>` | Gợi ý tên người nhận khi chia sẻ: tối đa 10 kết quả, không tính chính mình; không cho liệt kê toàn bộ user | không có quyền riêng | `213` nhiều dòng; tiền tố rỗng, dài hơn 32 ký tự hoặc có dấu cách `501` |
+| `ACL` | `SITE ACL <tệp>` | Xem chủ sở hữu và các quyền đã cấp trên tệp | `can(tệp, READ)`, rồi `canShare(tệp)` | `213` nhiều dòng; thiếu tham số `501`; không thấy tệp hoặc không đủ quyền `550`; lỗi CSDL `451` |
+| `AUDIT` | `SITE AUDIT [n] [user=<u>] [event=<e>]` | Xem `n` sự kiện kiểm toán gần nhất (mặc định 20, giới hạn 1..200), lọc theo user/loại sự kiện | `audit:view` (toàn hệ thống) | `213` nhiều dòng; tham số không phải số/bộ lọc `501`; thiếu quyền `550 Permission denied (requires audit:view)`; lỗi CSDL `451` |
+| `SCAN` | `SITE SCAN` | Tóm tắt kết quả quét mã độc (tối đa 50 dòng) | `scan:view` (toàn hệ thống) | `213` nhiều dòng; thiếu quyền `550`; lỗi CSDL `451` |
+| `BREAKGLASS GRANT` | `SITE BREAKGLASS GRANT <user> <thư mục> <phút> <lý do>` | Cấp quyền khẩn cấp có hạn trên một thư mục; thời hạn 1..480 phút, lý do ≥ 5 ký tự; **không được tự cấp cho chính mình** (nguyên tắc hai người) | `breakglass:grant` (toàn hệ thống) | `200 Break-glass #<id>: …`; sai cú pháp, phút ngoài 1..480, lý do ngắn `501`; tự cấp, user không tồn tại, thư mục không tồn tại, đường dẫn vượt home `550`; lỗi CSDL `451` |
+| `BREAKGLASS REVOKE` | `SITE BREAKGLASS REVOKE <id>` | Thu hồi một cấp quyền đang hiệu lực | `breakglass:grant` | `200 Revoked #<id>`; không có cấp quyền đang hiệu lực với id đó `550`; id không phải số `501` |
+| `BREAKGLASS LIST` | `SITE BREAKGLASS LIST` | Liệt kê các cấp quyền đang hiệu lực | `breakglass:grant` | `213` nhiều dòng |
+
+Hành động khác sau `SITE BREAKGLASS` trả `501` kèm hướng dẫn cú pháp. `SITE` là phần mở rộng riêng của hệ thống (RFC 959 chỉ quy định khung `SITE`, nội dung lệnh con do server tự định nghĩa).
 
 ### 8.3 Hai kênh của FTP — nền tảng của toàn bộ thiết kế
 
@@ -500,16 +595,154 @@ Hỗ trợ cả **Passive** và **Active**, tiếp tục truyền (`REST`), nố
 
 Toàn bộ hệ thống chỉ có hai "điểm neo": `ClientSession.reply(code, message)` (ghi kênh điều khiển) và `DataConnection.establish(timeoutMs)` (mở kênh dữ liệu). Mọi lệnh cụ thể chỉ là cách gọi vào hai điểm này.
 
+#### 8.3.1 Kênh điều khiển: định dạng lệnh và trả lời
+
+- **Kết nối**: TCP tới `control.port` (mặc định **2121**). Ngay khi nhận kết nối server gửi `220 Service ready`.
+- **Lệnh** (client → server): một dòng văn bản ASCII kết thúc bằng `CRLF`, dạng `TÊN [tham số]`. Server đọc bằng `BufferedReader` mã hóa `US_ASCII`, `trim()` dòng, bỏ dòng rỗng, tách tại dấu cách **đầu tiên**: phần trước đổi sang chữ hoa làm tên lệnh (nên `retr` và `RETR` như nhau), phần sau `trim()` làm tham số (tên tệp có dấu cách vẫn giữ nguyên).
+- **Trả lời một dòng** (server → client): `<mã 3 chữ số><dấu cách><văn bản>\r\n`, ví dụ `226 Closing data connection`. Toàn bộ dự án chỉ ghi kênh điều khiển qua `ClientSession.reply`.
+- **Trả lời nhiều dòng** (`ClientSession.replyMulti`, RFC 959 mục 4.2): dòng đầu `<mã>-<văn bản>`, các dòng giữa bắt đầu bằng một dấu cách, dòng cuối `<mã> End`. Dùng cho `FEAT` (`211`) và các báo cáo `SITE` (`213`):
+
+```
+211-Features:
+ AUTH TLS
+ PBSZ
+ PROT
+ SIZE
+ MDTM
+ REST STREAM
+211 End
+```
+
+- **Hết thời gian chờ**: client im lặng quá `idle.timeout.seconds` (mặc định 300 giây) thì server gửi `421 Idle timeout, closing control connection` rồi đóng phiên.
+
+#### 8.3.2 Kênh dữ liệu: PASV và PORT
+
+| Chế độ | Ai mở cổng, ai kết nối | Chi tiết trong code |
+|---|---|---|
+| **Passive** (`PASV`) | Server mở `ServerSocket`, client kết nối tới | `DataConnection.openPassive` thử lần lượt từ `data.port.min` đến `data.port.max` (mặc định 50000–50100), lấy cổng rảnh đầu tiên. Trả `227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)`, cổng = `p1*256 + p2`, IP lấy từ `pasv.address` nếu có (bắt buộc khi chạy sau NAT như Azure) |
+| **Active** (`PORT`) | Client mở cổng, server kết nối tới | `PORT h1,h2,h3,h4,p1,p2`; IP phải trùng IP của kênh điều khiển, nếu khác trả `501` (chống tấn công FTP bounce) |
+
+- `PASV`/`PORT` chỉ **chuẩn bị**; kết nối TCP thật được tạo ở `DataConnection.establish(10000)` khi có lệnh truyền (`LIST`, `NLST`, `RETR`, `STOR`, `APPE`), sau khi server đã gửi `150`. Client có 10 giây để kết nối vào cổng PASV.
+- Nếu phiên đã `PROT P`, socket dữ liệu được bọc TLS (`TlsSupport.wrap`) ngay trong `establish`.
+- Kênh dữ liệu dùng **một lần**: đóng ngay sau mỗi lệnh truyền, rồi mới gửi `226` (hoặc `426` khi lỗi). Mỗi `PASV` mới đóng cổng của lần `PASV` trước để không rò cổng.
+
+#### 8.3.3 Trình tự một phiên điển hình (FTPS, tải một tệp về)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Server (kênh điều khiển :2121)
+    participant D as Kênh dữ liệu (cổng PASV)
+    C->>S: kết nối TCP
+    S-->>C: 220 Service ready
+    C->>S: AUTH TLS
+    S-->>C: 234 Proceed with negotiation
+    Note over C,S: bắt tay TLS trên kênh điều khiển (TLSv1.3/1.2), client kiểm tra vân tay chứng chỉ
+    C->>S: PBSZ 0
+    S-->>C: 200 PBSZ=0
+    C->>S: PROT P
+    S-->>C: 200 Data channel protection: Private
+    C->>S: USER sv
+    S-->>C: 331 User name okay, need password
+    C->>S: PASS ******
+    S-->>C: 230 User logged in, proceed (roles: ...)
+    C->>S: TYPE I
+    S-->>C: 200 Type set to Binary
+    C->>S: PASV
+    S->>D: mở ServerSocket trong dải 50000-50100
+    S-->>C: 227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)
+    C->>S: RETR baocao.pdf (hoặc STOR)
+    S-->>C: 150 About to open data connection
+    C->>D: kết nối TCP tới cổng PASV
+    Note over C,D: bắt tay TLS trên kênh dữ liệu (vì PROT P)
+    D-->>C: nội dung tệp (STOR thì theo chiều ngược lại)
+    Note over D: server đóng kênh dữ liệu
+    S-->>C: 226 Closing data connection
+    C->>S: QUIT
+    S-->>C: 221 Bye
+```
+
+- Khi server **không** cấu hình keystore, `AUTH TLS` nhận `502` và phiên tiếp tục ở dạng rõ (bỏ qua bước 3–8). Khi `tls.required=true`, mọi lệnh ngoài `AUTH`, `FEAT`, `REIN`, `QUIT`, `NOOP`, `SYST`, `OPTS` gửi trước khi TLS bật đều nhận `530`.
+- Bước `TYPE I` là trình tự chuẩn của các client phổ thông; client GUI của dự án **không gửi** `TYPE` vì phiên server mặc định đã là nhị phân.
+- Với `STOR`, dữ liệu đi từ client lên; sau khi client đóng kênh dữ liệu, server quét/commit rồi mới trả `226` (hoặc `550` nếu phát hiện mã độc, xem 8.6).
+
+#### 8.3.4 Mã trả lời
+
+Chữ số đầu của mã cho biết loại kết quả (RFC 959 mục 4.2):
+
+| Nhóm | Ý nghĩa | Client nên làm gì |
+|---|---|---|
+| `1xx` | Sơ bộ tích cực: đã nhận lệnh, đang thực hiện, sẽ còn một trả lời nữa | Chờ trả lời cuối (ví dụ `150` rồi `226`) |
+| `2xx` | Hoàn tất thành công | Gửi lệnh tiếp theo |
+| `3xx` | Trung gian tích cực: cần thêm lệnh để hoàn tất | Gửi lệnh nối tiếp (`PASS` sau `331`, `RNTO` sau `350`, …) |
+| `4xx` | Lỗi tạm thời, thử lại có thể thành công | Thử lại sau / mở lại kênh dữ liệu |
+| `5xx` | Lỗi vĩnh viễn, lặp lại y nguyên sẽ vẫn lỗi | Sửa lệnh, tham số hoặc quyền |
+
+Các mã được dùng trong hệ thống (đúng theo hằng số trong `core/FtpReply.java`):
+
+| Mã | Hằng số | Ý nghĩa | Ví dụ lệnh trả mã này |
+|---|---|---|---|
+| `150` | `FILE_STATUS_OK_OPENING` | Sắp mở kênh dữ liệu | `LIST`, `NLST`, `RETR`, `STOR`, `APPE` |
+| `200` | `COMMAND_OK` | Lệnh thành công | `NOOP`, `TYPE`, `PORT`, `OPTS`, `PBSZ`, `PROT`, `SITE SHARE` |
+| `211` | `SYSTEM_STATUS` | Trạng thái hệ thống (nhiều dòng) | `FEAT` |
+| `213` | `FILE_STATUS` | Trạng thái tệp / báo cáo | `SIZE`, `MDTM`, `SITE USERS/ACL/AUDIT/SCAN/BREAKGLASS LIST` |
+| `215` | `SYSTEM_TYPE` | Kiểu hệ thống | `SYST` |
+| `220` | `SERVICE_READY` | Dịch vụ sẵn sàng | lời chào, `REIN` |
+| `221` | `SERVICE_CLOSING` | Đóng kênh điều khiển | `QUIT` |
+| `226` | `CLOSING_DATA_CONN` | Truyền xong, đã đóng kênh dữ liệu | lệnh truyền |
+| `227` | `ENTERING_PASSIVE` | Vào chế độ bị động | `PASV` |
+| `230` | `LOGGED_IN` | Đăng nhập thành công | `PASS` |
+| `234` | `AUTH_OK` | Chấp nhận `AUTH`, bắt đầu bắt tay TLS (RFC 4217) | `AUTH TLS` |
+| `250` | `FILE_ACTION_OK` | Thao tác tệp/thư mục xong | `CWD`, `CDUP`, `RMD`, `DELE`, `RNTO` |
+| `257` | `DIR_ACTION_OK` | Trả đường dẫn | `PWD`, `MKD` |
+| `331` | `USERNAME_OK_NEED_PASSWORD` | Cần mật khẩu | `USER` |
+| `350` | `PENDING_FURTHER_INFO` | Chờ lệnh nối tiếp | `RNFR`, `REST` |
+| `421` | `SERVICE_NOT_AVAILABLE` | Đóng kết nối | sai mật khẩu lần 3, hết thời gian chờ |
+| `425` | `CANT_OPEN_DATA_CONN` | Không mở được kênh dữ liệu | lệnh truyền khi chưa `PASV`/`PORT`; `PASV` hết cổng |
+| `426` | `CONN_CLOSED_ABORTED` | Kênh dữ liệu đứt, hủy truyền | lệnh truyền |
+| `450` | `FILE_ACTION_NOT_TAKEN` | Có hằng số nhưng hiện **không** handler nào dùng | — |
+| `451` | `LOCAL_ERROR` | Lỗi phía server (I/O, CSDL, ngoại lệ trong handler) | `MKD`, `RMD`, `DELE`, `RNTO`, `STOR`, `SITE` |
+| `452` | `INSUFFICIENT_STORAGE` | Có hằng số nhưng hiện **không** handler nào dùng | — |
+| `500` | `SYNTAX_ERROR_COMMAND` | Lệnh không nhận ra | lệnh không đăng ký |
+| `501` | `SYNTAX_ERROR_PARAMS` | Sai/thiếu tham số | đa số lệnh có tham số |
+| `502` | `COMMAND_NOT_IMPLEMENTED` | Lệnh chưa hỗ trợ | `ABOR`; `AUTH` khi không có keystore |
+| `503` | `BAD_SEQUENCE` | Sai thứ tự lệnh | `PASS` không sau `USER`, `RNTO` không sau `RNFR`, `PBSZ`/`PROT` trước `AUTH TLS` |
+| `504` | `PARAM_NOT_IMPLEMENTED` | Tham số không hỗ trợ | `TYPE`, `OPTS`, `AUTH`, `PROT`, `SITE` (lệnh con lạ) |
+| `530` | `NOT_LOGGED_IN` | Chưa đăng nhập / sai mật khẩu / chưa bật TLS khi bắt buộc | `PASS`, `dispatch` |
+| `534` | `PROT_DENIED_POLICY` | Chính sách bắt buộc mã hóa kênh dữ liệu (RFC 4217) | lệnh truyền khi chưa `PROT P`; `PROT C` khi `tls.required=true` |
+| `550` | `FILE_UNAVAILABLE` | Không tìm thấy / không đủ quyền / bị chặn | đa số lệnh tệp, `SITE` |
+| `553` | `FILE_NAME_NOT_ALLOWED` | Tên tệp không hợp lệ / đích đã tồn tại | `STOR`, `APPE`, `RNTO` |
+
+(`450` và `452` được khai báo cho đủ bộ mã nhưng tìm trong `ftp/src/main/java` không thấy chỗ nào gửi.)
+
+#### 8.3.5 Phía client (`ftp-client-gui/.../net/FtpSession.java`)
+
+Client GUI cài đặt giao thức bằng socket thuần (không dùng thư viện FTP), chỉ dùng chế độ **bị động**:
+
+1. **`connect`**: mở TCP tới `host:port` (timeout kết nối 5 giây), đọc lời chào `220`, gửi `AUTH TLS`.
+   - Nhận `234`: bọc socket điều khiển bằng TLS (`TlsClient`, chỉ bật TLSv1.3/1.2), rồi gửi `PBSZ 0` và `PROT P`; một trong hai không trả `200` thì báo lỗi "Máy chủ từ chối thiết lập kênh mã hóa".
+   - Nhận mã khác (`502`, `500`, …): **giữ kết nối thường**; `isSecure()` trả `false` và giao diện hỏi xác nhận trước khi gửi mật khẩu dạng rõ, thanh trạng thái hiện "⚠ Chưa mã hóa".
+2. **Kiểm tra vân tay chứng chỉ** (`TlsClient`, cơ chế TOFU – tin ở lần đầu): server thường dùng chứng chỉ tự ký nên không dựa vào CA; client tính SHA-256 của chứng chỉ, lần đầu gặp `host:port` thì lưu vào `~/.ftpclient/known_hosts`, các lần sau nếu vân tay khác thì **từ chối** (chống người đứng giữa). Vân tay được ghi ra khung log. Cùng một `TlsClient` dùng cho kênh điều khiển và mọi kênh dữ liệu của phiên.
+3. **`login`**: `USER` (chấp nhận `331` hoặc `230`) rồi `PASS` (cần `230`); đọc danh sách vai trò từ phần `(roles: …)` của dòng `230`.
+4. **Mỗi lệnh dữ liệu** (`LIST`/`RETR`/`STOR`): `PASV` → phân tích `(h1,…,p2)` → mở socket dữ liệu → gửi lệnh → chờ `150`/`125` → nếu đang `PROT P` thì bắt tay TLS trên socket dữ liệu → chép dữ liệu (đệm 8192 byte) → đọc `226`.
+5. **Hủy truyền**: client không gửi `ABOR` (server cũng chưa hỗ trợ) mà đóng socket dữ liệu bằng RST (`SO_LINGER = 0`); server thấy lỗi I/O, bỏ bản ghi dở và trả `426`, client đọc trả lời đó rồi báo "Đã hủy truyền".
+6. **Đọc trả lời**: nếu ký tự thứ 4 là `-` thì đọc tiếp đến dòng bắt đầu bằng `<mã><dấu cách>`. Mỗi lệnh khai báo các mã chấp nhận được (`requireOk(reply, 250)`, …); mã khác được ném thành `FtpException(code, text)` để giao diện hiển thị (riêng `SITE` coi mã ≥ 400 là lỗi).
+7. **`quit`**: gửi `QUIT`. Lệnh còn lại client dùng: `PWD`, `CWD`, `CDUP`, `MKD`, `RMD`, `DELE`, `RNFR`/`RNTO`, `SITE`.
+
 ### 8.4 Vòng đời một phiên
 
 ```
 accept() ─▶ new ClientSession ─▶ pool.submit()      (1 trong 20 luồng nhận)
    │
    ▼ vòng lặp while (state != CLOSED)
-readLine() ─▶ tách "RETR file.pdf" ─▶ registry.resolve("RETR")
-   ├─ chưa AUTHENTICATED mà lệnh cần auth?  → 530
-   ├─ lệnh ghi mà tài khoản không có quyền? → 550
-   └─ handler.handle(session, arg) ─▶ session.reply(code, msg)
+readLine() ─▶ tách "RETR file.pdf" ─▶ dispatch("RETR", "file.pdf")   (thứ tự kiểm tra ở 8.4.2)
+   ├─ ABOR → 502 ; không có handler → 500
+   ├─ tls.required: chưa AUTH TLS → 530 ; lệnh truyền chưa PROT P → 534
+   ├─ xóa REST / RNFR nếu lệnh không nối tiếp chúng
+   ├─ lệnh cần đăng nhập mà chưa đăng nhập? → 530
+   ├─ lệnh ghi mà tài khoản chỉ đọc?         → 550
+   └─ handler.handle(session, arg) ─▶ session.reply(code, msg)   (RuntimeException → 451)
    ▼
 finally: đóng DataConnection, reader, writer, controlSocket, state = CLOSED
 ```
@@ -519,9 +752,57 @@ finally: đóng DataConnection, reader, writer, controlSocket, state = CLOSED
 - `idle.timeout.seconds` (mặc định 300 giây) ngắt client im lặng; `SO_TIMEOUT` đảm bảo luồng quay về pool.
 - Đăng nhập sai 3 lần **trong một phiên**: `421` và ngắt kết nối (bộ đếm theo phiên, hệ thống chưa khóa tài khoản). Lệnh `PASS` được log dưới dạng `****`.
 
+#### 8.4.1 Máy trạng thái phiên (`core/SessionState`)
+
+```mermaid
+stateDiagram-v2
+    [*] --> CONNECTED: accept(), gửi 220
+    CONNECTED --> WAIT_PASS: USER (331)
+    WAIT_PASS --> AUTHENTICATED: PASS đúng (230)
+    WAIT_PASS --> CONNECTED: PASS sai (530)
+    WAIT_PASS --> CLOSED: PASS sai lần 3 (421)
+    AUTHENTICATED --> DATA_READY: PASV (227) / PORT (200)
+    DATA_READY --> DATA_READY: PASV / PORT lại
+    DATA_READY --> TRANSFERRING: LIST, NLST, RETR, STOR, APPE (150)
+    TRANSFERRING --> AUTHENTICATED: xong (226) hoặc lỗi (426)
+    AUTHENTICATED --> CONNECTED: REIN (220)
+    DATA_READY --> CONNECTED: REIN (220)
+    CONNECTED --> CLOSED: QUIT (221) / mất kết nối / hết thời gian chờ
+    AUTHENTICATED --> CLOSED: QUIT (221) / mất kết nối / hết thời gian chờ
+    CLOSED --> [*]
+```
+
+| Trạng thái | Ý nghĩa | Vào bằng |
+|---|---|---|
+| `CONNECTED` | Mới kết nối hoặc sau `REIN`, chưa đăng nhập | `accept()`, `REIN`, `PASS` sai |
+| `WAIT_PASS` | Đã nhận `USER`, chờ `PASS` (`PASS` ở trạng thái khác nhận `503`) | `USER` |
+| `AUTHENTICATED` | Đã đăng nhập, chưa có kênh dữ liệu | `PASS` đúng; kết thúc mỗi lệnh truyền |
+| `DATA_READY` | Đã `PASV`/`PORT`, sẵn sàng cho **một** lệnh truyền (lệnh truyền ở trạng thái khác nhận `425`) | `PASV`, `PORT` |
+| `TRANSFERRING` | Đang chép dữ liệu trên kênh dữ liệu | sau khi `establish()` thành công |
+| `CLOSED` | Vòng đọc lệnh thoát, `cleanup()` đóng mọi socket | `QUIT`, sai mật khẩu lần 3, `AUTH TLS` bắt tay lỗi, `readLine()` trả `null`, hết thời gian chờ |
+
+Một phiên chỉ có một luồng xử lý nên `TRANSFERRING` không bao giờ "nhìn thấy" được từ lệnh khác; trạng thái này chủ yếu phục vụ log và đọc code. "Đã đăng nhập" được kiểm tra qua `isAuthenticated()`, tức trạng thái là `AUTHENTICATED`, `DATA_READY` hoặc `TRANSFERRING`. Vì vậy gửi lại `USER` khi đã đăng nhập sẽ đưa phiên về `WAIT_PASS` và các lệnh cần đăng nhập nhận `530` cho đến khi `PASS` đúng.
+
+#### 8.4.2 Thứ tự kiểm tra trong `ClientSession.dispatch`
+
+Mọi lệnh đều đi qua các bước sau **theo đúng thứ tự**, dừng ở bước đầu tiên không đạt:
+
+| Bước | Điều kiện | Trả lời |
+|---|---|---|
+| 1 | Lệnh thuộc tập `NOT_IMPLEMENTED` (hiện chỉ có `ABOR`) | `502 Command not implemented` |
+| 2 | Tên lệnh không có trong `CommandRegistry` | `500 Command unrecognized` |
+| 3 | `tls.required=true`, chưa `AUTH TLS` và lệnh không thuộc `TLS_EXEMPT` (`AUTH`, `FEAT`, `REIN`, `QUIT`, `NOOP`, `SYST`, `OPTS`) | `530 TLS required: send AUTH TLS first` |
+| 4 | `tls.required=true`, chưa `PROT P` và lệnh dùng kênh dữ liệu (`LIST`, `NLST`, `RETR`, `STOR`, `APPE`) | `534 Data channel must be protected: send PBSZ 0 and PROT P` |
+| 5 | Lệnh không thuộc `REST_KEEP` (`REST`, `RETR`, `STOR`, `APPE`, `PASV`, `PORT`, `TYPE`) → xóa offset `REST`; lệnh khác `RNTO` → xóa lựa chọn `RNFR` | (không trả lời, chỉ đặt lại trạng thái) |
+| 6 | `handler.requiresAuth()` mà chưa đăng nhập | `530 Not logged in` |
+| 7 | `handler.requiresWrite()` mà tài khoản có cờ chỉ đọc | `550 Permission denied (read-only account)` + audit `DENIED` |
+| 8 | Gọi `handler.handle(session, arg)`; nếu ném `RuntimeException` | `451 Internal server error` (phiên vẫn sống) |
+
+Hệ quả đáng chú ý: khi `tls.required=true`, `USER`/`PASS` gửi trước `AUTH TLS` bị chặn ở bước 3 nên mật khẩu không bao giờ đi dạng rõ; `PBSZ`/`PROT` gửi trước `AUTH TLS` cũng nhận `530` (bước 3) thay vì `503` của handler. Bước 5 chạy **trước** bước 6, nên một lệnh bị từ chối vì chưa đăng nhập vẫn làm mất `REST`/`RNFR` đang chờ.
+
 ### 8.5 Luồng `RETR` (tải về)
 
-1. Giải đường dẫn qua `PathResolver`; kiểm tra quyền ACL/RBAC (`file:download`).
+1. Giải đường dẫn qua `PathResolver`; kiểm tra quyền xem (`file:list` + ACL `READ`, không có thì trả `550 File not found` như tệp không tồn tại) rồi quyền tải (`file:download` + ACL `DOWNLOAD`).
 2. `ScanService.blockReason`: chặn tệp `INFECTED`, `QUARANTINED` (và `PENDING` khi `scan.enforce=true`).
 3. Trả `150`, mở kênh dữ liệu (`establish`), (nếu `PROT P`) bắt tay TLS cho kênh dữ liệu.
 4. Đọc `FileStore.read` → ghi ra socket qua mảng đệm 8192 byte (không giữ cả tệp trong RAM, tệp 1 GB hay 1 KB đều như nhau).
@@ -530,7 +811,7 @@ finally: đóng DataConnection, reader, writer, controlSocket, state = CLOSED
 ### 8.6 Luồng `STOR` (tải lên) — điểm đặc biệt của hệ thống
 
 ```
-Client ──STOR──▶ resolve path, kiểm tra quyền ghi ──▶ 150
+Client ──STOR──▶ resolve path, kiểm tra quyền ghi, đã PASV/PORT (nếu chưa: 425) ──▶ 150
    │  byte tệp
    ▼
 FileStore.beginUpload(...)   ← bản ghi TẠM theo sessionId (chưa vào kho)
@@ -1028,8 +1309,8 @@ CI dùng `jpackage` tạo bản cài đặt theo hệ điều hành (Windows MSI
 | Trang | Route | Chức năng |
 |---|---|---|
 | Đăng nhập | `GET/POST /login`, `POST /logout` | Xác thực bằng chính tài khoản FTP |
-| Dashboard | `GET /` | Thống kê, khung cảnh báo mã độc 24 giờ (tắt được, tự hiện lại khi có sự kiện mới), cảnh báo CSDL virus cũ |
-| Người dùng | `GET/POST /users`, `/users/{u}/toggle`, `/roles`, `/roles/remove`, `/password` | Tạo tài khoản, khóa/mở khóa, gán/gỡ vai trò theo scope, đặt lại mật khẩu |
+| Dashboard | `GET /?range=24h\|7d\|30d` | Thẻ số (người dùng, tệp chờ quét, mã độc, đăng nhập lỗi, dung lượng lưu trữ, lưu lượng ↑/↓), biểu đồ hoạt động theo giờ/ngày, top người dùng theo dung lượng và lưu lượng, top IP đăng nhập lỗi; khung cảnh báo mã độc 24 giờ (tắt được, tự hiện lại khi có sự kiện mới), cảnh báo CSDL virus cũ. Mỗi khối chỉ hiện khi có quyền tương ứng (`scan:*`, `audit:view`) |
+| Người dùng | `GET/POST /users`, `/users/{u}/toggle`, `/roles`, `/roles/remove`, `/password` | Tạo tài khoản, khóa/mở khóa, gán/gỡ vai trò theo scope, đặt lại mật khẩu; cột đăng nhập FTP lần cuối |
 | Tệp & quét | `GET /files`, `POST /files/sync`, `/{id}/scan`, `/approve`, `/quarantine`, `/restore`, `/delete` | Đồng bộ kho S3 vào bảng `files`, quét lại, duyệt sạch, cách ly, khôi phục, xóa hẳn |
 | Nhật ký | `GET /audit` | Xem/lọc/phân trang audit |
 | Break-glass | `GET/POST /breakglass`, `POST /breakglass/{id}/revoke` | Cấp và thu hồi quyền khẩn cấp |
@@ -1084,7 +1365,7 @@ clamd **không có xác thực** nên tuyệt đối không mở ra ngoài. Clou
 
 1. **Cả hai VM**: role `base` (swap, định dạng và mount data disk) + role `docker` (Docker Engine, compose).
 2. **VM-B** (`storage`): role `storage` dựng SeaweedFS + clamd bằng Docker Compose (`mem_limit`, `GOMEMLIMIT`), chờ cổng 8333/3310 (tối đa 15 phút vì lần đầu clamd tải CSDL virus).
-3. **VM-A** (`app`): role `ftpserver` sinh `ftpserver.conf`, `.env` (quyền 0600), build image từ mã nguồn (`ftp_image_source: build`), `compose up`, chờ cổng 2121. Đổi `ftpserver.conf` tự khởi động lại service; mở quyền duyệt thư mục `certs` để container đọc keystore; bật FTPS bắt buộc trên Azure.
+3. **VM-A** (`app`): role `ftpserver` sinh `ftpserver.conf`, `.env` (quyền 0600), kéo image `ghcr.io/…/{ftpserver,ftpadmin}:<app_version>` do CI đã build (VM không build gì), `compose up`, dọn image cũ quá 7 ngày, chờ cổng 2121. Đổi `ftpserver.conf` tự khởi động lại service; mở quyền duyệt thư mục `certs` để container đọc keystore; bật FTPS bắt buộc trên Azure.
 
 Bí mật nằm trong `group_vars/ftpserver/vault.yml` (mã hóa bằng Ansible Vault; mẫu: `vault.yml.example`) gồm `vault_ftp_s3_access_key/secret_key`, `vault_ftp_seed_password`, mật khẩu keystore.
 
@@ -1098,7 +1379,7 @@ cd ../ansible && export ANSIBLE_CONFIG=$PWD/ansible.cfg
 ansible-galaxy collection install -r requirements.yml
 cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml
 ansible-vault encrypt group_vars/ftpserver/vault.yml
-ansible-playbook site.yml --ask-vault-pass
+ansible-playbook site.yml --ask-vault-pass -e app_version=sha-1a2b3c4   # tag image CI đã đẩy; bỏ -e = latest
 ```
 
 ### 14.6 Vận hành
@@ -1108,7 +1389,8 @@ ansible-playbook site.yml --ask-vault-pass
 | Bật/tắt | Auto-shutdown 23:00 chỉ **tắt**, không tự bật. Bật **VM-B trước**, rồi VM-A (`az vm start`) |
 | Sao lưu | `scripts/backup-seaweedfs.sh [prefix] [số bản]`: snapshot incremental data disk VM-B, giữ 7 bản; nên dừng SeaweedFS 1 phút để nhất quán. Snapshot cùng RG nên `terraform destroy` vẫn xóa chung → cần sao chép sang RG khác để giữ lâu dài |
 | Đổi IP nhà | Sửa `ssh_allowed_cidr`/`admin_web_allowed_cidr` rồi `terraform apply` |
-| Cập nhật ứng dụng | Chạy lại `ansible-playbook site.yml` |
+| Cập nhật ứng dụng | Push `main` → CI đẩy image `sha-<commit>` → `ansible-playbook site.yml -e app_version=sha-<commit>` |
+| Rollback | Chạy lại playbook với `app_version` cũ (danh sách tag ở GitHub → Packages) |
 | Xóa hạ tầng | `terraform destroy` xóa **cả dữ liệu** SeaweedFS lẫn PostgreSQL — sao lưu trước |
 
 ### 14.7 Docker Compose cục bộ (`ftp/docker-compose.yml`)
@@ -1119,18 +1401,18 @@ Dựng 4 dịch vụ để chạy đầy đủ trên máy cá nhân: `db` (postg
 
 ## 15. CI/CD
 
-Pipeline `.github/workflows/ci.yml` (GitHub Actions), các job:
+Pipeline `.github/workflows/ci.yml` (GitHub Actions) theo nguyên tắc *build once, deploy many*: CI build image bất biến rồi đẩy lên GHCR; Ansible chỉ kéo đúng tag về chạy (CD chạy từ máy quản trị vì NSG chỉ mở SSH cho IP nhà). Các job:
 
 | Job | Việc |
 |---|---|
-| `gitleaks` | Quét bí mật trong mã và lịch sử (`.gitleaks.toml` cho phép mật khẩu demo; baseline bỏ qua phát hiện cũ) |
-| `server-test` | `mvn` build + test server, đẩy artifact `ftpserver-jar` |
-| `trivy` | Quét CVE thư viện + cấu hình Terraform/Dockerfile; **lỗi khi có HIGH/CRITICAL đã có bản vá** (`.trivyignore.yaml`) |
+| `server-test` | `mvn verify` build + test server, giữ `ftpserver.jar` đã test cho job `image` |
 | `infra-check` | `terraform fmt` + `validate`, `ansible --syntax-check` |
-| `admin-web-test` | Test trang quản trị trên SQLite **và** PostgreSQL, build Docker image, Trivy quét image |
-| `ui-package` | Ma trận hệ điều hành: build jar + gom dependency JavaFX theo OS, tính version, `jpackage`; ký MSI, notarize DMG (tùy chọn) |
-| `server-docker`, `admin-docker` | Build và push image lên `ghcr.io` |
-| `release` | Gom artifact thành bản phát hành |
+| `admin-web-test` | Test trang quản trị trên SQLite **và** PostgreSQL |
+| `ui-package` | Ma trận hệ điều hành: build jar + gom dependency JavaFX theo OS, tính version, `jpackage` ra `.msi` / `.dmg` / `.deb`; ký MSI, notarize DMG (tùy chọn). Build đủ 3 OS ở mọi lần chạy |
+| `image` | Chỉ khi push `main`/tag và test đạt: build `ftpserver`, `ftpadmin` → đẩy GHCR với tag `sha-<commit>`, `latest` (main), `X.Y.Z` (tag) |
+| `release` | Chỉ khi push tag `v*`: đính kèm 3 bản cài client vào GitHub Release |
+
+Push mới lên cùng nhánh/PR tự huỷ run cũ (`concurrency`).
 
 Ngoài ra có `.sonarcloud.properties` cho phân tích chất lượng mã.
 
@@ -1190,7 +1472,7 @@ Các lệnh dưới đây được chạy trực tiếp trên máy phát triển
 | `ScanServiceTest` | 6 | Quét trước commit, chặn tải, trạng thái |
 | **Tổng** | **60** | |
 
-**Kiểm thử trang quản trị (`test_admin.py`)**: **73 kiểm tra `PASS`, kết thúc `ALL ADMIN TESTS PASSED`** (chạy với SQLite; CI chạy thêm bản PostgreSQL). Các nhóm gồm đăng nhập/đăng xuất, quyền theo vai trò, quản lý người dùng, thao tác tệp, break-glass (cấp, thu hồi, biến mất khỏi danh sách), dashboard cảnh báo mã độc 24 giờ.
+**Kiểm thử trang quản trị (`test_admin.py`)**: **90 kiểm tra `PASS`, kết thúc `ALL ADMIN TESTS PASSED`** (chạy với SQLite; CI chạy thêm bản PostgreSQL). Các nhóm gồm đăng nhập/đăng xuất, quyền theo vai trò, quản lý người dùng, thao tác tệp, break-glass (cấp, thu hồi, biến mất khỏi danh sách), dashboard cảnh báo mã độc 24 giờ, thống kê dung lượng/lưu lượng/top người dùng/top IP lỗi theo khoảng 24h–7d–30d, tìm tệp và cột chủ sở hữu, đăng nhập lần cuối.
 
 **Chưa chạy trong lần này**: các script đầu cuối cần server đang chạy (`smoke_test.py`, `concurrency_test.py`, `pasv_leak_test.py`, `ftps_test.py`) và `bench_throughput.py`. Số liệu hiệu năng ở mục 16.2 là kết quả đo ngày 2026-11-06 trong tài liệu `docs/BAO-MAT-VA-HIEU-NANG.md`. Test GUI chưa có.
 
@@ -1347,7 +1629,7 @@ Ký hiệu: **●** chủ trì (chịu trách nhiệm hoàn thành và giải th
 | 18 | Admin web: khung, đăng nhập, người dùng, vai trò, nhật ký, break-glass | `main.py` (các route `/login`, `/users`, `/audit`, `/breakglass`), template tương ứng | | | | ● |
 | 19 | Admin web: dashboard, tệp và quét | `main.py` (`/`, `/files*`), `storage.py`, cảnh báo mã độc, cách ly | | ● | | ○ |
 | 20 | Hạ tầng Azure | `terraform/*.tf`, `ansible/` (roles `base`, `docker`, `storage`, `ftpserver`) | ● | | ○ | |
-| 21 | CI/CD | `.github/workflows/ci.yml`, gitleaks, Trivy, SonarCloud | ● | ○ | | |
+| 21 | CI/CD | `.github/workflows/ci.yml`, SonarCloud | ● | ○ | | |
 | 22 | Đóng gói client | `jpackage`, `packaging/`, job `ui-package` | | | ● | ○ |
 | 23 | Sao lưu và vận hành | `scripts/backup-seaweedfs.sh`, hướng dẫn vận hành | ○ | | ● | |
 | 24 | Kiểm thử Java | 12 lớp test trong `ftp/src/test` (mỗi người viết test cho phần mình) | ○ | ● | ○ | ○ |
@@ -1540,3 +1822,27 @@ Các hạn chế (mục 21) chủ yếu là việc hoàn thiện vận hành và
 | `AUTH`/`PBSZ`/`PROT` | tương ứng | `tls/TlsSupport` |
 | `SITE` | `SiteCommandHandler` | `AclService`, `RbacService`, `AuditLog`, `ScanService` |
 | `QUIT` | `QuitCommandHandler` | đổi `state`; đóng socket ở `ClientSession.cleanup()` |
+
+---
+
+## 25. Nhật ký thay đổi
+
+### 2026-11-11 — Làm sạch code, tài liệu kiến trúc, cải thiện giao diện quản trị
+
+| Hạng mục | Thay đổi |
+|---|---|
+| Refactor server Java và client JavaFX | Làm sạch toàn bộ code, **không đổi hành vi**: thêm javadoc và `package-info.java` cho mọi package; tách các hàm dài (`Main`, `Config.loadS3Settings` / `validateTls`, các handler `STOR` / `RETR` / `PASS`, `S3FileStore`, gom code lặp trong `ScanService`, `MainWindow`); thay số "magic" bằng hằng có tên (ví dụ `MAX_FAILED_LOGINS`, `DATA_CONNECT_TIMEOUT_MS`, `PORT_BYTE_BASE`); đổi tên biến khó hiểu |
+| Tài liệu | Thêm `ARCHITECTURE.md`: bản đồ code cho người mới tham gia dự án |
+| README | Viết lại phần giao thức client ↔ server (8.3.1–8.3.5), máy trạng thái và thứ tự kiểm tra lệnh (8.4.1–8.4.2), chi tiết từng lệnh FTP (8.2.1–8.2.5) đối chiếu với code |
+| Client GUI | Tiêu đề cửa sổ đổi thành "FTP Client" |
+| Trang quản trị web (UI/UX) | Dashboard không còn bị cắt nội dung trên màn hình thấp/mobile; form tạo người dùng có nhãn và gợi ý cho từng ô; gom các thao tác của mỗi dòng vào nút "Thao tác ▾"; menu đánh dấu trang hiện tại và có nút thu gọn trên mobile; hỏi xác nhận trước khi thu hồi break-glass; ô lọc trên dashboard tự xuống dòng trên mobile |
+
+**Kiểm chứng**
+
+- 60 unit test của server chạy qua (1 test S3 bị bỏ qua vì cần SeaweedFS).
+- So sánh E2E giữa bản gốc và bản refactor: kết quả khớp từng dòng.
+- `test_admin.py`: 73 PASS.
+
+**Lưu ý**
+
+- Các script `ftp/scripts/*.py` đăng nhập bằng `admin` sẽ nhận `550` khi `MKD`/`STOR`: từ migration `V007__separate_duties` tài khoản `admin` không còn quyền thao tác tệp (tách nhiệm vụ quản trị và nghiệp vụ). Chạy các script này bằng tài khoản có quyền tệp.

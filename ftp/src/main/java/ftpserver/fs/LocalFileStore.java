@@ -15,7 +15,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
-/** Luu tren dia cuc bo: Path "ao" chinh la duong dan that (root.dir). Dung cho phat trien/test. */
+/**
+ * Luu tren dia cuc bo: Path "ao" chinh la duong dan that (root.dir). Dung cho phat trien/test.
+ *
+ * <p>Upload ghi de di qua tep tam {@code <ten>.part-<tag>} roi ATOMIC_MOVE khi commit; APPE/REST ghi thang vao tep dich.
+ */
 public final class LocalFileStore implements FileStore {
 
     private final Path root;
@@ -34,15 +38,15 @@ public final class LocalFileStore implements FileStore {
 
     @Override
     public List<FileInfo> list(Path dir) throws IOException {
-        List<FileInfo> out = new ArrayList<>();
-        try (Stream<Path> s = Files.list(dir)) {
-            for (Path p : (Iterable<Path>) s::iterator) {
-                boolean d = Files.isDirectory(p);
-                out.add(new FileInfo(p.getFileName().toString(), d, d ? 0 : Files.size(p),
-                        Files.getLastModifiedTime(p).toInstant()));
+        List<FileInfo> entries = new ArrayList<>();
+        try (Stream<Path> children = Files.list(dir)) {
+            for (Path child : (Iterable<Path>) children::iterator) {
+                boolean isDir = Files.isDirectory(child);
+                entries.add(new FileInfo(child.getFileName().toString(), isDir, isDir ? 0 : Files.size(child),
+                        Files.getLastModifiedTime(child).toInstant()));
             }
         }
-        return out;
+        return entries;
     }
 
     @Override public void mkdir(Path dir) throws IOException { Files.createDirectory(dir); }
@@ -64,6 +68,7 @@ public final class LocalFileStore implements FileStore {
 
     @Override
     public Upload beginUpload(Path target, boolean append, long offset, String tag) throws IOException {
+        // APPE/REST phai giu du lieu cu nen ghi thang vao tep dich; ghi de thi qua tep tam.
         boolean direct = append || offset > 0;
         Path out = direct ? target : target.resolveSibling(target.getFileName() + ".part-" + tag);
         OutputStream os;

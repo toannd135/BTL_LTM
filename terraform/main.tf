@@ -48,7 +48,6 @@ resource "azurerm_network_security_group" "main" {
   }
 
   # FTP phuc vu client bat ky (sinh vien, may demo): mo cong khai co chu y; thu hep bang ftp_allowed_cidr
-  #trivy:ignore:AZU-0047
   security_rule {
     name                       = "ftp-control"
     priority                   = 110
@@ -61,7 +60,6 @@ resource "azurerm_network_security_group" "main" {
     destination_address_prefix = "*"
   }
 
-  #trivy:ignore:AZU-0047
   security_rule {
     name                       = "ftp-passive-data"
     priority                   = 120

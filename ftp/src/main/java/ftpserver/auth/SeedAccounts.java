@@ -11,12 +11,13 @@ import java.util.Map;
 import ftpserver.db.Database;
 
 /**
- * Tài khoản mẫu do migration tạo (admin/admin, sv/sv, fm/fm, auditor/auditor) dùng mật khẩu ai cũng biết.
- * Khi khởi động: cảnh báo nếu còn dùng mật khẩu mặc định; nếu đặt {@code FTP_SEED_PASSWORD} thì tự đổi
- * những tài khoản còn mật khẩu mặc định sang mật khẩu đó (tài khoản đã đổi mật khẩu thì giữ nguyên).
+ * Tai khoan mau do migration tao (admin/admin, sv/sv, fm/fm, auditor/auditor) dung mat khau ai cung biet.
+ * Khi khoi dong ({@code Main}): canh bao neu con dung mat khau mac dinh; neu dat {@code FTP_SEED_PASSWORD} thi tu doi
+ * nhung tai khoan con mat khau mac dinh sang mat khau do (tai khoan da doi mat khau thi giu nguyen).
  */
 public final class SeedAccounts {
 
+    /** username -> mat khau mac dinh do migration gieo. */
     static final Map<String, String> DEFAULTS = Map.of(
             "admin", "admin", "sv", "sv", "fm", "fm", "auditor", "auditor");
 
@@ -24,7 +25,11 @@ public final class SeedAccounts {
 
     private SeedAccounts() {}
 
-    /** @return tên các tài khoản mẫu còn mật khẩu mặc định sau khi xử lý (rỗng nếu đã an toàn). */
+    /**
+     * @param newPassword mat khau thay the, hoac null de chi kiem tra
+     * @return ten cac tai khoan mau con mat khau mac dinh sau khi xu ly (rong neu da an toan)
+     * @throws IllegalArgumentException neu newPassword ngan hon {@link #MIN_PASSWORD_LENGTH}
+     */
     public static List<String> harden(Database db, String newPassword) throws SQLException {
         if (newPassword != null && newPassword.length() < MIN_PASSWORD_LENGTH) {
             throw new IllegalArgumentException("FTP_SEED_PASSWORD phải có ít nhất " + MIN_PASSWORD_LENGTH + " ký tự");
