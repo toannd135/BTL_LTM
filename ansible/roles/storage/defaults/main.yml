@@ -9,3 +9,5 @@ clamav_image: clamav/clamav:stable
 # backup_disk_id / backup_resource_group_id / backup_location / backup_keep do Terraform ghi vao inventory
 backup_cron_hour: "15"
 backup_cron_minute: "45"
+# Chan tep nen/tai lieu co mat khau (khong quet duoc ben trong). false neu nguoi dung can gui tep zip co mat khau
+clamd_alert_encrypted: true
