@@ -22,6 +22,7 @@
   ansible.builtin.apt:
     name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
     update_cache: true
+    cache_valid_time: 3600
 
 - name: Bat Docker
   ansible.builtin.service:
