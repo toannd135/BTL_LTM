@@ -7,6 +7,12 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/**
+ * CWD &lt;thu-muc&gt;: doi thu muc lam viec hien tai.
+ *
+ * <p>Can dang nhap va quyen READ tren thu muc dich. Tra loi: 250 khi doi thanh cong; 501 neu thieu tham so;
+ * 550 neu thu muc khong ton tai, khong du quyen hoac duong dan vuot ra ngoai thu muc goc.
+ */
 public final class CwdCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

@@ -6,5 +6,6 @@ vault_ftp_s3_access_key: "doi-gia-tri-nay"   # SeaweedFS S3 (ftp_storage: s3)
 vault_ftp_s3_secret_key: "doi-gia-tri-nay"   # openssl rand -hex 24
 vault_ftp_seed_password: "doi-gia-tri-nay"   # >= 8 ky tu, thay mat khau mac dinh cua 4 tai khoan mau
 # vault_ftp_tls_keystore_password: ""
+# Package GHCR private: PAT classic chi can scope read:packages
 # vault_ghcr_username: "toannd135"
 # vault_ghcr_token: "ghp_..."

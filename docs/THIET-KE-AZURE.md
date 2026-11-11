@@ -210,10 +210,9 @@ flowchart LR
   BK["scripts/backup-seaweedfs.sh<br/>snapshot incremental data disk VM-B<br/>giữ 7 bản"] --> SNAP[(Snapshot trong RG)]
   subgraph CI["GitHub Actions"]
     T1[test server + admin-web]
-    T2["trivy: CVE thư viện + misconfig<br/>.trivyignore.yaml"]
-    T3[gitleaks]
     T4[infra-check terraform fmt/validate]
-    T5[build + push image ghcr.io]
+    T5["jpackage installer client<br/>msi / dmg / deb"]
+    T6["image: build → push ghcr.io<br/>tag sha-commit / version"]
   end
 ```
 

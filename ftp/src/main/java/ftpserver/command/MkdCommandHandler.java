@@ -8,6 +8,12 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/**
+ * MKD &lt;thu-muc&gt;: tao thu muc moi, user tao la chu so huu.
+ *
+ * <p>Can dang nhap, tai khoan co quyen ghi va quyen WRITE tren thu muc cha. Tra loi: 257 kem duong dan moi;
+ * 501 neu thieu tham so; 550 neu da ton tai hoac khong du quyen; 451 neu loi I/O.
+ */
 public final class MkdCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

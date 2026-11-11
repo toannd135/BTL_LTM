@@ -4,6 +4,10 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/**
+ * OPTS &lt;tuy-chon&gt;: chi chap nhan {@code OPTS UTF8 ...} (tra 200), con lai tra 504.
+ * Khong can dang nhap.
+ */
 public final class OptsCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return false; }

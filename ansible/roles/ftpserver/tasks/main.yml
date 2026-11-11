@@ -58,47 +58,43 @@
     dest: "{{ ftp_base_dir }}/docker-compose.yml"
     mode: "0644"
 
-- name: Chep ma nguon de build image tren VM
-  when: ftp_image_source == 'build'
-  block:
-    - name: Tao thu muc build
-      ansible.builtin.file:
-        path: "{{ ftp_base_dir }}/build/{{ item }}"
-        state: directory
-        mode: "0755"
-      loop: [ftp/target, ftp/ftproot, admin-web/templates]
+- name: Kiem tra da chon phien ban image
+  ansible.builtin.assert:
+    that: app_version | length > 0
+    fail_msg: "Chua dat app_version (vd -e app_version=sha-1a2b3c4 hoac 1.2.0)"
 
-    - name: Chep tep build ftpserver
-      ansible.builtin.copy:
-        src: "{{ ftp_src_dir }}/{{ item }}"
-        dest: "{{ ftp_base_dir }}/build/ftp/{{ item }}"
-        mode: "0644"
-      loop: [Dockerfile, ftpserver.conf, target/ftpserver.jar]
-
-    - name: Chep tep build admin-web
-      ansible.builtin.copy:
-        src: "{{ ftp_src_dir }}/admin-web/{{ item }}"
-        dest: "{{ ftp_base_dir }}/build/admin-web/"
-        mode: "0644"
-      loop: [Dockerfile, requirements.txt, main.py, storage.py, templates, static]
-
-- name: Dang nhap GHCR (image private)
+# Khong build tren VM: CI da build + quet image, o day chi keo dung tag ve
+- name: Dang nhap GHCR (package private)
   ansible.builtin.command:
     cmd: docker login ghcr.io -u {{ ghcr_username }} --password-stdin
     stdin: "{{ ghcr_token }}"
-  when: ftp_image_source == 'registry' and ghcr_token | length > 0
+  when: ghcr_token | length > 0
   changed_when: false
   no_log: true
 
-- name: Build/keo image va chay stack
+- name: Keo image va chay stack
   community.docker.docker_compose_v2:
     project_src: "{{ ftp_base_dir }}"
-    build: "{{ 'always' if ftp_image_source == 'build' else 'never' }}"
-    pull: "{{ 'missing' if ftp_image_source == 'build' else 'always' }}"
+    build: never
+    pull: always   # tag sha-/version khong doi noi dung; voi latest thi lay ban moi nhat
     remove_orphans: true   # xoa container cua service da bo (vd seaweedfs/clamd cu tren VM-A)
     state: present
+
+- name: Xoa thu muc build cu (truoc day build image tren VM)
+  ansible.builtin.file:
+    path: "{{ ftp_base_dir }}/build"
+    state: absent
 
 - name: Cho cong FTP mo
   ansible.builtin.wait_for:
     port: "{{ ftp_control_port }}"
     timeout: 60
+
+- name: Don image cu khong con dung (giu dia trong tren VM nho)
+  ansible.builtin.command: docker image prune -af --filter "until=168h"
+  register: ftp_prune
+  changed_when: "'Total reclaimed space: 0B' not in ftp_prune.stdout"
+
+- name: Phien ban dang chay
+  ansible.builtin.debug:
+    msg: "ftpserver/ftpadmin = {{ app_image_registry }}/*:{{ app_version }}"

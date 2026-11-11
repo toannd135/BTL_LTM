@@ -5,6 +5,11 @@ import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 import ftpserver.core.SessionState;
 
+/**
+ * USER &lt;ten&gt;: khai bao ten dang nhap, cho PASS ke tiep.
+ *
+ * <p>Khong can dang nhap. Tra loi: 331 (khong tiet lo user co ton tai hay khong); 501 neu thieu tham so.
+ */
 public final class UserCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return false; }

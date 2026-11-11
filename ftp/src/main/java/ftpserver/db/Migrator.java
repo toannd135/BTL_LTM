@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -17,6 +18,9 @@ import java.util.List;
  * Chay cac tep SQL trong classpath db/migration/{sqlite|postgres}/ theo thu tu khai bao o db/migration/index.txt.
  * Moi migration chay trong mot giao dich va chi chay mot lan (ghi vao schema_migrations).
  * Sua noi dung migration da chay se bi tu choi (so checksum).
+ *
+ * <p>Goi mot lan trong {@code Main} truoc khi tao bat ky service nao dung CSDL. Ten tep co dang
+ * {@code <version>__<mo-ta>.sql}; phan truoc "__" la khoa trong schema_migrations.
  */
 public class Migrator {
 
@@ -29,7 +33,12 @@ public class Migrator {
         this.dir = "db/migration/" + (db.dialect() == Database.Dialect.POSTGRES ? "postgres/" : "sqlite/");
     }
 
-    /** @return so migration vua duoc ap dung */
+    /**
+     * Ap cac migration chua chay theo thu tu trong index.txt.
+     *
+     * @return so migration vua duoc ap dung
+     * @throws IllegalStateException neu mot migration da chay bi sua noi dung
+     */
     public int migrate() throws SQLException, IOException {
         List<String> files = readIndex();
         int applied = 0;
@@ -57,8 +66,9 @@ public class Migrator {
         return applied;
     }
 
+    /** Chay mot migration (tach cau lenh theo ";" cuoi dong) va ghi version trong cung giao dich. */
     private static void apply(Connection c, String version, String checksum, String sql) throws SQLException {
-        boolean auto = c.getAutoCommit();
+        boolean previousAutoCommit = c.getAutoCommit();
         c.setAutoCommit(false);
         try {
             for (String stmt : sql.split(";\\s*(\\r?\\n|$)")) {
@@ -80,7 +90,7 @@ public class Migrator {
             c.rollback();
             throw e;
         } finally {
-            c.setAutoCommit(auto);
+            c.setAutoCommit(previousAutoCommit);
         }
     }
 
@@ -96,9 +106,9 @@ public class Migrator {
     private List<String> readIndex() throws IOException {
         List<String> files = new ArrayList<>();
         for (String line : read(dir + "index.txt").split("\\R")) {
-            String t = line.trim();
-            if (!t.isEmpty() && !t.startsWith("#")) {
-                files.add(t);
+            String entry = line.trim();
+            if (!entry.isEmpty() && !entry.startsWith("#")) {
+                files.add(entry);
             }
         }
         return files;
@@ -116,7 +126,7 @@ public class Migrator {
     private static String sha256(String s) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
-        } catch (java.security.NoSuchAlgorithmException e) {
+        } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
     }

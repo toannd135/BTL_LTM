@@ -14,7 +14,16 @@ import ftpserver.config.Config;
 import ftpserver.fs.PathResolver;
 import ftpserver.tls.TlsSupport;
 
+/**
+ * Lang nghe cong dieu khien (control.port) va tao mot {@link ClientSession} cho moi ket noi,
+ * chay tren thread pool co dinh. {@link #start()} chan cho den khi {@link #stop()} duoc goi.
+ */
 public class FtpServer {
+
+    /** So phien xu ly dong thoi toi da; ket noi vuot qua se cho trong hang doi cua pool. */
+    private static final int MAX_CONCURRENT_SESSIONS = 20;
+    /** Thoi gian cho cac phien dang chay ket thuc khi tat server. */
+    private static final int SHUTDOWN_GRACE_SECONDS = 5;
 
     private final Config config;
     private final UserManager userManager;
@@ -23,10 +32,11 @@ public class FtpServer {
     private final TlsSupport tls;
     private final AuditLog audit;
 
+    private final Services services;
+
     private ServerSocket listener;
     private volatile boolean running;
     private ExecutorService pool;
-    private final Services services;
 
     public FtpServer(Config config, UserManager userManager, PathResolver pathResolver, CommandRegistry registry,
                      TlsSupport tls, AuditLog audit, Services services) {
@@ -39,8 +49,9 @@ public class FtpServer {
         this.services = services;
     }
 
+    /** Mo cong va vong lap accept(); chi tra ve sau khi {@link #stop()} dong listener. */
     public void start() throws IOException {
-        pool = Executors.newFixedThreadPool(20);
+        pool = Executors.newFixedThreadPool(MAX_CONCURRENT_SESSIONS);
         listener = new ServerSocket(config.controlPort());
         running = true;
         System.out.println("FTP server listening on port " + config.controlPort()
@@ -61,6 +72,7 @@ public class FtpServer {
         }
     }
 
+    /** Dong listener, cho cac phien dang chay toi da {@value #SHUTDOWN_GRACE_SECONDS}s roi ngat han. Goi tu shutdown hook. */
     public void stop() {
         running = false;
         try {
@@ -72,7 +84,7 @@ public class FtpServer {
         if (pool != null) {
             pool.shutdown();
             try {
-                if (!pool.awaitTermination(5, TimeUnit.SECONDS)) {
+                if (!pool.awaitTermination(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS)) {
                     pool.shutdownNow();
                 }
             } catch (InterruptedException e) {

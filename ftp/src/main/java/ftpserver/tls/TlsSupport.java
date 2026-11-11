@@ -16,10 +16,15 @@ import javax.net.ssl.SSLSocketFactory;
 /** Tao SSLContext tu keystore PKCS12 va boc socket thanh SSLSocket phia server (FTPS explicit, RFC 4217). */
 public final class TlsSupport {
 
+    /** Chi cho phep TLS hien dai; TLS 1.0/1.1 bi tat. */
     private static final String[] PROTOCOLS = {"TLSv1.3", "TLSv1.2"};
 
     private final SSLSocketFactory factory;
 
+    /**
+     * @param keystore tep PKCS12 chua khoa rieng + chung chi server
+     * @param password mat khau keystore (dung cho ca khoa ben trong)
+     */
     public TlsSupport(Path keystore, String password) throws IOException, GeneralSecurityException {
         KeyStore ks = KeyStore.getInstance("PKCS12");
         char[] pw = password.toCharArray();
@@ -33,7 +38,10 @@ public final class TlsSupport {
         this.factory = ctx.getSocketFactory();
     }
 
-    /** Boc socket dang ket noi thanh SSLSocket (server mode) va bat tay xong truoc khi tra ve. */
+    /**
+     * Boc socket dang ket noi thanh SSLSocket (server mode) va bat tay xong truoc khi tra ve.
+     * Dung cho ca kenh dieu khien (AUTH TLS) lan kenh du lieu (PROT P). autoClose=true: dong SSLSocket se dong socket goc.
+     */
     public SSLSocket wrap(Socket plain) throws IOException {
         SSLSocket ssl = (SSLSocket) factory.createSocket(plain, null, plain.getPort(), true);
         ssl.setUseClientMode(false);

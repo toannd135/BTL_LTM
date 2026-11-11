@@ -1,9 +1,9 @@
-# build: chep ma nguon local (can ftp/target/ftpserver.jar: mvn -f ftp/pom.xml -DskipTests package) va build tren VM
-# registry: keo image CI day len GHCR (job server-docker / admin-docker); package private thi can vault_ghcr_token
-ftp_image_source: build
-ftp_src_dir: "{{ playbook_dir }}/../ftp"
-ftp_image: ghcr.io/toannd135/btl_ltm/ftpserver:latest
-ftpadmin_image: ghcr.io/toannd135/btl_ltm/ftpadmin:latest
+# Image do CI build + quet + day len GHCR (job `image`). VM chi keo ve, khong build.
+# app_version: sha-<7 ky tu commit> (moi push main), <X.Y.Z> (tag vX.Y.Z) hoac latest (ban main moi nhat).
+# Nen ghim sha-/version khi trien khai that: ansible-playbook site.yml -e app_version=sha-1a2b3c4
+# Rollback = chay lai voi tag cu. Xem tag tai GitHub > Packages.
+app_image_registry: ghcr.io/toannd135/btl_ltm
+app_version: latest
 postgres_image: postgres:16-alpine
 
 # O du lieu Terraform gan vao LUN 0, mount tai ftp_base_dir
@@ -39,6 +39,6 @@ seaweedfs_image: chrislusf/seaweedfs:4.50
 ftp_s3_bucket: ftp-files
 ftp_s3_access_key: "{{ vault_ftp_s3_access_key | default('') }}"
 ftp_s3_secret_key: "{{ vault_ftp_s3_secret_key | default('') }}"
-# Image GHCR private thi can token (scope read:packages); public thi bo trong
+# Package GHCR private thi can PAT classic scope read:packages; package public thi de trong
 ghcr_username: "{{ vault_ghcr_username | default('') }}"
 ghcr_token: "{{ vault_ghcr_token | default('') }}"

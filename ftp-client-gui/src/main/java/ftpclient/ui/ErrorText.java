@@ -13,10 +13,12 @@ final class ErrorText {
 
     private ErrorText() {}
 
+    /** Lỗi do máy chủ quét thấy mã độc trong tệp tải lên (hiện cảnh báo thay vì lỗi thường). */
     static boolean isMalware(Throwable ex) {
         return ex != null && ex.getMessage() != null && ex.getMessage().toLowerCase(Locale.ROOT).contains("malware");
     }
 
+    /** Câu thông báo cho người dùng; không nhận ra lỗi thì trả nguyên thông điệp gốc. */
     static String of(Throwable ex) {
         String raw = ex == null ? null : ex.getMessage();
         if (raw == null || raw.isBlank()) {

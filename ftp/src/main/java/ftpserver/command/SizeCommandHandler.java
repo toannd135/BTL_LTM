@@ -8,6 +8,12 @@ import ftpserver.core.FtpReply;
 import java.io.IOException;
 import java.nio.file.Path;
 
+/**
+ * SIZE &lt;tep&gt; (RFC 3659): kich thuoc tep tinh bang byte.
+ *
+ * <p>Can dang nhap va quyen READ tren tep. Tra loi: 213 kem kich thuoc; 501 neu thieu tham so;
+ * 550 neu khong phai tep thuong, khong du quyen hoac khong doc duoc.
+ */
 public final class SizeCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

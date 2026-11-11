@@ -10,9 +10,16 @@ import java.nio.file.Path;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
+/**
+ * MDTM &lt;tep&gt; (RFC 3659): thoi diem sua doi cuoi cua tep, dang YYYYMMDDhhmmss theo UTC.
+ *
+ * <p>Can dang nhap va quyen READ tren tep. Tra loi: 213 kem thoi diem; 501 neu thieu tham so;
+ * 550 neu khong phai tep thuong, khong du quyen hoac khong doc duoc.
+ */
 public final class MdtmCommandHandler implements CommandHandler {
 
-    private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter TIMESTAMP_FORMAT =
+            DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC);
 
     @Override public boolean requiresAuth()  { return true; }
     @Override public boolean requiresWrite() { return false; }
@@ -29,7 +36,7 @@ public final class MdtmCommandHandler implements CommandHandler {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Not a regular file");
                 return;
             }
-            session.reply(FtpReply.FILE_STATUS, FMT.format(session.store().lastModified(target)));
+            session.reply(FtpReply.FILE_STATUS, TIMESTAMP_FORMAT.format(session.store().lastModified(target)));
         } catch (SecurityException e) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
         } catch (IOException e) {

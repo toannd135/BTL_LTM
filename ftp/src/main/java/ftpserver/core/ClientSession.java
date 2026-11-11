@@ -7,12 +7,15 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.Socket;
-import javax.net.ssl.SSLSocket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+
+import javax.net.ssl.SSLSocket;
 
 import ftpserver.acl.AclService;
 import ftpserver.acl.Perm;
@@ -28,21 +31,37 @@ import ftpserver.fs.FileStore;
 import ftpserver.fs.PathResolver;
 import ftpserver.tls.TlsSupport;
 
+/**
+ * Mot phien FTP: doc lenh tren kenh dieu khien cua mot client, kiem tra dieu kien chung roi giao cho
+ * {@link CommandHandler}. Moi ket noi chay tren mot luong rieng (xem {@link FtpServer}).
+ *
+ * <p>Lop nay cung la "ngu canh" ma moi handler nhan vao: giu trang thai dang nhap, thu muc hien tai, kenh du
+ * lieu, trang thai TLS, offset REST, va cung cap cac ham kiem tra quyen ({@link #can}, {@link #canDo},
+ * {@link #canDelete}, {@link #canShare}) ket hop RBAC + ACL + break-glass.
+ */
 public class ClientSession implements Runnable {
 
+    /** Lenh biet ten nhung chua ho tro: tra 502 thay vi 500. */
     private static final Set<String> NOT_IMPLEMENTED = Set.of("ABOR");
+    /** Lenh duoc phep gui truoc AUTH TLS khi tls.required=true. */
     private static final Set<String> TLS_EXEMPT = Set.of("AUTH", "FEAT", "REIN", "QUIT", "NOOP", "SYST", "OPTS");
+    /** Lenh dung kenh du lieu: khi tls.required=true phai co PROT P truoc. */
     private static final Set<String> DATA_COMMANDS = Set.of("LIST", "NLST", "RETR", "STOR", "APPE");
     /** REST con hieu luc qua cac lenh nay (PASV/PORT/TYPE thuong chen giua REST va RETR/STOR). */
     private static final Set<String> REST_KEEP = Set.of("REST", "RETR", "STOR", "APPE", "PASV", "PORT", "TYPE");
+    /** Sinh ma phien S1, S2, ... dung trong log va audit. */
     private static final AtomicLong COUNTER = new AtomicLong();
 
+    // --- Ket noi va dich vu (co dinh suot phien) ---
     private final String sessionId;
     private final Socket controlSocket;
-    private Socket ioSocket; // controlSocket, hoac SSLSocket sau AUTH TLS
+    /** Socket thuc su dung de doc/ghi: chinh controlSocket, hoac SSLSocket boc no sau AUTH TLS. */
+    private Socket ioSocket;
     private final CommandRegistry registry;
     private final UserManager userManager;
+    /** Resolver hien hanh; sau khi dang nhap co the bi thay bang resolver gioi han trong thu muc home cua user. */
     private PathResolver pathResolver;
+    /** Resolver goc tai root.dir; dung de tinh khoa ACL va de khoi phuc khi REIN. */
     private final PathResolver rootResolver;
     private final Config config;
     private final TlsSupport tls;
@@ -51,12 +70,15 @@ public class ClientSession implements Runnable {
     private final RbacService rbac;
     private final ScanService scan;
     private final FileStore store;
+    /** Quyen RBAC cua user, nap luc dang nhap; null khi chua dang nhap. */
     private RbacService.Grants grants;
-    private final Set<Long> breakglassLogged = new java.util.HashSet<>();
+    /** Ma cac lan cap quyen break-glass da ghi audit trong phien nay (chi ghi lan dung dau tien). */
+    private final Set<Long> breakglassLogged = new HashSet<>();
 
     private BufferedReader reader;
     private PrintWriter writer;
 
+    // --- Trang thai phien (thay doi theo lenh) ---
     private SessionState state = SessionState.CONNECTED;
     private String pendingUsername;
     private User user;
@@ -65,9 +87,13 @@ public class ClientSession implements Runnable {
     private DataConnection dataConnection;
     private int failedLoginCount = 0;
     private boolean tlsActive;
+    /** Da nhan PBSZ (bat buoc truoc PROT theo RFC 4217). */
     private boolean pbszDone;
+    /** PROT P: kenh du lieu cung duoc ma hoa TLS. */
     private boolean protPrivate;
+    /** Offset tu lenh REST, ap dung cho lenh RETR/STOR/APPE ke tiep. */
     private long restartOffset;
+    /** Duong dan da chon boi RNFR, cho RNTO ngay sau do. */
     private Path renameFrom;
 
     public ClientSession(Socket controlSocket, CommandRegistry registry,
@@ -89,6 +115,7 @@ public class ClientSession implements Runnable {
         this.ioSocket = controlSocket;
     }
 
+    /** Vong doi phien: gui 220, doc va xu ly tung dong lenh cho den QUIT, mat ket noi hoac het thoi gian cho. */
     @Override
     public void run() {
         try {
@@ -149,6 +176,16 @@ public class ClientSession implements Runnable {
         audit("AUTH_TLS", ((SSLSocket) ioSocket).getSession().getProtocol(), true);
     }
 
+    /**
+     * Kiem tra dieu kien chung theo thu tu roi goi handler:
+     * <ol>
+     *   <li>lenh chua ho tro (502) / khong ton tai (500);</li>
+     *   <li>chinh sach TLS bat buoc: AUTH TLS truoc moi lenh (530), PROT P truoc lenh du lieu (534);</li>
+     *   <li>xoa REST/RNFR neu lenh hien tai khong noi tiep chung;</li>
+     *   <li>can dang nhap (530), tai khoan chi doc goi lenh ghi (550).</li>
+     * </ol>
+     * Loi RuntimeException trong handler duoc bat va tra 451 de phien khong bi chet.
+     */
     private void dispatch(String commandName, String arg) {
         String logArg = "PASS".equals(commandName) ? "****" : arg;
         System.out.println("[" + sessionId + "] > " + commandName + " " + logArg);
@@ -195,6 +232,7 @@ public class ClientSession implements Runnable {
         }
     }
 
+    /** Dong kenh du lieu, stream va socket; ghi audit LOGOUT neu user da dang nhap. */
     private void cleanup() {
         if (dataConnection != null) {
             dataConnection.close();
@@ -229,7 +267,7 @@ public class ClientSession implements Runnable {
     }
 
     /** Tra loi nhieu dong (RFC 959): "211-Features:" ... "211 End". */
-    public void replyMulti(int code, String first, java.util.List<String> lines, String last) {
+    public void replyMulti(int code, String first, List<String> lines, String last) {
         if (writer == null) {
             return;
         }
@@ -243,6 +281,7 @@ public class ClientSession implements Runnable {
         writer.flush();
     }
 
+    /** Ghi mot dong nhat ky kiem toan cho phien nay (user hien tai, hoac ten dang cho PASS neu chua dang nhap). */
     public void audit(String event, String detail, boolean ok) {
         audit.log(sessionId, remoteIp(), user == null ? pendingUsername : user.name(), event, detail, ok);
     }
@@ -276,6 +315,9 @@ public class ClientSession implements Runnable {
         state = SessionState.CONNECTED;
     }
 
+    // --- TLS / REST / RNFR ---
+
+    /** Server co cau hinh keystore (AUTH TLS dung duoc). */
     public boolean tlsAvailable() { return tls != null; }
     public boolean isTlsActive() { return tlsActive; }
     public boolean isPbszDone() { return pbszDone; }
@@ -296,6 +338,8 @@ public class ClientSession implements Runnable {
     public Path getRenameFrom() { return renameFrom; }
     public void setRenameFrom(Path p) { this.renameFrom = p; }
     public void setPathResolver(PathResolver r) { this.pathResolver = r; }
+
+    // --- Dich vu va kiem tra quyen ---
 
     public AclService acl() { return acl; }
 
@@ -369,6 +413,7 @@ public class ClientSession implements Runnable {
         return breakglass(key);
     }
 
+    /** Co cap quyen dac biet (break-glass) con han cho user tren duong dan nay khong; ghi audit lan dung dau. */
     private boolean breakglass(String key) {
         Long id = rbac.activeBreakglass(user.name(), key);
         if (id == null) {
@@ -380,6 +425,9 @@ public class ClientSession implements Runnable {
         return true;
     }
 
+    // --- Trang thai phien ---
+
+    /** Da dang nhap (bao gom ca khi dang chuan bi hoac dang truyen du lieu). */
     public boolean isAuthenticated() {
         return state == SessionState.AUTHENTICATED
                 || state == SessionState.DATA_READY
