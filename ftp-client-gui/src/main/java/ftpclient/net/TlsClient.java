@@ -23,10 +23,14 @@ import javax.net.ssl.X509TrustManager;
  * Phía client của FTPS explicit. Máy chủ thường dùng chứng chỉ tự ký nên không thể dựa vào CA:
  * dùng "tin ở lần đầu" (TOFU) — lưu dấu vân tay SHA-256 của chứng chỉ theo host:port vào
  * {@code ~/.ftpclient/known_hosts}; lần sau chứng chỉ đổi thì từ chối (chống kẻ đứng giữa).
+ *
+ * <p>Một đối tượng dùng cho cả kênh điều khiển (sau AUTH TLS) và mọi kênh dữ liệu (PROT P) của cùng
+ * phiên; chỉ được dùng trên luồng nền của {@link FtpSession}.
  */
 final class TlsClient {
 
     private static final String[] PROTOCOLS = {"TLSv1.3", "TLSv1.2"};
+    private static final String FINGERPRINT_ALGORITHM = "SHA-256";
     private static final Path DEFAULT_STORE = Path.of(System.getProperty("user.home"), ".ftpclient", "known_hosts");
 
     private final SSLSocketFactory factory;
@@ -53,6 +57,7 @@ final class TlsClient {
         return trust.firstUse;
     }
 
+    /** Bọc socket đã kết nối thành TLS (client mode) và bắt tay ngay; socket gốc bị đóng theo socket TLS. */
     SSLSocket wrap(Socket plain, String host, int port) throws IOException {
         SSLSocket ssl = (SSLSocket) factory.createSocket(plain, host, port, true);
         ssl.setEnabledProtocols(PROTOCOLS);
@@ -60,7 +65,9 @@ final class TlsClient {
         return ssl;
     }
 
+    /** Tin chứng chỉ theo dấu vân tay đã ghim cho {@code host:port}, không kiểm tra CA. */
     private static final class PinTrustManager implements X509TrustManager {
+        /** Khóa trong tệp known_hosts: "host:port". */
         private final String key;
         private final Path store;
         private volatile String lastFingerprint;
@@ -73,20 +80,21 @@ final class TlsClient {
 
         @Override
         public synchronized void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
-            String fp;
+            String fingerprint;
             try {
-                fp = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(chain[0].getEncoded()));
+                fingerprint = HexFormat.of().formatHex(
+                        MessageDigest.getInstance(FINGERPRINT_ALGORITHM).digest(chain[0].getEncoded()));
             } catch (GeneralSecurityException e) {
                 throw new CertificateException(e);
             }
-            lastFingerprint = fp;
+            lastFingerprint = fingerprint;
             Properties known = load();
             String pinned = known.getProperty(key);
             firstUse = pinned == null;
             if (pinned == null) {
-                known.setProperty(key, fp);
+                known.setProperty(key, fingerprint);
                 save(known);
-            } else if (!pinned.equals(fp)) {
+            } else if (!pinned.equals(fingerprint)) {
                 throw new CertificateException("Chứng chỉ của " + key + " khác với lần kết nối trước. "
                         + "Có thể máy chủ đã đổi chứng chỉ hoặc đang bị nghe lén. Nếu bạn tin tưởng máy chủ, xóa dòng "
                         + key + " trong " + store);

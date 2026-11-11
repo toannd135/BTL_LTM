@@ -4,6 +4,7 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/** SYST: tra loi 215 "UNIX Type: L8" de client chon cach phan tich LIST. Can dang nhap. */
 public final class SystCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

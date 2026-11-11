@@ -4,6 +4,13 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 
+/**
+ * Phan giai duong dan do client gui (tuong doi hoac tuyet doi) thanh Path tuyet doi nam trong root, chong path traversal.
+ *
+ * <p>Bat bien: moi Path tra ve tu {@link #resolve} deu bat dau bang {@link #rootDir()}; day la dang Path ma
+ * {@link FileStore} nhan. {@link #toVirtualPath} doi nguoc ve dang "/a/b" tinh tu root - chinh la khoa dung
+ * trong ACL, scan va audit. Moi phien co mot resolver rieng theo home cua user ({@link #child}).
+ */
 public class PathResolver {
 
     private final Path rootDir;
@@ -44,9 +51,10 @@ public class PathResolver {
         return candidate;
     }
 
+    /** Doi Path trong root thanh duong dan ao dang "/a/b" (root = "/"), luon dung dau '/'. */
     public String toVirtualPath(Path real) {
-        Path rel = rootDir.relativize(real);
-        String s = rel.toString().replace(File.separatorChar, '/');
-        return s.isEmpty() ? "/" : "/" + s;
+        Path relative = rootDir.relativize(real);
+        String slashed = relative.toString().replace(File.separatorChar, '/');
+        return slashed.isEmpty() ? "/" : "/" + slashed;
     }
 }

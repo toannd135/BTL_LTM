@@ -4,6 +4,12 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/**
+ * PROT C|P (RFC 4217): muc bao ve kenh du lieu, C = khong ma hoa, P = TLS.
+ *
+ * <p>Khong can dang nhap nhung phai sau AUTH TLS va PBSZ. Tra loi: 200 khi dat xong; 503 neu chua AUTH TLS/PBSZ;
+ * 534 neu xin PROT C trong khi tls.required=true; 504 neu muc khac C/P.
+ */
 public final class ProtCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return false; }

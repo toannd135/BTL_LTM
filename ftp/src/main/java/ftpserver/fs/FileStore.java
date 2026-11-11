@@ -11,6 +11,9 @@ import java.util.Optional;
 /**
  * Noi luu tru that cua tep. Moi {@link Path} truyen vao la duong dan tuyet doi "ao" tinh tu root.dir (da qua
  * {@link PathResolver} nen khong thoat ra ngoai root); backend tu anh xa sang dia (local) hoac object key (S3/SeaweedFS).
+ *
+ * <p>Cac handler trong {@code command} va {@code scan.ScanService} chi lam viec qua interface nay, khong goi
+ * {@code java.nio.file.Files} truc tiep. Trien khai: {@link LocalFileStore}, {@link S3FileStore}; chon trong {@code Main}.
  */
 public interface FileStore {
 
@@ -52,8 +55,10 @@ public interface FileStore {
         return Optional.empty();
     }
 
+    /** Mot muc trong ket qua {@link #list}; {@code size} = 0 voi thu muc. */
     record FileInfo(String name, boolean directory, long size, Instant modified) {}
 
+    /** Phien ghi do {@link #beginUpload} tra ve; ket thuc bang dung mot trong {@link #commit()} hoac {@link #abort()}. */
     interface Upload {
         OutputStream stream();
         /** Dong luong ghi roi mo doc lai du lieu da nhan (chua commit) de quet truoc khi dua vao kho. */

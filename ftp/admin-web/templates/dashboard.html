@@ -2,7 +2,12 @@
 {% block body_class %}dash-fixed{% endblock %}
 {% block main_class %}{% endblock %}
 {% block content %}
-<h3 class="mb-3 flex-shrink-0">Dashboard</h3>
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 flex-shrink-0">
+  <h3 class="mb-0">Dashboard</h3>
+  {% if activity %}<div class="btn-group btn-group-sm" role="group" aria-label="Khoảng thời gian">
+    {% for key, val in ranges.items() %}<a href="/?range={{ key }}" class="btn btn-outline-secondary{{ ' active' if key == range }}"{% if key == range %} aria-current="true"{% endif %}>{{ val[2] | replace(' qua', '') }}</a>{% endfor %}
+  </div>{% endif %}
+</div>
 {% if malware %}<div id="malware-alert" data-key="{{ malware[0].ts }}" class="alert alert-danger flex-shrink-0 position-relative pe-5"><button type="button" class="btn-close position-absolute top-0 end-0 m-2" aria-label="Đóng" onclick="dismissMalware()"></button><strong>Cảnh báo mã độc (24 giờ qua):</strong> {{ malware|length }}{{ '+' if malware|length >= 5 }} lần upload bị từ chối/xóa.
   <ul class="mb-0 small">{% for m in malware %}<li><code>{{ m.ts }}</code> {{ m.user }} — {{ m.detail }}</li>{% endfor %}</ul>
   <a href="/audit?event=MALWARE" class="alert-link small">Xem nhật ký</a></div>
@@ -14,22 +19,44 @@
 {% if clamd_stale %}<div class="alert alert-warning flex-shrink-0">Dữ liệu nhận diện virus đã cũ {{ clamd_stale }} ngày. <details class="d-inline"><summary class="d-inline">Dành cho quản trị hệ thống</summary>Kiểm tra <code>freshclam</code> trên VM-B (clamd).</details></div>{% endif %}
 {% set files = files or {} %}{% set pending = files.get('PENDING', 0) %}{% set infected = files.get('INFECTED', 0) %}
 <div class="row g-3 mb-3 flex-shrink-0">
-  {% if users %}<div class="col-6 col-lg-3"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>{% endif %}
-  {% if 'scan:view' in perms or 'scan:manage' in perms %}<div class="col-6 col-lg-3"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if pending }} h-100"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 {{ 'text-warning fw-bold' if pending else 'text-dark' }}">{{ pending }}</div></div></div></a></div>
-  <div class="col-6 col-lg-3"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-danger' if infected }} h-100"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 {{ 'text-danger fw-bold' if infected else 'text-dark' }}">{{ infected }}{% if infected %} <span class="fs-6">⚠</span>{% endif %}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>{% endif %}
-  {% if activity %}<div class="col-6 col-lg-3"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if failed_logins }} h-100"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2 {{ 'text-danger fw-bold' if failed_logins >= 5 else 'text-warning fw-bold' if failed_logins else 'text-dark' }}">{{ failed_logins }}</div><div class="small text-muted">trong 24 giờ qua</div></div></div></a></div>{% endif %}
+  {% if users %}<div class="col-6 col-md-4 col-xl-2"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>{% endif %}
+  {% if 'scan:view' in perms or 'scan:manage' in perms %}<div class="col-6 col-md-4 col-xl-2"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if pending }} h-100"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 {{ 'text-warning fw-bold' if pending else 'text-dark' }}">{{ pending }}</div></div></div></a></div>
+  <div class="col-6 col-md-4 col-xl-2"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-danger' if infected }} h-100"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 {{ 'text-danger fw-bold' if infected else 'text-dark' }}">{{ infected }}{% if infected %} <span class="fs-6">⚠</span>{% endif %}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>{% endif %}
+  {% if activity %}<div class="col-6 col-md-4 col-xl-2"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if failed_logins }} h-100"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2 {{ 'text-danger fw-bold' if failed_logins >= 5 else 'text-warning fw-bold' if failed_logins else 'text-dark' }}">{{ failed_logins }}</div><div class="small text-muted">{{ range_label }}</div></div></div></a></div>{% endif %}
+  {% if storage %}<div class="col-6 col-md-4 col-xl-2"><a href="/files" class="text-decoration-none"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Dung lượng lưu trữ</div><div class="fs-2 text-dark text-nowrap">{{ fmt_bytes(storage.bytes) }}</div><div class="small text-muted">{{ '{:,}'.format(storage.count) }} tệp</div></div></div></a></div>{% endif %}
+  {% if traffic %}<div class="col-6 col-md-4 col-xl-2"><a href="/audit?event=UPLOAD" class="text-decoration-none"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Lưu lượng truyền</div><div class="fs-5 text-dark text-nowrap lh-sm mt-1"><span title="Upload">↑ {{ fmt_bytes(traffic.up) }}</span><br><span title="Download">↓ {{ fmt_bytes(traffic.down) }}</span></div><div class="small text-muted">{{ range_label }}</div></div></div></a></div>{% endif %}
 </div>
 
 {% if activity %}
-<div class="card shadow-sm mb-3 dash-chart"><div class="card-header bg-white">Hoạt động 24 giờ qua <span class="text-muted small" id="tzLabel">(giờ máy của bạn)</span></div>
+<div class="card shadow-sm mb-3 dash-chart"><div class="card-header bg-white">Hoạt động {{ range_label }} <span class="text-muted small" id="tzLabel">{{ '(theo ngày, UTC)' if activity.daily else '(giờ máy của bạn)' }}</span></div>
   <div class="card-body"><div class="chart-wrap"><canvas id="activityChart"></canvas></div></div></div>
+{% endif %}
+
+{% if activity or storage %}
+<div class="row g-3 mb-3 flex-shrink-0">
+  {% if storage %}<div class="col-lg-4"><div class="card shadow-sm h-100"><div class="card-header bg-white">Lưu trữ theo người dùng</div>
+    <table class="table table-sm mb-0 align-middle" id="topStorage"><thead><tr><th>Chủ sở hữu</th><th class="text-end">Tệp</th><th class="text-end">Dung lượng</th></tr></thead><tbody>
+    {% for o in storage.owners %}<tr><td>{{ o.who or '(không rõ)' }}</td><td class="text-end">{{ o.n }}</td><td class="text-end text-nowrap">{{ fmt_bytes(o.s) }}</td></tr>
+    {% else %}<tr><td colspan="3" class="text-center text-muted small">Chưa có tệp</td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
+  {% if traffic %}<div class="col-lg-4"><div class="card shadow-sm h-100"><div class="card-header bg-white">Người dùng truyền nhiều nhất <span class="text-muted small">{{ range_label }}</span></div>
+    <table class="table table-sm mb-0 align-middle" id="topTraffic"><thead><tr><th>Người dùng</th><th class="text-end">↑ Upload</th><th class="text-end">↓ Download</th></tr></thead><tbody>
+    {% for name, up, down in traffic.users %}<tr><td><a href="/audit?user={{ name | urlencode }}">{{ name }}</a></td><td class="text-end text-nowrap">{{ fmt_bytes(up) }}</td><td class="text-end text-nowrap">{{ fmt_bytes(down) }}</td></tr>
+    {% else %}<tr><td colspan="3" class="text-center text-muted small">Chưa có lượt truyền</td></tr>{% endfor %}</tbody></table></div></div>
+  <div class="col-lg-4"><div class="card shadow-sm h-100"><div class="card-header bg-white">IP đăng nhập thất bại <span class="text-muted small">{{ range_label }}</span></div>
+    <table class="table table-sm mb-0 align-middle" id="failIps"><thead><tr><th>IP</th><th class="text-end">Lần</th><th class="text-end">Tài khoản</th><th class="text-end">Gần nhất</th></tr></thead><tbody>
+    {% for f in fail_ips %}<tr><td class="text-nowrap"><a href="/audit?event=LOGIN&result=FAIL">{{ f.ip }}</a></td><td class="text-end {{ 'text-danger fw-bold' if f.n >= 5 }}">{{ f.n }}</td><td class="text-end">{{ f.users }}</td><td class="text-end small text-nowrap"><time class="localtime" datetime="{{ iso_utc(f.last) }}">{{ iso_utc(f.last)[:16].replace('T', ' ') }}</time></td></tr>
+    {% else %}<tr><td colspan="4" class="text-center text-muted small">Không có</td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
+</div>
+{% endif %}
+
+{% if activity %}
 
 <div class="card shadow-sm flex-shrink-0">
   <div class="card-header bg-white d-flex flex-wrap gap-2 justify-content-between align-items-center">
     <span>Hoạt động gần đây</span>
-    <form method="get" action="/audit" class="d-flex gap-2">
-      <input name="user" class="form-control form-control-sm" placeholder="Người dùng" style="width:140px">
-      <input name="event" class="form-control form-control-sm" placeholder="Sự kiện" style="width:140px">
+    <form method="get" action="/audit" class="d-flex flex-wrap align-items-center gap-2">
+      <input name="user" class="form-control form-control-sm flex-grow-1" placeholder="Người dùng" aria-label="Lọc theo người dùng" style="max-width:140px;min-width:100px">
+      <input name="event" class="form-control form-control-sm flex-grow-1" placeholder="Sự kiện" aria-label="Lọc theo sự kiện" style="max-width:140px;min-width:100px">
       <button class="btn btn-sm btn-outline-primary">Lọc</button>
       <a href="/audit" class="btn btn-sm btn-primary">Xem tất cả →</a>
     </form>
@@ -39,11 +66,13 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
   var a = {{ activity | tojson }};
-  document.getElementById('tzLabel').textContent = '(' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')';
+  if (!a.daily) document.getElementById('tzLabel').textContent = '(' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')';
   if (window.Chart) {
     new Chart(document.getElementById('activityChart'), {
       type: 'bar',
-      data: { labels: a.slots.map(function (s) { var t = new Date(s); return String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'); }), datasets: [
+      data: { labels: a.slots.map(function (s) { var t = new Date(s);
+        return a.daily ? (String(t.getUTCDate()).padStart(2, '0') + '/' + String(t.getUTCMonth() + 1).padStart(2, '0'))
+                       : String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'); }), datasets: [
         { label: 'Đăng nhập', data: a.series.LOGIN, backgroundColor: '#0d6efd' },
         { label: 'Upload', data: a.series.UPLOAD, backgroundColor: '#198754' },
         { label: 'Download', data: a.series.DOWNLOAD, backgroundColor: '#fd7e14' } ] },
@@ -51,7 +80,7 @@
     });
   }
 </script>
-{% else %}
+{% elif not storage %}
 <p class="text-muted">Chọn mục trên thanh menu để làm việc.</p>
 {% endif %}
 {% endblock %}

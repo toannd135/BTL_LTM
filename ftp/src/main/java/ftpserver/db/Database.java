@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -14,9 +15,14 @@ import java.time.format.DateTimeFormatter;
  * Truy cap CSDL (SQLite hoac PostgreSQL, nhan biet tu JDBC URL). Moi lan goi mo mot ket noi ngan.
  * Moi moc thoi gian ghi vao DB do Java sinh, dang TEXT "yyyy-MM-dd HH:mm:ss" UTC
  * (trung dinh dang datetime('now') cua SQLite) nen so sanh chuoi van dung tren ca hai DB.
+ *
+ * <p>Dialect quyet dinh thu muc migration ({@link Migrator}) va mot so cau SQL rieng o cac service
+ * (vd upsert). Moi service ({@code auth}, {@code acl}, {@code rbac}, {@code scan}, {@code audit}) nhan chung
+ * mot doi tuong Database tao trong {@code Main}.
  */
 public class Database {
 
+    /** Loai CSDL dang dung, suy tu tien to JDBC URL. */
     public enum Dialect { SQLITE, POSTGRES }
 
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -60,13 +66,17 @@ public class Database {
         return dialect;
     }
 
+    /**
+     * Mo ket noi moi; nguoi goi chiu trach nhiem dong (try-with-resources).
+     * Voi SQLite, bat busy_timeout va rang buoc khoa ngoai cho tung ket noi.
+     */
     public Connection open() throws SQLException {
         Connection c = user == null && password == null
                 ? DriverManager.getConnection(url)
                 : DriverManager.getConnection(url, user, password);
         if (dialect == Dialect.SQLITE) {
-            try (var st = c.createStatement()) {
-                st.execute("PRAGMA busy_timeout = 5000");
+            try (Statement st = c.createStatement()) {
+                st.execute("PRAGMA busy_timeout = 5000"); // cho toi da 5s khi tep dang bi khoa
                 st.execute("PRAGMA foreign_keys = ON");
             }
         }

@@ -17,7 +17,7 @@ NSG mở: `22` (chỉ `ssh_allowed_cidr`), `2121` và `50000-50100` (`ftp_allowe
 
 ## Yêu cầu
 - `az login` (Azure CLI), Terraform ≥ 1.5, Ansible ≥ 2.15, khóa SSH `~/.ssh/id_rsa(.pub)`
-- Image `ghcr.io/toannd135/btl_ltm/{ftpserver,ftpadmin}:latest` đã được CI đẩy lên (push `main`). Package private → cần token `read:packages` trong vault.
+- Image `ghcr.io/toannd135/btl_ltm/{ftpserver,ftpadmin}` đã được CI (job `image`) đẩy lên khi push `main`/tag. Package private → `vault_ghcr_username` + `vault_ghcr_token` (PAT classic scope `read:packages`) trong vault.
 
 ## 1. Hạ tầng
 ```bash
@@ -35,7 +35,7 @@ ansible-galaxy collection install -r requirements.yml
 cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml   # điền openssl rand -hex 32; bắt buộc có vault_ftp_s3_access_key (>= 8 ký tự) và vault_ftp_s3_secret_key (>= 16)
 ansible-vault encrypt group_vars/ftpserver/vault.yml
 # Thu muc tren o NTFS (world-writable) -> Ansible bo qua ansible.cfg, phai chi dinh
-ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook site.yml --ask-vault-pass
+ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook site.yml --ask-vault-pass -e app_version=sha-1a2b3c4   # bỏ -e = latest; rollback = tag cũ
 ```
 Playbook chạy 3 play: base+docker (cả 2 VM) → storage (VM-B) → ftpserver (VM-A). Lần đầu clamd tải CSDL virus và nạp signature mất vài phút
 (playbook chờ tối đa 15 phút cổng 3310); clamd dùng ~1 GB RAM (đo thực tế ≈ 954 MiB).
@@ -72,9 +72,6 @@ Dashboard/trang Tệp còn báo vàng nếu CSDL virus của clamd cũ hơn 3 ng
 ## Sao lưu SeaweedFS
 `scripts/backup-seaweedfs.sh [prefix] [số-bản-giữ]` tạo snapshot incremental của data disk VM-B (giữ 7 bản mới nhất). `terraform destroy` xóa cả snapshot cùng
 resource group — muốn giữ lâu dài phải sao chép sang RG khác. Nên chạy định kỳ (cron trên máy bạn) và trước mỗi lần `terraform destroy`.
-
-## CI: Trivy
-Job `trivy` trong `.github/workflows/ci.yml` quét CVE phụ thuộc (HIGH/CRITICAL, fail build) và misconfig Terraform; image admin-web chỉ báo cáo.
 
 ## Dọn dẹp
 `terraform destroy` xóa toàn bộ resource group, **kể cả data disk** (trên VM-B: dữ liệu SeaweedFS) và Azure PostgreSQL. Sao lưu `/srv/ftp` trước.

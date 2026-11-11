@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -23,6 +24,7 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CommonPrefix;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
@@ -42,8 +44,17 @@ import software.amazon.awssdk.services.s3.model.S3Object;
  * Thu muc la tien to "a/b/": mkdir tao object rong "a/b/" (marker) de thu muc rong van ton tai; thu muc co tep thi ton tai
  * ngam. Upload duoc dem vao tep tam roi PutObject mot lan nen tep chi hien ra khi hoan tat (giong rename nguyen tu o local).
  * Gioi han: mot object toi da 5 GB (PutObject/CopyObject mot phat).
+ *
+ * <p>Tao boi {@code Main} khi bat s3.enabled, di kem {@link PathResolver#virtual}. Doi ten thu muc = copy + xoa tung
+ * object nen khong nguyen tu.
  */
 public final class S3FileStore implements FileStore {
+
+    /** So lan thu ket noi bucket khi khoi dong (x {@link #BUCKET_RETRY_DELAY_MS} ~ 60 s). */
+    private static final int BUCKET_READY_ATTEMPTS = 30;
+    private static final long BUCKET_RETRY_DELAY_MS = 2000;
+    private static final int HTTP_NOT_FOUND = 404;
+    private static final int COPY_BUFFER_BYTES = 65536;
 
     private final S3Client s3;
     private final String bucket;
@@ -52,26 +63,17 @@ public final class S3FileStore implements FileStore {
     public S3FileStore(S3Client s3, String bucket, String prefix) {
         this.s3 = s3;
         this.bucket = bucket;
-        String p = prefix == null ? "" : prefix.replaceAll("^/+|/+$", "");
-        this.prefix = p.isEmpty() ? "" : p + "/";
+        String trimmed = prefix == null ? "" : prefix.replaceAll("^/+|/+$", "");
+        this.prefix = trimmed.isEmpty() ? "" : trimmed + "/";
     }
 
     /** Ket noi toi endpoint S3 (path-style), tao bucket neu chua co. */
     public static S3FileStore connect(String endpoint, String region, String accessKey, String secretKey,
                                       String bucket, String prefix) {
-        S3Client client = S3Client.builder()
-                .endpointOverride(URI.create(endpoint))
-                .region(Region.of(region))
-                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey)))
-                .forcePathStyle(true)
-                // SeaweedFS khong can/khong chac chap nhan checksum trailer mac dinh cua SDK moi
-                .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
-                .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
-                .httpClientBuilder(UrlConnectionHttpClient.builder())
-                .build();
+        S3Client client = buildClient(endpoint, region, accessKey, secretKey);
         // SeaweedFS co the chua san sang ngay luc khoi dong (docker compose): thu lai toi ~60 s
         RuntimeException last = null;
-        for (int attempt = 0; attempt < 30; attempt++) {
+        for (int attempt = 0; attempt < BUCKET_READY_ATTEMPTS; attempt++) {
             try {
                 ensureBucket(client, bucket);
                 last = null;
@@ -79,7 +81,7 @@ public final class S3FileStore implements FileStore {
             } catch (RuntimeException e) {
                 last = e;
                 try {
-                    Thread.sleep(2000);
+                    Thread.sleep(BUCKET_RETRY_DELAY_MS);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     break;
@@ -92,13 +94,26 @@ public final class S3FileStore implements FileStore {
         return new S3FileStore(client, bucket, prefix);
     }
 
+    private static S3Client buildClient(String endpoint, String region, String accessKey, String secretKey) {
+        return S3Client.builder()
+                .endpointOverride(URI.create(endpoint))
+                .region(Region.of(region))
+                .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey)))
+                .forcePathStyle(true)
+                // SeaweedFS khong can/khong chac chap nhan checksum trailer mac dinh cua SDK moi
+                .requestChecksumCalculation(RequestChecksumCalculation.WHEN_REQUIRED)
+                .responseChecksumValidation(ResponseChecksumValidation.WHEN_REQUIRED)
+                .httpClientBuilder(UrlConnectionHttpClient.builder())
+                .build();
+    }
+
     private static void ensureBucket(S3Client client, String bucket) {
         try {
             client.headBucket(HeadBucketRequest.builder().bucket(bucket).build());
         } catch (NoSuchBucketException e) {
             client.createBucket(CreateBucketRequest.builder().bucket(bucket).build());
         } catch (S3Exception e) {
-            if (e.statusCode() != 404) {
+            if (e.statusCode() != HTTP_NOT_FOUND) {
                 throw e;
             }
             client.createBucket(CreateBucketRequest.builder().bucket(bucket).build());
@@ -112,9 +127,10 @@ public final class S3FileStore implements FileStore {
 
     // ---- anh xa Path ao <-> key ----
 
+    /** Duong dan ao bo '/' dau/cuoi ("" = root). */
     private String rel(Path p) {
-        String s = p.normalize().toString().replace('\\', '/');
-        return s.replaceAll("^/+|/+$", "");
+        String slashed = p.normalize().toString().replace('\\', '/');
+        return slashed.replaceAll("^/+|/+$", "");
     }
 
     private String fileKey(Path p) {
@@ -131,21 +147,23 @@ public final class S3FileStore implements FileStore {
         return rel(p).isEmpty();
     }
 
+    /** Metadata object, hoac null neu khong ton tai. */
     private HeadObjectResponse head(String key) {
         try {
             return s3.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build());
         } catch (S3Exception e) {
-            if (e.statusCode() == 404) {
+            if (e.statusCode() == HTTP_NOT_FOUND) {
                 return null;
             }
             throw e;
         }
     }
 
+    /** true neu co object nao khac marker cua chinh thu muc (2 key la du de biet). */
     private boolean hasChildren(String dirPrefix) {
-        ListObjectsV2Response r = s3.listObjectsV2(ListObjectsV2Request.builder()
+        ListObjectsV2Response response = s3.listObjectsV2(ListObjectsV2Request.builder()
                 .bucket(bucket).prefix(dirPrefix).maxKeys(2).build());
-        return r.contents().stream().anyMatch(o -> !o.key().equals(dirPrefix));
+        return response.contents().stream().anyMatch(o -> !o.key().equals(dirPrefix));
     }
 
     // ---- truy van ----
@@ -160,11 +178,11 @@ public final class S3FileStore implements FileStore {
         if (isRoot(p)) {
             return true;
         }
-        String dp = dirPrefix(p);
-        if (head(dp) != null) {
+        String dirKey = dirPrefix(p);
+        if (head(dirKey) != null) {
             return true;
         }
-        return s3.listObjectsV2(ListObjectsV2Request.builder().bucket(bucket).prefix(dp).maxKeys(1).build())
+        return s3.listObjectsV2(ListObjectsV2Request.builder().bucket(bucket).prefix(dirKey).maxKeys(1).build())
                 .keyCount() > 0;
     }
 
@@ -175,9 +193,9 @@ public final class S3FileStore implements FileStore {
 
     @Override
     public long size(Path p) throws IOException {
-        HeadObjectResponse h = isRoot(p) ? null : head(fileKey(p));
-        if (h != null) {
-            return h.contentLength();
+        HeadObjectResponse fileHead = isRoot(p) ? null : head(fileKey(p));
+        if (fileHead != null) {
+            return fileHead.contentLength();
         }
         if (isDirectory(p)) {
             return 0;
@@ -187,9 +205,9 @@ public final class S3FileStore implements FileStore {
 
     @Override
     public Instant lastModified(Path p) throws IOException {
-        HeadObjectResponse h = isRoot(p) ? null : head(fileKey(p));
-        if (h != null) {
-            return h.lastModified();
+        HeadObjectResponse fileHead = isRoot(p) ? null : head(fileKey(p));
+        if (fileHead != null) {
+            return fileHead.lastModified();
         }
         if (isRoot(p)) {
             return Instant.now();
@@ -209,27 +227,28 @@ public final class S3FileStore implements FileStore {
         if (!isDirectory(dir)) {
             throw new NoSuchFileException(dir.toString());
         }
-        String dp = dirPrefix(dir);
-        List<FileInfo> out = new ArrayList<>();
+        String dirKey = dirPrefix(dir);
+        List<FileInfo> entries = new ArrayList<>();
         String token = null;
         do {
-            ListObjectsV2Response r = s3.listObjectsV2(ListObjectsV2Request.builder()
-                    .bucket(bucket).prefix(dp).delimiter("/").continuationToken(token).build());
-            for (var cp : r.commonPrefixes()) {
-                String name = cp.prefix().substring(dp.length()).replaceAll("/$", "");
+            ListObjectsV2Response page = s3.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucket).prefix(dirKey).delimiter("/").continuationToken(token).build());
+            for (CommonPrefix subdir : page.commonPrefixes()) {
+                String name = subdir.prefix().substring(dirKey.length()).replaceAll("/$", "");
                 if (!name.isEmpty()) {
-                    out.add(new FileInfo(name, true, 0, Instant.now()));
+                    entries.add(new FileInfo(name, true, 0, Instant.now()));
                 }
             }
-            for (S3Object o : r.contents()) {
-                if (o.key().equals(dp)) {
+            for (S3Object object : page.contents()) {
+                if (object.key().equals(dirKey)) {
                     continue; // marker cua chinh thu muc nay
                 }
-                out.add(new FileInfo(o.key().substring(dp.length()), false, o.size(), o.lastModified()));
+                entries.add(new FileInfo(object.key().substring(dirKey.length()), false, object.size(),
+                        object.lastModified()));
             }
-            token = r.isTruncated() ? r.nextContinuationToken() : null;
+            token = page.isTruncated() ? page.nextContinuationToken() : null;
         } while (token != null);
-        return out;
+        return entries;
     }
 
     // ---- thay doi ----
@@ -270,11 +289,11 @@ public final class S3FileStore implements FileStore {
         if (isRoot(p) || !isDirectory(p)) {
             throw new NoSuchFileException(p.toString());
         }
-        String dp = dirPrefix(p);
-        if (hasChildren(dp)) {
+        String dirKey = dirPrefix(p);
+        if (hasChildren(dirKey)) {
             throw new DirectoryNotEmptyException(p.toString());
         }
-        s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(dp).build());
+        s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(dirKey).build());
     }
 
     @Override
@@ -291,14 +310,7 @@ public final class S3FileStore implements FileStore {
         }
         String src = dirPrefix(from);
         String dst = dirPrefix(to);
-        List<String> keys = new ArrayList<>();
-        String token = null;
-        do {
-            ListObjectsV2Response r = s3.listObjectsV2(ListObjectsV2Request.builder()
-                    .bucket(bucket).prefix(src).continuationToken(token).build());
-            r.contents().forEach(o -> keys.add(o.key()));
-            token = r.isTruncated() ? r.nextContinuationToken() : null;
-        } while (token != null);
+        List<String> keys = listKeysRecursive(src);
         if (keys.isEmpty()) {
             putMarker(to); // thu muc chi ton tai ngam nhung bi xoa het giua chung: giu cho dich ton tai
             return;
@@ -307,12 +319,25 @@ public final class S3FileStore implements FileStore {
         // Marker khong CopyObject duoc tren SeaweedFS (la entry thu muc), nen tao marker moi o dich roi xoa marker cu.
         keys.stream().filter(k -> !k.endsWith("/")).forEach(k -> copyThenDelete(k, dst + k.substring(src.length())));
         keys.stream().filter(k -> k.endsWith("/"))
-                .sorted(java.util.Comparator.comparingInt(String::length).reversed())
+                .sorted(Comparator.comparingInt(String::length).reversed())
                 .forEach(k -> {
                     s3.putObject(PutObjectRequest.builder().bucket(bucket).key(dst + k.substring(src.length())).build(),
                             RequestBody.empty());
                     s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(k).build());
                 });
+    }
+
+    /** Moi key nam duoi tien to (de quy, ke ca marker), doc het cac trang. */
+    private List<String> listKeysRecursive(String keyPrefix) {
+        List<String> keys = new ArrayList<>();
+        String token = null;
+        do {
+            ListObjectsV2Response page = s3.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucket).prefix(keyPrefix).continuationToken(token).build());
+            page.contents().forEach(o -> keys.add(o.key()));
+            token = page.isTruncated() ? page.nextContinuationToken() : null;
+        } while (token != null);
+        return keys;
     }
 
     private void copyThenDelete(String srcKey, String dstKey) {
@@ -330,12 +355,12 @@ public final class S3FileStore implements FileStore {
         if (offset >= size) {
             return InputStream.nullInputStream();
         }
-        GetObjectRequest.Builder req = GetObjectRequest.builder().bucket(bucket).key(fileKey(file));
+        GetObjectRequest.Builder request = GetObjectRequest.builder().bucket(bucket).key(fileKey(file));
         if (offset > 0) {
-            req.range("bytes=" + offset + "-");
+            request.range("bytes=" + offset + "-");
         }
         try {
-            return s3.getObject(req.build());
+            return s3.getObject(request.build());
         } catch (S3Exception e) {
             throw new IOException("S3 read failed: " + e.getMessage(), e);
         }
@@ -346,29 +371,37 @@ public final class S3FileStore implements FileStore {
         Path tmp = Files.createTempFile("ftp-upload-" + tag + "-", ".tmp");
         OutputStream os;
         try {
-            long keep = append ? Long.MAX_VALUE : offset;
-            if (keep > 0 && isFile(target)) {
-                long size = size(target);
-                long n = Math.min(keep, size);
-                try (InputStream in = read(target, 0); OutputStream o = Files.newOutputStream(tmp)) {
-                    long left = n;
-                    byte[] buf = new byte[65536];
-                    while (left > 0) {
-                        int r = in.read(buf, 0, (int) Math.min(buf.length, left));
-                        if (r < 0) {
-                            break;
-                        }
-                        o.write(buf, 0, r);
-                        left -= r;
-                    }
-                }
+            // APPE giu toan bo tep cu, REST giu offset byte dau; sau do ghi tiep vao cuoi tep tam.
+            long keepBytes = append ? Long.MAX_VALUE : offset;
+            if (keepBytes > 0 && isFile(target)) {
+                copyHead(target, tmp, Math.min(keepBytes, size(target)));
             }
             os = Files.newOutputStream(tmp, StandardOpenOption.APPEND);
         } catch (IOException | RuntimeException e) {
             Files.deleteIfExists(tmp);
             throw e;
         }
-        String key = fileKey(target);
+        return newUpload(tmp, os, fileKey(target));
+    }
+
+    /** Chep {@code length} byte dau cua object {@code source} vao tep tam. */
+    private void copyHead(Path source, Path tmp, long length) throws IOException {
+        try (InputStream in = read(source, 0); OutputStream out = Files.newOutputStream(tmp)) {
+            long left = length;
+            byte[] buf = new byte[COPY_BUFFER_BYTES];
+            while (left > 0) {
+                int read = in.read(buf, 0, (int) Math.min(buf.length, left));
+                if (read < 0) {
+                    break;
+                }
+                out.write(buf, 0, read);
+                left -= read;
+            }
+        }
+    }
+
+    /** Upload dem qua tep tam {@code tmp}; commit PutObject mot lan roi xoa tep tam. */
+    private Upload newUpload(Path tmp, OutputStream os, String key) {
         return new Upload() {
             @Override public OutputStream stream() { return os; }
 

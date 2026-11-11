@@ -20,35 +20,45 @@ final class FileIcons {
     private static final Set<String> ARCHIVE = Set.of("zip", "tar", "gz", "tgz", "7z", "rar", "bz2", "xz", "jar");
     private static final Set<String> OFFICE = Set.of("doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods");
 
+    private static final Color FOLDER_COLOR = Color.web("#f0b429");
+    private static final Color PDF_COLOR = Color.web("#e5484d");
+    private static final Color CODE_COLOR = Color.web("#30a46c");
+    private static final Color TEXT_COLOR = Color.web("#8a94a6");
+    private static final Color IMAGE_COLOR = Color.web("#8e4ec6");
+    private static final Color ARCHIVE_COLOR = Color.web("#f76b15");
+    private static final Color OFFICE_COLOR = Color.web("#3e63dd");
+    private static final Color OTHER_COLOR = Color.web("#6b7280");
+
     private FileIcons() {}
 
+    /** Icon cho một dòng bảng: thư mục màu vàng, tệp tô màu theo phần mở rộng. */
     static Node create(String name, boolean directory) {
         SVGPath icon = new SVGPath();
         icon.setContent(directory ? FOLDER : FILE);
-        icon.setFill(directory ? Color.web("#f0b429") : colorFor(extension(name)));
+        icon.setFill(directory ? FOLDER_COLOR : colorFor(extension(name)));
         return icon;
     }
 
     private static Color colorFor(String ext) {
         if (ext.equals("pdf")) {
-            return Color.web("#e5484d");
+            return PDF_COLOR;
         }
         if (CODE.contains(ext)) {
-            return Color.web("#30a46c");
+            return CODE_COLOR;
         }
         if (TEXT.contains(ext)) {
-            return Color.web("#8a94a6");
+            return TEXT_COLOR;
         }
         if (IMAGE.contains(ext)) {
-            return Color.web("#8e4ec6");
+            return IMAGE_COLOR;
         }
         if (ARCHIVE.contains(ext)) {
-            return Color.web("#f76b15");
+            return ARCHIVE_COLOR;
         }
         if (OFFICE.contains(ext)) {
-            return Color.web("#3e63dd");
+            return OFFICE_COLOR;
         }
-        return Color.web("#6b7280");
+        return OTHER_COLOR;
     }
 
     /** Cột "Loại" kiểu Nautilus: "Thư mục", "Ảnh (PNG)", "Tệp nén (ZIP)"... */

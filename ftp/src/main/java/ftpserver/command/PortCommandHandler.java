@@ -10,7 +10,19 @@ import ftpserver.core.FtpReply;
 import ftpserver.core.SessionState;
 import ftpserver.data.DataConnection;
 
+/**
+ * PORT h1,h2,h3,h4,p1,p2: che do chu dong, server se noi toi dia chi client chi dinh khi truyen du lieu.
+ *
+ * <p>Can dang nhap. Dia chi phai trung IP cua kenh dieu khien (chong tan cong FTP bounce).
+ * Tra loi: 200 khi ghi nhan; 501 neu sai cu phap, so ngoai 0..255 hoac IP khac kenh dieu khien.
+ */
 public final class PortCommandHandler implements CommandHandler {
+
+    /** Bon byte IP va hai byte cong. */
+    private static final int FIELD_COUNT = 6;
+    private static final int MAX_BYTE_VALUE = 255;
+    /** port = p1 * 256 + p2. */
+    private static final int PORT_BYTE_BASE = 256;
 
     @Override public boolean requiresAuth()  { return true; }
     @Override public boolean requiresWrite() { return false; }
@@ -22,15 +34,15 @@ public final class PortCommandHandler implements CommandHandler {
             return;
         }
         String[] parts = arg.split(",");
-        if (parts.length != 6) {
+        if (parts.length != FIELD_COUNT) {
             session.reply(FtpReply.SYNTAX_ERROR_PARAMS, "Expected h1,h2,h3,h4,p1,p2");
             return;
         }
-        int[] nums = new int[6];
+        int[] fields = new int[FIELD_COUNT];
         try {
-            for (int i = 0; i < 6; i++) {
-                nums[i] = Integer.parseInt(parts[i].trim());
-                if (nums[i] < 0 || nums[i] > 255) {
+            for (int i = 0; i < FIELD_COUNT; i++) {
+                fields[i] = Integer.parseInt(parts[i].trim());
+                if (fields[i] < 0 || fields[i] > MAX_BYTE_VALUE) {
                     throw new NumberFormatException();
                 }
             }
@@ -38,27 +50,27 @@ public final class PortCommandHandler implements CommandHandler {
             session.reply(FtpReply.SYNTAX_ERROR_PARAMS, "Invalid number in PORT");
             return;
         }
-        String ip = nums[0] + "." + nums[1] + "." + nums[2] + "." + nums[3];
+        String ip = fields[0] + "." + fields[1] + "." + fields[2] + "." + fields[3];
         String controlIp = ((InetSocketAddress) session.controlSocket().getRemoteSocketAddress())
                 .getAddress().getHostAddress();
         if (!ip.equals(controlIp)) {
             session.reply(FtpReply.SYNTAX_ERROR_PARAMS, "PORT address must match control connection");
             return;
         }
-        int port = nums[4] * 256 + nums[5];
+        int port = fields[4] * PORT_BYTE_BASE + fields[5];
 
         if (session.getDataConnection() != null) {
             session.getDataConnection().close();
         }
-        DataConnection dc = new DataConnection();
-        dc.setTls(session.dataTls());
+        DataConnection dataConnection = new DataConnection();
+        dataConnection.setTls(session.dataTls());
         try {
-            dc.setActiveTarget(InetAddress.getByName(ip), port);
+            dataConnection.setActiveTarget(InetAddress.getByName(ip), port);
         } catch (UnknownHostException e) {
             session.reply(FtpReply.SYNTAX_ERROR_PARAMS, "Invalid address");
             return;
         }
-        session.setDataConnection(dc);
+        session.setDataConnection(dataConnection);
         session.setState(SessionState.DATA_READY);
         session.reply(FtpReply.COMMAND_OK, "Command okay");
     }

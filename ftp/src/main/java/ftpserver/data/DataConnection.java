@@ -9,6 +9,13 @@ import java.net.Socket;
 
 import ftpserver.tls.TlsSupport;
 
+/**
+ * Kenh du lieu FTP cua mot phien (tach rieng khoi kenh dieu khien).
+ *
+ * <p>Hai buoc: PASV/PORT chi chuan bi ({@link #openPassive} / {@link #setActiveTarget}), con ket noi TCP that
+ * chi duoc tao trong {@link #establish} khi lenh LIST/RETR/STOR chay. Neu {@link #setTls} da duoc goi (PROT P),
+ * socket duoc boc TLS truoc khi tra ve.
+ */
 public class DataConnection {
 
     private DataMode mode = DataMode.NONE;
@@ -36,6 +43,7 @@ public class DataConnection {
         throw new IOException("No free data port in range " + portMin + "-" + portMax);
     }
 
+    /** Che do PORT: ghi nho dia chi client se noi toi khi {@link #establish} duoc goi. */
     public void setActiveTarget(InetAddress address, int port) {
         mode = DataMode.ACTIVE;
         activeTarget = new InetSocketAddress(address, port);
@@ -43,6 +51,9 @@ public class DataConnection {
 
     /**
      * Thiet lap ket noi that su. Goi luc LIST/RETR/STOR chay, KHONG goi luc xu ly PASV.
+     *
+     * @param timeoutMs thoi gian cho client noi vao (PASV) hoac cho noi ra client (PORT)
+     * @throws IOException chua PASV/PORT, het thoi gian cho, hoac bat tay TLS that bai
      */
     public Socket establish(int timeoutMs) throws IOException {
         if (mode == DataMode.PASSIVE) {
@@ -67,6 +78,7 @@ public class DataConnection {
         return socket;
     }
 
+    /** Dong socket du lieu va socket lang nghe PASV, quay ve che do NONE. Goi nhieu lan khong sao. */
     public void close() {
         closeQuietly(socket);
         closeQuietly(passiveSocket);

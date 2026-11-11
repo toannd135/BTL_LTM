@@ -1,8 +1,10 @@
 name: CI/CD
 
-# Một pipeline chung cho server (ftp/), UI desktop (ftp-client-gui/) và trang quản trị (ftp/admin-web/)
-# - push main / PR : test server + build installer UI; push main thì đẩy Docker image :latest (ftpserver, ftpadmin)
-# - tag v*         : như trên + đẩy image theo version + tạo GitHub Release (jar server + installer UI)
+# Build once, deploy many: CI build image bất biến rồi đẩy GHCR; Ansible chỉ kéo đúng tag về chạy.
+# - PR        : test server + admin-web, kiểm tra Terraform/Ansible, build installer Windows / macOS / Linux
+# - push main : như trên + image ghcr.io/<repo>/{ftpserver,ftpadmin}:sha-<commit> và :latest
+# - tag v*    : như push main + image :<version> + GitHub Release đính kèm installer (.msi, .dmg, .deb)
+# Triển khai: ansible-playbook site.yml -e app_version=sha-<commit>   (rollback = chạy lại với tag cũ)
 
 on:
   push:
@@ -10,19 +12,12 @@ on:
     tags: ['v*']
   pull_request:
 
-jobs:
-  gitleaks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # quet ca lich su git
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Commit cu chua mat khau da lo duoc allowlist trong .gitleaks.toml (action khong ho tro baseline)
-          GITLEAKS_CONFIG: .gitleaks.toml
+# Push mới lên cùng nhánh/PR thì huỷ run cũ (tag không bị huỷ để release luôn chạy hết)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
+jobs:
   server-test:
     runs-on: ubuntu-latest
     defaults:
@@ -40,29 +35,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ftpserver-jar
-          path: ftp/target/ftpserver.jar   # bo original-ftpserver.jar (jar chua shade)
-
-  # Quét lỗ hổng: CVE của thư viện (Maven, pip) + cấu hình Dockerfile/Terraform. Chạy trên runner, không tốn RAM VM
-  trivy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: maven
-      # Trivy tự phân giải pom.xml qua Maven Central và bị giới hạn tốc độ (429); nạp sẵn ~/.m2 cho nó dùng
-      - name: Nạp cache Maven
-        run: |
-          mvn -B -q -f ftp/pom.xml dependency:resolve
-          mvn -B -q -f ftp-client-gui/pom.xml dependency:resolve || true
-      - name: Trivy (CVE thư viện + misconfig), lỗi khi có HIGH/CRITICAL đã có bản vá
-        run: |
-          docker run --rm -v "$PWD":/w -v "$HOME/.m2":/root/.m2 -w /w aquasec/trivy:0.58.1 fs \
-            --scanners vuln,misconfig --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
-            --ignorefile .trivyignore.yaml --skip-dirs ftp/target,terraform/.terraform \
-            --skip-files terraform/terraform.tfstate,terraform/terraform.tfstate.backup .
+          path: ftp/target/ftpserver.jar   # jar đã shade, đúng thứ đã test; job image dùng lại, không build lại
+          retention-days: 1
 
   infra-check:
     runs-on: ubuntu-latest
@@ -116,14 +90,8 @@ jobs:
         env:
           ADMIN_TEST_PG_URL: postgresql://t:t@localhost:5432/t
         run: python test_admin.py
-      - name: Kiểm tra build Docker image
-        run: docker build -t ftpadmin:ci .
-      # Báo cáo CVE của OS/Python trong image (không chặn: lỗi lớp nền thường chờ bản vá của image gốc)
-      - name: Trivy quét image admin
-        run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.1 image \
-            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 ftpadmin:ci
 
+  # Bản cài client cho cả 3 hệ điều hành, mọi lần chạy (PR cũng build để bắt lỗi đóng gói sớm)
   ui-package:
     strategy:
       fail-fast: false
@@ -172,7 +140,7 @@ jobs:
       - name: Tính version cho installer
         id: ver
         run: |
-          # workflow chi chay voi tag v*, nen lay version tu tag v1.2.3 -> 1.2.3
+          # tag v1.2.3 -> 1.2.3; push main / PR dung 1.0.0
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="1.0.0"; fi
           # MSI/DMG yêu cầu dạng số X.Y.Z
           echo "v=$V" >> "$GITHUB_OUTPUT"
@@ -225,11 +193,21 @@ jobs:
         with:
           name: FtpClient-${{ matrix.os }}
           path: ftp-client-gui/target/installer/*.${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 14
 
-
-  server-docker:
-    needs: server-test
+  # Chỉ build image khi test đã đạt và là push lên main / tag (PR không đẩy image)
+  image:
+    needs: [server-test, admin-web-test]
     if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ftpserver
+            context: ftp
+          - name: ftpadmin
+            context: ftp/admin-web
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -237,59 +215,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
+        if: matrix.name == 'ftpserver'
         with:
           name: ftpserver-jar
           path: ftp/target
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
+      - name: Build và đẩy image lên GHCR
+        uses: docker/build-push-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}/ftpserver
-          tags: |
-            type=match,pattern=v(.*),group=1
-            type=raw,value=latest
-      - uses: docker/build-push-action@v6
-        with:
-          context: ftp
+          context: ${{ matrix.context }}
+          pull: true   # luôn lấy image gốc mới nhất để có bản vá OS
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
-  admin-docker:
-    needs: admin-web-test
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}/ftpadmin
-          tags: |
-            type=match,pattern=v(.*),group=1
-            type=raw,value=latest
-      - uses: docker/build-push-action@v6
-        with:
-          context: ftp/admin-web
-          build-args: WITH_CLAMAV=1   # client clamdscan, clamd chay container rieng
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
   release:
-    needs: [server-test, admin-web-test, ui-package]
+    needs: [infra-check, ui-package, image]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -297,6 +253,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: FtpClient-*
           path: dist
           merge-multiple: true
       - uses: softprops/action-gh-release@v2

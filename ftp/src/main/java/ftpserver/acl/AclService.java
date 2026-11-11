@@ -5,6 +5,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,8 +23,15 @@ import ftpserver.db.Database;
  *   <li>con lai: muc cao nhat duoc cap tren tep hoac thu muc cha, neu khong co thi null (khong thay, khong truy cap).</li>
  * </ul>
  * Tai khoan chi doc khong bao gio vuot qua DOWNLOAD. Loi CSDL khi kiem tra quyen = tu choi.
+ *
+ * <p>Bat bien: khoa trong file_owner/file_acl la duong dan ao dang "/a/b" tinh tu root.dir (ket qua
+ * {@code PathResolver.toVirtualPath}), khong phai duong dan that tren dia hay tinh tu home cua user. Cac lenh
+ * DELE/RMD/RNTO phai goi {@link #removeTree}/{@link #moveTree} de ban ghi di theo tep.
  */
 public class AclService {
+
+    /** Bang co cot path can cap nhat khi xoa/doi ten ca cay. */
+    private static final String[] TREE_TABLES = {"file_owner", "file_acl"};
 
     private final Database db;
 
@@ -33,18 +41,19 @@ public class AclService {
 
     /** "/a/b/c" -> ["/a/b/c", "/a/b", "/a"] (tu chinh no len tren, khong gom "/"). */
     static List<String> chain(String path) {
-        List<String> out = new ArrayList<>();
-        String p = path;
-        while (p.length() > 1) {
-            out.add(p);
-            int i = p.lastIndexOf('/');
-            p = i <= 0 ? "/" : p.substring(0, i);
+        List<String> ancestors = new ArrayList<>();
+        String current = path;
+        while (current.length() > 1) {
+            ancestors.add(current);
+            int slash = current.lastIndexOf('/');
+            current = slash <= 0 ? "/" : current.substring(0, slash);
         }
-        return out;
+        return ancestors;
     }
 
+    /** "?,?,..." cho menh de IN voi n tham so. */
     private static String marks(int n) {
-        return String.join(",", java.util.Collections.nCopies(n, "?"));
+        return String.join(",", Collections.nCopies(n, "?"));
     }
 
     /** Chu so huu gan nhat; null neu tep khong thuoc quyen kiem soat nao. */
@@ -71,9 +80,9 @@ public class AclService {
             int bestLen = -1;
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    String p = rs.getString(1);
-                    if (p.length() > bestLen) {
-                        bestLen = p.length();
+                    String ownedPath = rs.getString(1);
+                    if (ownedPath.length() > bestLen) {
+                        bestLen = ownedPath.length();
                         best = rs.getString(2);
                     }
                 }
@@ -105,6 +114,7 @@ public class AclService {
         }
     }
 
+    /** Muc quyen cao nhat duoc cap cho user tren path hoac thu muc cha; null neu khong co. */
     private static Perm bestGrant(Connection c, String username, String path) throws SQLException {
         List<String> chain = chain(path);
         if (chain.isEmpty()) {
@@ -119,9 +129,9 @@ public class AclService {
             Perm best = null;
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    Perm p = Perm.parse(rs.getString(1));
-                    if (p != null && (best == null || p.ordinal() > best.ordinal())) {
-                        best = p;
+                    Perm granted = Perm.parse(rs.getString(1));
+                    if (granted != null && (best == null || granted.ordinal() > best.ordinal())) {
+                        best = granted;
                     }
                 }
             }
@@ -129,9 +139,10 @@ public class AclService {
         }
     }
 
+    /** true neu quyen hieu luc cua user tren path du cho {@code need}. */
     public boolean allows(User user, String path, Perm need) {
-        Perm p = effective(user, path);
-        return p != null && p.covers(need);
+        Perm effective = effective(user, path);
+        return effective != null && effective.covers(need);
     }
 
     /** Chi chu so huu moi duoc chia se (nguoi co file:manage di qua ClientSession). */
@@ -180,6 +191,7 @@ public class AclService {
         }
     }
 
+    /** true neu tai khoan ton tai va dang bat; loi CSDL = false. */
     public boolean userExists(String username) {
         try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
                 "SELECT 1 FROM users WHERE username = ? AND enabled = 1")) {
@@ -194,26 +206,26 @@ public class AclService {
 
     /** Goi y ten nguoi dung de chia se: khop tien to, chi tai khoan dang bat, tru `exclude`; toi da `limit` ket qua. */
     public List<String> searchUsers(String prefix, String exclude, int limit) {
-        String esc = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        String escaped = escapeLike(prefix);
         try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
                 "SELECT username FROM users WHERE enabled = 1 AND username <> ? "
                         + "AND LOWER(username) LIKE ? ESCAPE '\\' ORDER BY username LIMIT ?")) {
             ps.setString(1, exclude);
-            ps.setString(2, esc.toLowerCase() + "%");
+            ps.setString(2, escaped.toLowerCase() + "%");
             ps.setInt(3, limit);
-            List<String> out = new java.util.ArrayList<>();
+            List<String> matches = new ArrayList<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    out.add(rs.getString(1));
+                    matches.add(rs.getString(1));
                 }
             }
-            return out;
+            return matches;
         } catch (SQLException e) {
             return List.of();
         }
     }
 
-    /** Cap (hoac doi) quyen cho user tren path. */
+    /** Cap (hoac doi) quyen cho user tren path (upsert, chay duoc tren ca SQLite va PostgreSQL). */
     public void grant(String path, String username, Perm perm, String grantedBy) throws SQLException {
         try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
                 "INSERT INTO file_acl(path, username, perm, granted_by) VALUES (?, ?, ?, ?) "
@@ -226,6 +238,7 @@ public class AclService {
         }
     }
 
+    /** Thu hoi quyen da cap truc tiep tren path (khong anh huong quyen thua ke tu thu muc cha). */
     public void revoke(String path, String username) throws SQLException {
         try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
                 "DELETE FROM file_acl WHERE path = ? AND username = ?")) {
@@ -237,24 +250,24 @@ public class AclService {
 
     /** Danh sach quyen da cap tren dung path nay (khong gom quyen thua ke). */
     public Map<String, Perm> grants(String path) throws SQLException {
-        Map<String, Perm> out = new LinkedHashMap<>();
+        Map<String, Perm> byUser = new LinkedHashMap<>();
         try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
                 "SELECT username, perm FROM file_acl WHERE path = ? ORDER BY username")) {
             ps.setString(1, path);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    out.put(rs.getString(1), Perm.parse(rs.getString(2)));
+                    byUser.put(rs.getString(1), Perm.parse(rs.getString(2)));
                 }
             }
         }
-        return out;
+        return byUser;
     }
 
     /** Xoa moi ban ghi cua path va cac muc ben duoi (sau DELE/RMD). */
     public void removeTree(String path) {
         String like = escapeLike(path) + "/%";
         try (Connection c = db.open()) {
-            for (String table : new String[] {"file_owner", "file_acl"}) {
+            for (String table : TREE_TABLES) {
                 try (PreparedStatement ps = c.prepareStatement(
                         "DELETE FROM " + table + " WHERE path = ? OR path LIKE ? ESCAPE '\\'")) {
                     ps.setString(1, path);
@@ -271,7 +284,7 @@ public class AclService {
     public void moveTree(String from, String to) {
         String like = escapeLike(from) + "/%";
         try (Connection c = db.open()) {
-            for (String table : new String[] {"file_owner", "file_acl"}) {
+            for (String table : TREE_TABLES) {
                 try (PreparedStatement ps = c.prepareStatement(
                         "UPDATE " + table + " SET path = ? || substr(path, ?) WHERE path = ? OR path LIKE ? ESCAPE '\\'")) {
                     ps.setString(1, to);
@@ -286,6 +299,7 @@ public class AclService {
         }
     }
 
+    /** Thoat ky tu dac biet cua LIKE (dung voi ESCAPE '\\'). */
     private static String escapeLike(String s) {
         return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }

@@ -24,11 +24,12 @@ final class Icons {
 
     private Icons() {}
 
+    /** @param name khóa trong {@link #PATHS} (vd "upload", "delete") */
     static Node of(String name) {
-        SVGPath p = new SVGPath();
-        p.setContent(PATHS.get(name));
-        p.setFillRule(FillRule.EVEN_ODD);
-        p.getStyleClass().add("btn-icon");
-        return p;
+        SVGPath icon = new SVGPath();
+        icon.setContent(PATHS.get(name));
+        icon.setFillRule(FillRule.EVEN_ODD);
+        icon.getStyleClass().add("btn-icon");
+        return icon;
     }
 }

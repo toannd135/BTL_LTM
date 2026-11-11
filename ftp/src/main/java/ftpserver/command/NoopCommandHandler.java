@@ -4,6 +4,7 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/** NOOP: khong lam gi, tra loi 200 (client dung de giu ket noi). Can dang nhap. */
 public final class NoopCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return true; }

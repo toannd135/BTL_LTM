@@ -7,9 +7,13 @@ import java.sql.SQLException;
 
 import ftpserver.db.Database;
 
-/** Xac thuc nguoi dung dua tren bang users trong SQLite. */
+/**
+ * Xac thuc nguoi dung dua tren bang {@code users} (SQLite hoac PostgreSQL qua {@link Database}).
+ * Goi boi lenh PASS trong package {@code command}. Tai khoan {@code enabled = 0} coi nhu khong ton tai.
+ */
 public class UserManager {
 
+    /** Hash gia de verify khi user khong ton tai, giu thoi gian phan hoi dong deu. */
     private static final String DUMMY_HASH = PasswordHasher.hash("dummy-password-for-timing");
 
     private final Database db;
@@ -26,10 +30,10 @@ public class UserManager {
         if (name.equals("anonymous")) {
             return new User("anonymous", null, true);
         }
-        User u = find(name);
+        User user = find(name);
         // luon tinh hash de thoi gian phan hoi khong lo viec user co ton tai hay khong
-        boolean ok = PasswordHasher.verify(password, u == null ? DUMMY_HASH : u.passwordHash());
-        return (u != null && ok) ? u : null;
+        boolean ok = PasswordHasher.verify(password, user == null ? DUMMY_HASH : user.passwordHash());
+        return (user != null && ok) ? user : null;
     }
 
     private User find(String name) {

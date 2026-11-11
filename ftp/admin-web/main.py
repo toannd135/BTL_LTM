@@ -68,6 +68,26 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET, https_only=False, same_
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 STATUS_LABELS = {"PENDING": "Chờ quét", "CLEAN": "Sạch", "INFECTED": "Nhiễm mã độc", "QUARANTINED": "Đã cách ly"}
 templates.env.globals["status_label"] = lambda s: STATUS_LABELS.get(s, s)
+
+
+def fmt_bytes(n) -> str:
+    """1536 -> '1.5 KB' (he 1024)."""
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def iso_utc(ts) -> str:
+    """'2026-11-11 08:00:00' (UTC, kieu SQL) -> '2026-11-11T08:00:00Z' de <time class="localtime"> doi sang gio may xem."""
+    ts = str(ts or "")
+    if re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", ts):
+        return ts.replace(" ", "T") + "Z"
+    return re.sub(r"(\.\d{3})\d+", r"\1", ts)
+
+
+templates.env.globals.update(fmt_bytes=fmt_bytes, iso_utc=iso_utc)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
 
@@ -239,21 +259,83 @@ def count_audit(event="", user="", result="", since="") -> int:
         return c.execute("SELECT COUNT(*) FROM audit_events" + where, args).fetchone()[0]
 
 
-def activity_by_hour(hours: int = 24):
-    """Dem su kien theo gio (UTC) trong `hours` gio gan nhat; trinh duyet doi nhan gio sang gio may nguoi xem."""
+# Khoang thoi gian cua dashboard: so gio nhin lai, do rong moi cot bieu do (gio)
+RANGES = {"24h": (24, 1, "24 giờ qua"), "7d": (168, 24, "7 ngày qua"), "30d": (720, 24, "30 ngày qua")}
+BYTES_RE = re.compile(r"\bbytes=(\d+)")
+
+
+def since_iso(hours: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def activity_by_hour(hours: int = 24, bucket: int = 1):
+    """Dem su kien LOGIN/UPLOAD/DOWNLOAD thanh cong theo gio (bucket=1) hoac theo ngay UTC (bucket=24).
+    Trinh duyet doi nhan gio sang gio may nguoi xem."""
+    daily = bucket >= 24
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    slots = [now - timedelta(hours=h) for h in range(hours - 1, -1, -1)]
-    index = {t.strftime("%Y-%m-%dT%H"): i for i, t in enumerate(slots)}
-    series = {"LOGIN": [0] * hours, "UPLOAD": [0] * hours, "DOWNLOAD": [0] * hours}
+    if daily:
+        now = now.replace(hour=0)
+    n = max(1, hours // bucket)
+    slots = [now - timedelta(hours=bucket * k) for k in range(n - 1, -1, -1)]
+    width, fmt = (10, "%Y-%m-%d") if daily else (13, "%Y-%m-%dT%H")
+    index = {t.strftime(fmt): i for i, t in enumerate(slots)}
+    series = {"LOGIN": [0] * n, "UPLOAD": [0] * n, "DOWNLOAD": [0] * n}
     with db() as c:
-        rows = c.execute("SELECT substr(ts,1,13) h, event, COUNT(*) n FROM audit_events WHERE ts >= ? AND result='OK' "
-                         "AND event IN ('LOGIN','UPLOAD','DOWNLOAD') GROUP BY h, event",
-                         (slots[0].strftime("%Y-%m-%dT%H"),)).fetchall()
+        rows = c.execute(f"SELECT substr(ts,1,{width}) h, event, COUNT(*) n FROM audit_events WHERE ts >= ? AND result='OK' "
+                         f"AND event IN ('LOGIN','UPLOAD','DOWNLOAD') GROUP BY substr(ts,1,{width}), event",
+                         (slots[0].strftime(fmt),)).fetchall()
     for r in rows:
         i = index.get(r["h"])
         if i is not None:
             series[r["event"]][i] += r["n"]
-    return {"slots": [t.strftime("%Y-%m-%dT%H:00:00Z") for t in slots], "series": series}
+    return {"slots": [t.strftime("%Y-%m-%dT%H:00:00Z") for t in slots], "series": series, "daily": daily}
+
+
+def traffic_since(since: str, top: int = 5) -> dict:
+    """Tong byte upload/download thanh cong (doc 'bytes=N' trong detail) + top nguoi dung theo tong luu luong."""
+    up = down = 0
+    per_user: dict[str, list[int]] = {}
+    with db() as c:
+        rows = c.execute("SELECT username, event, detail FROM audit_events WHERE ts >= ? AND result='OK' "
+                         "AND event IN ('UPLOAD','DOWNLOAD')", (since,)).fetchall()
+    for r in rows:
+        m = BYTES_RE.search(r["detail"] or "")
+        if not m:
+            continue
+        b = int(m.group(1))
+        u = per_user.setdefault(r["username"] or "-", [0, 0])
+        if r["event"] == "UPLOAD":
+            up += b; u[0] += b
+        else:
+            down += b; u[1] += b
+    users = sorted(((name, ub, db_) for name, (ub, db_) in per_user.items()), key=lambda x: x[1] + x[2], reverse=True)
+    return {"up": up, "down": down, "users": users[:top]}
+
+
+def failed_login_ips(since: str, top: int = 5) -> list:
+    with db() as c:
+        return c.execute("SELECT COALESCE(ip, '-') ip, COUNT(*) n, COUNT(DISTINCT username) users, MAX(ts) last "
+                         "FROM audit_events WHERE event='LOGIN' AND result='FAIL' AND ts >= ? "
+                         "GROUP BY COALESCE(ip, '-') ORDER BY n DESC, last DESC LIMIT ?", (since, top)).fetchall()
+
+
+def storage_stats(c, top: int = 5) -> dict:
+    """Dung luong theo bang files (dong bo tu kho) + top chu so huu (file_owner, khop dung duong dan)."""
+    total = c.execute("SELECT COUNT(*) n, COALESCE(SUM(size), 0) s FROM files").fetchone()
+    owners = c.execute("SELECT COALESCE(o.owner, '') who, COUNT(*) n, COALESCE(SUM(f.size), 0) s FROM files f "
+                       "LEFT JOIN file_owner o ON o.path = f.path GROUP BY COALESCE(o.owner, '') "
+                       "ORDER BY s DESC LIMIT ?", (top,)).fetchall()
+    return {"count": total["n"], "bytes": total["s"], "owners": owners}
+
+
+def last_logins(c, usernames: list[str]) -> dict[str, str]:
+    """Lan dang nhap FTP thanh cong gan nhat cua tung user (theo audit_events)."""
+    if not usernames:
+        return {}
+    marks = ",".join("?" * len(usernames))
+    rows = c.execute(f"SELECT username, MAX(ts) last FROM audit_events WHERE event='LOGIN' AND result='OK' "
+                     f"AND username IN ({marks}) GROUP BY username", tuple(usernames)).fetchall()
+    return {r["username"]: r["last"] for r in rows}
 
 
 # ---------- phan trang ----------
@@ -433,20 +515,25 @@ def logout(request: Request, csrf: str = Form(...)):
 
 # ---------- dashboard ----------
 @app.get("/")
-def dashboard(request: Request, admin: str = Depends(require())):
+def dashboard(request: Request, range: str = "24h", admin: str = Depends(require())):
     perms = set(request.session["perms"])
-    ctx = {"users": None, "files": None, "rows": [], "failed_logins": 0, "activity": None,
-           "malware": [], "clamd_stale": clamd_stale_days()}
+    rng = range if range in RANGES else "24h"
+    hours, bucket, range_label = RANGES[rng]
+    ctx = {"users": None, "files": None, "storage": None, "rows": [], "failed_logins": 0, "activity": None,
+           "traffic": None, "fail_ips": [], "malware": [], "clamd_stale": clamd_stale_days(),
+           "range": rng, "ranges": RANGES, "range_label": range_label}
     with db() as c:
         if "user:manage" in perms:
             ctx["users"] = c.execute("SELECT COUNT(*) total, COUNT(CASE WHEN enabled=0 THEN 1 END) locked FROM users").fetchone()
         if perms & set(SCAN_VIEW):
             ctx["files"] = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM files GROUP BY status")}
+            ctx["storage"] = storage_stats(c)
     if "audit:view" in perms:
-        since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
-        ctx["malware"] = read_audit(limit=5, event="MALWARE", since_hours=24)
+        since = since_iso(hours)
+        ctx["malware"] = read_audit(limit=5, event="MALWARE", since_hours=24)  # canh bao luon tinh 24h
         ctx.update(rows=read_audit(limit=5),  # dashboard co dinh khong cuon: chi vua 5 dong, xem them o trang Nhat ky
-                   failed_logins=count_audit(event="LOGIN", result="FAIL", since=since), activity=activity_by_hour())
+                   failed_logins=count_audit(event="LOGIN", result="FAIL", since=since),
+                   activity=activity_by_hour(hours, bucket), traffic=traffic_since(since), fail_ips=failed_login_ips(since))
     return render(request, "dashboard.html", **ctx)
 
 
@@ -463,7 +550,8 @@ def users_page(request: Request, page: str = "1", per_page: str = "20", admin: s
         rows = c.execute("SELECT * FROM users ORDER BY username LIMIT ? OFFSET ?", (pg["per_page"], pg["offset"])).fetchall()
         assigned = {u["username"]: user_roles(c, u["username"]) for u in rows}
         roles = all_roles(c)
-    return render(request, "users.html", users=rows, assigned=assigned, roles=roles, pg=pg)
+        last = last_logins(c, [u["username"] for u in rows])
+    return render(request, "users.html", users=rows, assigned=assigned, roles=roles, pg=pg, last=last)
 
 
 @app.post("/users")
@@ -687,17 +775,23 @@ def scan_with_clamav(p: Path) -> tuple[str, str]:
 
 
 @app.get("/files")
-def files_page(request: Request, status: str = "", page: str = "1", per_page: str = "20",
+def files_page(request: Request, status: str = "", q: str = "", page: str = "1", per_page: str = "20",
                admin: str = Depends(require(*SCAN_VIEW))):
-    where, args = "", ()
+    q = q.strip()[:200]
+    conds, args = [], ()
     if status in STATUSES:
-        where, args = " WHERE status=?", (status,)
+        conds.append("f.status=?"); args += (status,)
+    if q:  # tim theo ten/duong dan, khong phan biet hoa thuong; % va _ duoc coi la ky tu thuong
+        conds.append("LOWER(f.path) LIKE ? ESCAPE '\\'")
+        args += ("%" + re.sub(r"([\\%_])", r"\\\1", q.lower()) + "%",)
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
     with db() as c:
-        total = c.execute("SELECT COUNT(*) FROM files" + where, args).fetchone()[0]
+        total = c.execute("SELECT COUNT(*) FROM files f" + where, args).fetchone()[0]
         pg = paginate(request, total, page, per_page)
-        rows = c.execute("SELECT * FROM files" + where + " ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+        rows = c.execute("SELECT f.*, o.owner FROM files f LEFT JOIN file_owner o ON o.path = f.path" + where
+                         + " ORDER BY f.updated_at DESC, f.id DESC LIMIT ? OFFSET ?",
                          args + (pg["per_page"], pg["offset"])).fetchall()
-    return render(request, "files.html", files=rows, statuses=STATUSES, status=status, pg=pg,
+    return render(request, "files.html", files=rows, statuses=STATUSES, status=status, q=q, pg=pg,
                   clamav=bool(CLAMD or shutil.which("clamdscan") or shutil.which("clamscan")),
                   clamd_stale=clamd_stale_days())
 

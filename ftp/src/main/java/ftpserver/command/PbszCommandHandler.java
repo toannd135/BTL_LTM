@@ -4,6 +4,12 @@ import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 
+/**
+ * PBSZ (RFC 4217): kich thuoc vung dem bao ve, voi TLS luon la 0; bat buoc truoc PROT.
+ *
+ * <p>Khong can dang nhap nhung phai sau AUTH TLS. Tra loi: 200 "PBSZ=0" (bo qua gia tri client gui);
+ * 503 neu TLS chua bat.
+ */
 public final class PbszCommandHandler implements CommandHandler {
 
     @Override public boolean requiresAuth()  { return false; }

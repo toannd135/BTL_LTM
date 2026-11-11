@@ -12,6 +12,9 @@ import javax.crypto.spec.PBEKeySpec;
  * Bam mat khau bang PBKDF2-HMAC-SHA256 co salt ngau nhien.
  * Dinh dang luu: pbkdf2$<iterations>$<salt base64>$<hash base64>
  * Tao hash: java -cp ftpserver.jar ftpserver.auth.PasswordHasher <mat-khau>
+ *
+ * <p>So vong lap duoc luu trong chuoi hash nen co the tang {@code ITERATIONS} ma hash cu van xac thuc duoc.
+ * Dung boi {@link UserManager} (dang nhap) va {@link SeedAccounts} (doi mat khau tai khoan mau).
  */
 public final class PasswordHasher {
 
@@ -23,26 +26,28 @@ public final class PasswordHasher {
 
     private PasswordHasher() {}
 
+    /** Bam mat khau voi salt moi; ket qua o dinh dang {@code pbkdf2$iter$salt$hash}. */
     public static String hash(String password) {
         byte[] salt = new byte[SALT_BYTES];
         RANDOM.nextBytes(salt);
-        byte[] dk = derive(password.toCharArray(), salt, ITERATIONS);
+        byte[] derivedKey = derive(password.toCharArray(), salt, ITERATIONS);
         Base64.Encoder b64 = Base64.getEncoder();
-        return PREFIX + "$" + ITERATIONS + "$" + b64.encodeToString(salt) + "$" + b64.encodeToString(dk);
+        return PREFIX + "$" + ITERATIONS + "$" + b64.encodeToString(salt) + "$" + b64.encodeToString(derivedKey);
     }
 
+    /** true neu chuoi co dung 4 phan dinh dang PBKDF2 va giai ma duoc (khong kiem tra mat khau). */
     public static boolean isValidFormat(String stored) {
         if (stored == null) {
             return false;
         }
-        String[] p = stored.split("\\$");
-        if (p.length != 4 || !p[0].equals(PREFIX)) {
+        String[] parts = stored.split("\\$");
+        if (parts.length != 4 || !parts[0].equals(PREFIX)) {
             return false;
         }
         try {
-            Integer.parseInt(p[1]);
-            Base64.getDecoder().decode(p[2]);
-            Base64.getDecoder().decode(p[3]);
+            Integer.parseInt(parts[1]);
+            Base64.getDecoder().decode(parts[2]);
+            Base64.getDecoder().decode(parts[3]);
             return true;
         } catch (IllegalArgumentException e) {
             return false;
@@ -54,10 +59,10 @@ public final class PasswordHasher {
         if (password == null || !isValidFormat(stored)) {
             return false;
         }
-        String[] p = stored.split("\\$");
-        byte[] salt = Base64.getDecoder().decode(p[2]);
-        byte[] expected = Base64.getDecoder().decode(p[3]);
-        byte[] actual = derive(password.toCharArray(), salt, Integer.parseInt(p[1]));
+        String[] parts = stored.split("\\$");
+        byte[] salt = Base64.getDecoder().decode(parts[2]);
+        byte[] expected = Base64.getDecoder().decode(parts[3]);
+        byte[] actual = derive(password.toCharArray(), salt, Integer.parseInt(parts[1]));
         return MessageDigest.isEqual(expected, actual);
     }
 
@@ -70,6 +75,7 @@ public final class PasswordHasher {
         }
     }
 
+    /** Cong cu dong lenh: in hash cua mat khau truyen vao. */
     public static void main(String[] args) {
         if (args.length != 1) {
             System.err.println("Usage: java -cp ftpserver.jar ftpserver.auth.PasswordHasher <password>");

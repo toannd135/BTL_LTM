@@ -224,6 +224,66 @@ check("dashboard auditor co bieu do hoat dong 24h", "activityChart" in d and '"L
 check("dashboard admin khong hien nhat ky (khong co audit:view)", "activityChart" not in c.get("/").text)
 check("audit web ghi IP trinh duyet that", main.read_audit(1, event="ADMIN_LOGIN")[0]["ip"] == "testclient")
 
+# dashboard: dung luong, luu luong, top nguoi dung / IP, chon khoang thoi gian
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+check("fmt_bytes doi don vi", main.fmt_bytes(0) == "0 B" and main.fmt_bytes(1536) == "1.5 KB" and main.fmt_bytes(5 * 1024**3) == "5.0 GB")
+check("iso_utc: kieu SQL -> ISO Z, ISO nano -> mili", main.iso_utc("2026-11-11 08:00:00") == "2026-11-11T08:00:00Z"
+      and main.iso_utc("2026-10-30T01:02:03.123456789Z") == "2026-10-30T01:02:03.123Z")
+def ago(**kw): return (_dt.now(_tz.utc) - _td(**kw)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+def ev(ts, user, event, result, detail, ip="198.51.100.1"):
+    with main.db() as d:
+        d.execute("INSERT INTO audit_events(ts, session, ip, username, event, result, detail) VALUES (?,?,?,?,?,?,?)",
+                  (ts, "s1", ip, user, event, result, detail))
+s24, s7, s30 = main.since_iso(24), main.since_iso(168), main.since_iso(720)
+t0, w0, m0 = main.traffic_since(s24), main.traffic_since(s7), main.traffic_since(s30)
+ev(ago(minutes=5), "alice", "UPLOAD", "OK", "/sv/a.bin bytes=2048")
+ev(ago(minutes=4), "alice", "UPLOAD", "OK", "/sv/b.bin bytes=2048 mode=append")
+ev(ago(minutes=3), "zbob", "DOWNLOAD", "OK", "/sv/a.bin bytes=1048576 mode=resume@10")
+ev(ago(minutes=2), "zbob", "DOWNLOAD", "FAIL", "/sv/a.bin aborted after 500 bytes")   # loi: khong tinh
+ev(ago(days=3), "carol", "UPLOAD", "OK", "/sv/c.bin bytes=7000")                     # chi trong 7 ngay
+ev(ago(days=10), "dave", "UPLOAD", "OK", "/sv/d.bin bytes=900000")                   # chi trong 30 ngay
+for i in range(6):
+    ev(ago(minutes=10 + i), f"guess{i}", "LOGIN", "FAIL", "bad password", ip="203.0.113.7")
+ev(ago(minutes=20), "sv", "LOGIN", "FAIL", "bad password", ip="192.0.2.50")
+t1, w1, m1 = main.traffic_since(s24), main.traffic_since(s7), main.traffic_since(s30)
+check("luu luong 24h: tong byte upload/download, bo qua lan FAIL", t1["up"] - t0["up"] == 4096 and t1["down"] - t0["down"] == 1048576)
+check("luu luong 7d/30d gom su kien cu hon", w1["up"] - w0["up"] == 4096 + 7000 and m1["up"] - m0["up"] == 4096 + 7000 + 900000)
+check("top nguoi dung theo luu luong: zbob dung dau", t1["users"][0][0] == "zbob" and ("alice", 4096, 0) in t1["users"])
+ips = main.failed_login_ips(s24)
+check("top IP dang nhap that bai", ips[0]["ip"] == "203.0.113.7" and ips[0]["n"] == 6 and ips[0]["users"] == 6
+      and any(r["ip"] == "192.0.2.50" for r in ips))
+a7, a30, a24 = main.activity_by_hour(168, 24), main.activity_by_hour(720, 24), main.activity_by_hour()
+check("bieu do: 24 cot gio / 7 va 30 cot ngay", len(a24["slots"]) == 24 and not a24["daily"]
+      and len(a7["slots"]) == 7 and a7["daily"] and len(a30["slots"]) == 30)
+check("bieu do 30 ngay dem them su kien 10 ngay truoc", sum(a30["series"]["UPLOAD"]) - sum(a7["series"]["UPLOAD"]) >= 1)
+dh = a.get("/").text
+check("dashboard auditor: the luu luong + bang top + IP loi", "Lưu lượng truyền" in dh and 'id="topTraffic"' in dh
+      and "zbob" in dh and "203.0.113.7" in dh and "1.0 MB" in dh)
+d7 = a.get("/?range=7d").text
+check("dashboard ?range=7d: nhan 7 ngay, bieu do theo ngay", "Hoạt động 7 ngày qua" in d7 and '"daily": true' in d7 and "carol" in d7)
+check("dashboard ?range rac -> 24h, khong loi", a.get("/?range=abc").status_code == 200 and "Hoạt động 24 giờ qua" in a.get("/?range=abc").text)
+with main.db() as d:
+    d.execute("INSERT INTO file_owner(path, owner) VALUES ('/sv/ok.txt', 'alice') ON CONFLICT DO NOTHING")
+    st = main.storage_stats(d)
+    real = d.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM files").fetchone()
+check("storage_stats khop tong bang files", st["count"] == real[0] and st["bytes"] == real[1]
+      and any(o["who"] == "alice" for o in st["owners"]) and any(o["who"] == "" for o in st["owners"]))
+dc = c.get("/").text
+check("dashboard admin (scan:manage) co dung luong luu tru, khong co luu luong (khong audit:view)",
+      "Dung lượng lưu trữ" in dc and 'id="topStorage"' in dc and "alice" in dc and "Lưu lượng truyền" not in dc)
+# trang Tep: chu so huu, tim kiem
+fq = c.get("/files?q=OK.TXT").text
+check("files: tim khong phan biet hoa thuong + cot chu so huu", "/sv/ok.txt" in fq and "alice" in fq and "bulk/" not in fq)
+check("files: ky tu % trong o tim khong khop tat ca", "Không có tệp khớp" in c.get("/files?q=%25").text)
+fb = c.get("/files?q=bulk&per_page=10").text
+check("files: phan trang giu tu khoa tim", "q=bulk" in fb and "page=2" in fb and count(fb, "/scan") == 10)
+# trang Nguoi dung: dang nhap lan cuoi
+ts_login = ago(minutes=1)
+ev(ts_login, "auditor", "LOGIN", "OK", "ftp login")
+ev(ago(days=2), "auditor", "LOGIN", "OK", "ftp login")
+up = c.get("/users?per_page=100").text
+check("users: cot dang nhap lan cuoi lay lan moi nhat", f'datetime="{ts_login}"' in up and "Chưa đăng nhập" in up)
+
 # break-glass
 tb = token(c, "/breakglass")
 check("admin vao /breakglass", c.get("/breakglass").status_code == 200)
