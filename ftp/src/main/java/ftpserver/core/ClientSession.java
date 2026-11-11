@@ -95,6 +95,11 @@ public class ClientSession implements Runnable {
     private long restartOffset;
     /** Duong dan da chon boi RNFR, cho RNTO ngay sau do. */
     private Path renameFrom;
+    /** Thu muc ca nhan /home/&lt;user&gt; cua nhan vien co home "/" (null = khong ap dung han che tao muc o goc). */
+    private Path personalHome;
+
+    /** Thu muc chua cac thu muc ca nhan (khoa ACL). */
+    public static final String PERSONAL_HOMES = "/home";
 
     public ClientSession(Socket controlSocket, CommandRegistry registry,
                           UserManager userManager, PathResolver pathResolver, Config config,
@@ -311,6 +316,7 @@ public class ClientSession implements Runnable {
         currentDir = null;
         restartOffset = 0;
         renameFrom = null;
+        personalHome = null;
         failedLoginCount = 0;
         state = SessionState.CONNECTED;
     }
@@ -338,6 +344,8 @@ public class ClientSession implements Runnable {
     public Path getRenameFrom() { return renameFrom; }
     public void setRenameFrom(Path p) { this.renameFrom = p; }
     public void setPathResolver(PathResolver r) { this.pathResolver = r; }
+    public Path getPersonalHome() { return personalHome; }
+    public void setPersonalHome(Path p) { this.personalHome = p; }
 
     // --- Dich vu va kiem tra quyen ---
 
@@ -384,11 +392,23 @@ public class ClientSession implements Runnable {
             return false;
         }
         String key = aclPath(real);
+        if (need == Perm.WRITE && isSharedTopLevel(key)) {
+            return breakglass(key); // nhan vien co thu muc ca nhan khong tao/doi muc truc tiep o "/" hay "/home"
+        }
         if (grants != null && grants.has(rbacPerm, key)
                 && (grants.has(RbacService.FILE_MANAGE, key) || acl.allows(user, key, need))) {
             return true;
         }
         return breakglass(key); // neu vai tro/ACL khong cho, cap quyen dac biet con han van co the cho phep
+    }
+
+    /**
+     * "/" va "/home" la vung chung: voi user co thu muc ca nhan (xem PassCommandHandler), quyen WRITE tren chinh hai
+     * thu muc nay (tao tep/thu muc moi, doi ten vao, xoa chung) bi tu choi; ben trong /home/&lt;user&gt; va noi da duoc
+     * cap ACL WRITE van ghi binh thuong.
+     */
+    private boolean isSharedTopLevel(String key) {
+        return personalHome != null && (key.equals("/") || key.equals(PERSONAL_HOMES));
     }
 
     /**

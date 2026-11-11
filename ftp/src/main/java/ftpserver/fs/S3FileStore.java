@@ -59,12 +59,58 @@ public final class S3FileStore implements FileStore {
     private final S3Client s3;
     private final String bucket;
     private final String prefix; // rong hoac ket thuc bang "/"
+    private final String quarantineBucket; // null = khong ho tro cach ly
+    private volatile boolean quarantineReady;
 
     public S3FileStore(S3Client s3, String bucket, String prefix) {
+        this(s3, bucket, prefix, null);
+    }
+
+    /** @param quarantineBucket bucket cach ly tep nhiem (giong admin-web: FTP_S3_QUARANTINE_BUCKET), null = khong cach ly */
+    public S3FileStore(S3Client s3, String bucket, String prefix, String quarantineBucket) {
         this.s3 = s3;
         this.bucket = bucket;
         String trimmed = prefix == null ? "" : prefix.replaceAll("^/+|/+$", "");
         this.prefix = trimmed.isEmpty() ? "" : trimmed + "/";
+        this.quarantineBucket = quarantineBucket == null || quarantineBucket.isBlank() ? null : quarantineBucket;
+    }
+
+    /** Nhu {@link #connect(String, String, String, String, String, String)} kem bucket cach ly. */
+    public static S3FileStore connect(String endpoint, String region, String accessKey, String secretKey,
+                                      String bucket, String prefix, String quarantineBucket) {
+        S3FileStore base = connect(endpoint, region, accessKey, secretKey, bucket, prefix);
+        return new S3FileStore(base.s3, bucket, prefix, quarantineBucket);
+    }
+
+    /**
+     * Copy object sang bucket cach ly (key = {@code name}, cung quy uoc admin-web) roi xoa ban goc; xoa goc loi thi
+     * xoa ban sao de tep khong nam o hai noi.
+     */
+    @Override
+    public String quarantine(Path file, String name) throws IOException {
+        if (quarantineBucket == null) {
+            throw new IOException("s3 quarantine bucket not configured");
+        }
+        String key = fileKey(file);
+        String qkey = name.replace('/', '_');
+        try {
+            if (!quarantineReady) {
+                ensureBucket(s3, quarantineBucket);
+                quarantineReady = true;
+            }
+            s3.copyObject(CopyObjectRequest.builder()
+                    .sourceBucket(bucket).sourceKey(key)
+                    .destinationBucket(quarantineBucket).destinationKey(qkey).build());
+            try {
+                s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build());
+            } catch (RuntimeException e) {
+                s3.deleteObject(DeleteObjectRequest.builder().bucket(quarantineBucket).key(qkey).build());
+                throw e;
+            }
+        } catch (RuntimeException e) {
+            throw new IOException("quarantine failed: " + e.getMessage(), e);
+        }
+        return "s3://" + quarantineBucket + "/" + qkey;
     }
 
     /** Ket noi toi endpoint S3 (path-style), tao bucket neu chua co. */

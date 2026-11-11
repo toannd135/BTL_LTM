@@ -315,4 +315,72 @@ main.audit("sv", "MALWARE", "/sv/x.exe infected: Eicar-Test-Signature - upload r
 check("dashboard canh bao ma doc 24h", "Eicar-Test-Signature" in a.get("/").text)
 c.post("/logout", data={"csrf": token(c, "/users")})
 check("dang xuat", c.get("/users").status_code == 303)
+# ---------- migrate_personal_homes.py ----------
+sys.path.insert(0, str(here / "scripts"))
+import migrate_personal_homes as mph
+
+class FakeS3:
+    """S3 toi thieu trong bo nho cho S3Storage (head/create bucket, list, copy, put, delete)."""
+    def __init__(self): self.b = {}
+    def head_bucket(self, Bucket):
+        if Bucket not in self.b: raise KeyError(Bucket)
+    def create_bucket(self, Bucket): self.b.setdefault(Bucket, {})
+    def put_object(self, Bucket, Key, Body=b""): self.b[Bucket][Key] = bytes(Body)
+    def copy_object(self, Bucket, Key, CopySource): self.b[Bucket][Key] = self.b[CopySource["Bucket"]][CopySource["Key"]]
+    def delete_object(self, Bucket, Key): self.b[Bucket].pop(Key, None)
+    def get_paginator(self, _):
+        fake = self
+        class P:
+            def paginate(self, Bucket, Prefix):
+                yield {"Contents": [{"Key": k} for k in sorted(fake.b[Bucket]) if k.startswith(Prefix)]}
+        return P()
+
+with main.db() as d:
+    for u in ("toan", "dung"):
+        d.execute("INSERT INTO users(username, password_hash, role, home) VALUES (?, 'x', 'user', '/')", (u,))
+        d.execute("INSERT INTO user_roles(username, role, scope) VALUES (?, 'employee', '/')", (u,))
+    d.execute("INSERT INTO file_owner(path, owner) VALUES ('/test', 'toan'), ('/test/useruid.ini', 'toan'), "
+              "('/notes.txt', 'toan'), ('/mgr', 'fm'), ('/legacy/x.txt', 'dung')")
+    d.execute("INSERT INTO file_acl(path, username, perm, granted_by) VALUES ('/test/useruid.ini', 'dung', 'DOWNLOAD', 'toan')")
+    d.execute("INSERT INTO files(path, size, mtime, sha256, status, quarantine_path) VALUES "
+              "('/test/useruid.ini', 3, 0, 'h', 'CLEAN', NULL), ('/test/bad.exe', 3, 0, 'h2', 'QUARANTINED', 's3://q/9_bad.exe')")
+    elig = mph.eligible_owners(d)
+check("migrate: chi nhan vien home '/' (khong fm/admin/auditor/sv)", "toan" in elig and "dung" in elig
+      and not {"fm", "admin", "auditor", "sv"} & elig)
+
+s3 = FakeS3()
+fstore = main.storage.S3Storage("http://x", "a", "b", "ftp-files", client=s3)
+for k in ("test/", "test/useruid.ini", "test/sub/", "notes.txt", "mgr/", "mgr/a.txt", "testing.txt"):
+    s3.put_object(Bucket="ftp-files", Key=k, Body=b"abc")
+lines = []
+mph.run(apply=False, store=fstore, out=lines.append)
+check("migrate dry-run: ke hoach dung, khong dong vao du lieu", any("PLAN     /test -> /home/toan/test" in l and "objects=3" in l for l in lines)
+      and any("/notes.txt -> /home/toan/notes.txt" in l for l in lines) and any(l.startswith("KEEP     /mgr") for l in lines)
+      and "test/useruid.ini" in s3.b["ftp-files"])
+lines = []
+rc = mph.run(apply=True, store=fstore, out=lines.append)
+objs = s3.b["ftp-files"]
+with main.db() as d:
+    acl_rows = [tuple(r) for r in d.execute("SELECT path, username, perm FROM file_acl")]
+    fpaths = {r["path"]: r["quarantine_path"] for r in d.execute("SELECT path, quarantine_path FROM files")}
+    owners = {r["path"]: r["owner"] for r in d.execute("SELECT path, owner FROM file_owner")}
+check("migrate apply: object chuyen (ke ca marker), nguon bi xoa, muc khac giu nguyen", rc == 0
+      and {"home/", "home/toan/", "home/toan/test/", "home/toan/test/useruid.ini", "home/toan/test/sub/", "home/toan/notes.txt"} <= set(objs)
+      and not any(k.startswith("test/") or k == "notes.txt" for k in objs) and "testing.txt" in objs and "mgr/a.txt" in objs)
+check("migrate apply: ACL chia se, files (ca tep cach ly), file_owner di theo", ("/home/toan/test/useruid.ini", "dung", "DOWNLOAD") in acl_rows
+      and fpaths.get("/home/toan/test/bad.exe") == "s3://q/9_bad.exe" and "/test/useruid.ini" not in fpaths
+      and owners.get("/home/toan") == "toan" and owners.get("/home/toan/test") == "toan" and owners.get("/mgr") == "fm"
+      and owners.get("/legacy/x.txt") == "dung" and "/home" not in owners)
+lines = []
+check("migrate idempotent: chay lai khong con gi", mph.run(apply=True, store=fstore, out=lines.append) == 0
+      and "Nothing to migrate." in lines)
+# dia cuc bo (STORE mac dinh cua test) + xung dot dich
+with main.db() as d:
+    d.execute("INSERT INTO file_owner(path, owner) VALUES ('/dung-dir', 'dung'), ('/home/dung/dung-dir', 'dung'), ('/d2', 'dung')")
+(main.ROOT / "d2" / "sub").mkdir(parents=True); (main.ROOT / "d2" / "sub" / "f.txt").write_text("x")
+lines = []
+rc = mph.run(apply=True, out=lines.append)
+check("migrate local: chuyen thu muc that, dich da co ban ghi -> CONFLICT bo qua", rc == 1
+      and (main.ROOT / "home" / "dung" / "d2" / "sub" / "f.txt").read_text() == "x" and not (main.ROOT / "d2").exists()
+      and any(l.startswith("CONFLICT /dung-dir") for l in lines))
 print("\nALL ADMIN TESTS PASSED")

@@ -34,6 +34,12 @@ public class Config {
     private final boolean scanEnforce;
     private final S3Settings s3;
     private final String scanClamd;
+    private final long scanMaxBytes;
+    private final Path quarantineDir;
+    private final String s3QuarantineBucket;
+
+    /** Gioi han mac dinh cua scan.max_bytes (500 MiB). */
+    public static final long DEFAULT_SCAN_MAX_BYTES = 524_288_000L;
 
     /** Cau hinh object storage S3 (SeaweedFS). */
     public record S3Settings(String endpoint, String region, String accessKey, String secretKey, String bucket, String prefix) {}
@@ -41,7 +47,8 @@ public class Config {
     private Config(int controlPort, Path rootDir, int dataPortMin, int dataPortMax,
                    int idleTimeoutSeconds, Path dbPath, String dbUrl, String dbUser, String dbPassword, String pasvAddress,
                    Path tlsKeystore, String tlsKeystorePassword, boolean tlsRequired, Path auditLog,
-                   List<String> scanCommand, boolean scanEnforce, S3Settings s3, String scanClamd) {
+                   List<String> scanCommand, boolean scanEnforce, S3Settings s3, String scanClamd,
+                   long scanMaxBytes, Path quarantineDir, String s3QuarantineBucket) {
         this.controlPort = controlPort;
         this.rootDir = rootDir;
         this.dataPortMin = dataPortMin;
@@ -60,6 +67,9 @@ public class Config {
         this.scanEnforce = scanEnforce;
         this.s3 = s3;
         this.scanClamd = scanClamd;
+        this.scanMaxBytes = scanMaxBytes;
+        this.quarantineDir = quarantineDir;
+        this.s3QuarantineBucket = s3QuarantineBucket;
     }
 
     /** Cong kenh dieu khien (control.port), thuong la 21. */
@@ -95,6 +105,15 @@ public class Config {
     /** "host[:port]" cua clamd tu xa (quet INSTREAM, khong can ClamAV trong image); null = khong dung. */
     public String scanClamd() { return scanClamd; }
     public boolean s3Enabled() { return s3 != null; }
+    /**
+     * Kich thuoc toi da (byte) cua mot lan STOR/APPE khi scan.enforce=true (scan.max_bytes / FTP_SCAN_MAX_BYTES);
+     * 0 = khong gioi han. Khi scan.enforce=false luon tra 0.
+     */
+    public long scanMaxBytes() { return scanEnforce ? scanMaxBytes : 0; }
+    /** Thu muc cach ly tep nhiem cho storage local (quarantine.dir / FTP_QUARANTINE); null = khong cach ly, xoa tep. */
+    public Path quarantineDir() { return quarantineDir; }
+    /** Bucket cach ly tep nhiem khi dung S3 (s3.quarantine.bucket / FTP_S3_QUARANTINE_BUCKET, mac dinh &lt;bucket&gt;-quarantine). */
+    public String s3QuarantineBucket() { return s3QuarantineBucket; }
 
     /**
      * Doc va kiem tra tep cau hinh.
@@ -153,9 +172,29 @@ public class Config {
             throw new IllegalArgumentException("scan.enforce=true needs scan.command or scan.clamd (otherwise no file would ever be downloadable)");
         }
 
+        long scanMaxBytes = parseMaxBytes(envOr("FTP_SCAN_MAX_BYTES",
+                props.getProperty("scan.max_bytes", String.valueOf(DEFAULT_SCAN_MAX_BYTES))));
+        String quarantine = envOr("FTP_QUARANTINE", optional(props, "quarantine.dir"));
+        Path quarantineDir = quarantine == null ? null : Path.of(quarantine.trim());
+        String s3QuarantineBucket = s3 == null ? null
+                : envOr("FTP_S3_QUARANTINE_BUCKET", props.getProperty("s3.quarantine.bucket", s3.bucket() + "-quarantine")).trim();
+
         return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds,
                 dbPath, dbUrl, dbUser, dbPassword, pasvAddress, tlsKeystore, keystorePassword, tlsRequired, auditLog,
-                scanCommand, scanEnforce, s3, scanClamd);
+                scanCommand, scanEnforce, s3, scanClamd, scanMaxBytes, quarantineDir, s3QuarantineBucket);
+    }
+
+    /** scan.max_bytes: so nguyen &gt;= 0 (0 = khong gioi han). */
+    private static long parseMaxBytes(String v) {
+        try {
+            long n = Long.parseLong(v.trim());
+            if (n < 0) {
+                throw new NumberFormatException();
+            }
+            return n;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("scan.max_bytes must be an integer >= 0, got: " + v);
+        }
     }
 
     /** Doc cau hinh S3; endpoint va cap khoa la bat buoc, region/bucket/prefix co mac dinh. */

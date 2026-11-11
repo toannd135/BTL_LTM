@@ -24,7 +24,8 @@ import ftpserver.scan.ClamdClient;
  * <p>Can dang nhap, tai khoan co quyen ghi, quyen WRITE tren tep (ghi de) hoac thu muc cha (tep moi), va da
  * PASV/PORT. Tra loi: 150 roi 226; 501 neu thieu tham so; 553 neu ten khong hop le; 550 neu khong du quyen,
  * thu muc cha khong ton tai, dich la thu muc, offset REST sai hoac phat hien ma doc; 425 neu chua PASV/PORT;
- * 426 neu kenh du lieu loi; 451 neu khong luu duoc.
+ * 426 neu kenh du lieu loi; 451 neu khong luu duoc; 552 neu vuot scan.max_bytes (chi khi scan.enforce=true,
+ * du lieu da nhan bi bo, ke ca voi APPE/REST).
  */
 public final class StorCommandHandler implements CommandHandler {
 
@@ -110,6 +111,8 @@ public final class StorCommandHandler implements CommandHandler {
         boolean direct = append || offset > 0;
         session.reply(FtpReply.FILE_STATUS_OK_OPENING, "About to open data connection");
         long received = 0;
+        long maxBytes = session.config().scanMaxBytes();
+        boolean tooLarge = false;
         boolean transferOk = true;
         FileStore.Upload upload = null;
         try (Socket dataSocket = session.getDataConnection().establish(DATA_CONNECT_TIMEOUT_MS);
@@ -120,8 +123,12 @@ public final class StorCommandHandler implements CommandHandler {
             byte[] buffer = new byte[BUFFER_SIZE];
             int bytesRead;
             while ((bytesRead = in.read(buffer)) != -1) {
-                out.write(buffer, 0, bytesRead);
                 received += bytesRead;
+                if (maxBytes > 0 && received > maxBytes) {
+                    tooLarge = true; // dung doc; dong kenh du lieu ben duoi lam client ngung gui
+                    break;
+                }
+                out.write(buffer, 0, bytesRead);
             }
             out.flush();
         } catch (IOException | RuntimeException e) {
@@ -132,6 +139,14 @@ public final class StorCommandHandler implements CommandHandler {
         }
 
         String virtualPath = session.pathResolver().toVirtualPath(target);
+        if (tooLarge) {
+            if (upload != null) {
+                upload.abort();
+            }
+            session.reply(FtpReply.EXCEEDED_STORAGE, "File exceeds maximum upload size");
+            session.audit("UPLOAD", virtualPath + " rejected: exceeds max size " + maxBytes + " bytes", false);
+            return;
+        }
         if (!transferOk) {
             if (upload != null) {
                 finishInterrupted(upload, direct);
