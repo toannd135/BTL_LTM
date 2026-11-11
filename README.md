@@ -55,9 +55,9 @@ Mục tiêu kỹ thuật:
 | Tự cài đặt giao thức FTP | `ServerSocket`/`Socket`, mỗi lệnh một `CommandHandler`, 31 lớp trong `command/` |
 | Nhiều client đồng thời | Thread pool 20 luồng, mỗi phiên một `ClientSession` độc lập |
 | Mã hóa đường truyền | FTPS explicit (RFC 4217): `AUTH TLS`, `PBSZ`, `PROT` |
-| Phân quyền nhiều tầng | RBAC (vai trò + scope thư mục) kết hợp ACL từng tệp, kiểm tra ngay trên server |
+| Phân quyền nhiều tầng | RBAC (vai trò + scope thư mục) kết hợp ACL từng tệp, thư mục cá nhân `/home/<user>` cho nhân viên, kiểm tra ngay trên server |
 | Kiểm toán | Audit song song ra file `audit.log` và bảng `audit_events` |
-| An toàn dữ liệu | Quét clamd **trước** khi commit vào kho; tệp nhiễm không bao giờ được lưu |
+| An toàn dữ liệu | Quét clamd **trước** khi commit vào kho, tệp nhiễm đã biết không bao giờ được lưu; tự cách ly tệp phát hiện nhiễm sau, quét lại định kỳ; snapshot đĩa dữ liệu hằng đêm |
 | Mở rộng | Kho tệp trừu tượng (`FileStore`): đĩa cục bộ hoặc SeaweedFS (S3); CSDL SQLite hoặc PostgreSQL |
 | Vận hành | Docker, Terraform, Ansible, GitHub Actions |
 
@@ -129,7 +129,7 @@ Công ty A cần một **hệ thống quản lý truyền tệp nội bộ**, t�
 | Quản trị hệ thống CNTT | `system_admin` | `/` | Tạo tài khoản, gán vai trò, cấp break-glass, thao tác kết quả quét. **Không đọc được nội dung tệp** |
 | Chuyên viên an toàn thông tin, kiểm toán nội bộ | `security_auditor` | `/` | Chỉ xem nhật ký và kết quả quét |
 | Trưởng phòng, người phụ trách lưu trữ tài liệu | `file_manager` | Thư mục phòng ban (ví dụ `/ketoan`) hoặc `/` | Quản lý, xóa tệp, bỏ qua ACL từng tệp **trong phạm vi được giao** |
-| Nhân viên | `employee` | Thư mục riêng (`home`) | Tải lên/xuống, đổi tên, chia sẻ tệp của mình; xóa tệp mình tải lên |
+| Nhân viên | `employee` | `/` (bắt đầu ở thư mục cá nhân `/home/<user>`) | Tải lên/xuống, đổi tên, chia sẻ tệp của mình; xóa tệp mình tải lên |
 
 ---
 
@@ -194,7 +194,7 @@ flowchart LR
 | FR-09 | Quản lý tài khoản: tạo, khóa/mở, đặt lại mật khẩu | QT | Trang web `/users` |
 | FR-10 | Gán/gỡ vai trò theo phạm vi thư mục | QT | Trang web `/users/{u}/roles`, `user_roles` |
 | FR-11 | Ghi nhật ký mọi thao tác (kể cả bị từ chối) kèm IP, xem và lọc | KT | `AuditLog`, `SITE AUDIT`, trang `/audit` |
-| FR-12 | Quét mã độc mọi tệp tải lên **trước khi lưu**; chặn tải tệp nhiễm | Hệ thống | `ScanService`, `ClamdClient` |
+| FR-12 | Quét mã độc mọi tệp tải lên **trước khi lưu**; chặn tải tệp nhiễm; tự cách ly tệp phát hiện nhiễm sau đó, quét lại định kỳ | Hệ thống | `ScanService`, `ClamdClient` |
 | FR-13 | Quét lại, duyệt sạch, cách ly, khôi phục, xóa hẳn tệp | QT | Trang `/files` |
 | FR-14 | Cảnh báo mã độc 24 giờ và CSDL virus cũ trên dashboard | QT | Trang `/` |
 | FR-15 | Cấp quyền truy cập khẩn cấp có thời hạn, có lý do, thu hồi được; không tự cấp | QT | `SITE BREAKGLASS`, trang `/breakglass` |
@@ -216,9 +216,9 @@ flowchart LR
 | Khả chuyển, mở rộng | Đổi kho tệp và CSDL không sửa nghiệp vụ | Interface `FileStore`, hai bộ migration SQLite/PostgreSQL |
 | Tương thích | Dùng được với client FTP phổ thông | Tuân RFC 959/4217, thử với `ftp`, `curl` |
 | Dễ dùng | Giao diện tiếng Việt, xác nhận thao tác nguy hiểm, lỗi dễ hiểu | `ErrorText`, hộp xác nhận mặc định "Không" |
-| Vận hành | Bật/tắt theo giờ, sao lưu, cập nhật không gián đoạn lâu | Auto-shutdown 23:00, snapshot đĩa, chạy lại Ansible |
+| Vận hành | Bật/tắt theo giờ, sao lưu, cập nhật không gián đoạn lâu | Auto-shutdown 23:00, cron snapshot đĩa hằng đêm (giữ 7 bản), chạy lại Ansible |
 | Chi phí | Thấp, dự đoán được | ≈ 53 USD/tháng (24/7), ≈ 27 USD (8 giờ/ngày) |
-| Bảo trì | Có kiểm thử và CI | 60 test Java, 73 kiểm tra web, GitHub Actions |
+| Bảo trì | Có kiểm thử và CI | 65 test Java, `test_admin.py` (97 kiểm tra) cho web, GitHub Actions |
 | Đa nền tảng | Client chạy Windows, macOS, Linux | JavaFX + `jpackage` |
 
 ### 3.5 Quy tắc nghiệp vụ
@@ -233,7 +233,7 @@ flowchart LR
 | BR-06 | Break-glass: chỉ `system_admin`, cấp cho **người khác**, thời hạn 1–480 phút, bắt buộc có lý do, ghi audit cả lúc cấp, lúc dùng lần đầu, lúc thu hồi |
 | BR-07 | Quyền ACL tối đa của tài khoản chỉ đọc là `DOWNLOAD` |
 | BR-08 | Sai mật khẩu 3 lần trong một phiên thì đóng kết nối (`421`) |
-| BR-09 | Mỗi người dùng bị nhốt trong thư mục `home` của mình |
+| BR-09 | Mỗi người dùng bị nhốt trong thư mục `home` của mình; nhân viên có home `/` làm việc trong thư mục cá nhân `/home/<user>` và không tạo mục mới trực tiếp ở `/` hay `/home` |
 | BR-10 | Thay đổi vai trò có hiệu lực từ lần đăng nhập sau |
 
 ### 3.6 Mô tả use case chính
@@ -245,7 +245,7 @@ flowchart LR
 | Tác nhân | Nhân viên, Quản lý tệp; hệ thống ngoài: ClamAV, kho tệp |
 | Tiền điều kiện | Đã đăng nhập; có quyền `file:upload` và ACL `WRITE` (hoặc là chủ) tại thư mục đích; đã mở kênh dữ liệu (`PASV`/`PORT`) |
 | Luồng chính | 1) Gửi `STOR`. 2) Server trả `150`. 3) Nhận dữ liệu vào **bản ghi tạm**. 4) Gửi bản tạm cho clamd. 5) Kết quả sạch: commit vào kho, ghi `files=CLEAN`, ghi chủ sở hữu, audit `UPLOAD`. 6) Trả `226` |
-| Luồng thay thế | A1: Tệp nhiễm: hủy bản tạm, trả `550 WARNING: malware detected`, audit `MALWARE`. A2: Đứt giữa chừng: hủy bản tạm, trả `426`. A3: clamd lỗi: vẫn commit, trạng thái `PENDING`, bị chặn tải khi `enforce`. A4: Không đủ quyền: `550`, audit `DENIED` |
+| Luồng thay thế | A1: Tệp nhiễm: hủy bản tạm, trả `550 WARNING: malware detected`, audit `MALWARE`. A2: Đứt giữa chừng: hủy bản tạm, trả `426`. A3: clamd lỗi: vẫn commit, trạng thái `PENDING`, bị chặn tải khi `enforce`. A4: Không đủ quyền (kể cả tạo mục mới trực tiếp ở `/` hay `/home` với nhân viên có thư mục cá nhân): `550`, audit `DENIED`. A5: Vượt `scan.max_bytes` (khi `enforce`): bỏ bản tạm, trả `552` |
 | Hậu điều kiện | Thành công: tệp có trong kho, có chủ sở hữu, có bản ghi `files`. Thất bại: kho không đổi |
 
 **UC07 — Chia sẻ tệp**
@@ -253,7 +253,7 @@ flowchart LR
 | Mục | Nội dung |
 |---|---|
 | Tác nhân | Nhân viên (chủ tệp) hoặc Quản lý tệp |
-| Tiền điều kiện | Đã đăng nhập; là chủ tệp hoặc có `file:manage`; người nhận tồn tại và thấy được thư mục chứa tệp |
+| Tiền điều kiện | Đã đăng nhập; là chủ tệp hoặc có `file:manage`; người nhận tồn tại và thấy được thư mục chứa tệp (khi được chia sẻ một mục, người nhận tự có `READ` trên các thư mục cha để duyệt tới, ví dụ `/home/<chủ>`) |
 | Luồng chính | 1) Chọn tệp, bấm **Chia sẻ**. 2) Gõ tên, chọn một hoặc nhiều người nhận và quyền. 3) Client gửi `SITE SHARE <tệp> <user> <quyền>`. 4) Server ghi `file_acl`, audit `SHARE`. 5) Hộp thoại hiển thị lại ACL (`SITE ACL`) |
 | Luồng thay thế | A1: Chọn `NONE`: thu hồi quyền. A2: Không phải chủ: từ chối và audit |
 | Hậu điều kiện | Người nhận thấy/tải được tệp theo quyền được cấp |
@@ -349,7 +349,7 @@ Hệ thống gồm **ba ứng dụng** chia sẻ chung dữ liệu và một l�
 | Thành phần | Công nghệ | Thư mục | Quy mô mã (xấp xỉ) |
 |---|---|---|---|
 | FTP Server | Java 21, Maven | `ftp/src/main` | ~5.100 dòng (Java + SQL) |
-| Test server | JUnit 5, Testcontainers | `ftp/src/test` | ~1.150 dòng, 60 test |
+| Test server | JUnit 5, Testcontainers | `ftp/src/test` | ~1.150 dòng, 65 test |
 | FTP Client GUI | JavaFX 21, Maven | `ftp-client-gui/` | ~2.500 dòng |
 | Trang quản trị | Python, FastAPI, Jinja2 | `ftp/admin-web/` | ~1.630 dòng (gồm template + test) |
 | Terraform | HCL | `terraform/` | ~590 dòng |
@@ -377,12 +377,13 @@ Hệ thống gồm **ba ứng dụng** chia sẻ chung dữ liệu và một l�
       ▼                                        ▼
  ┌────────────┐                       ┌─────────────────────┐
  │ SeaweedFS  │                       │ PostgreSQL / SQLite │
- │ (kho tệp)  │                       │ users, roles, ACL,  │
- └────────────┘                       │ audit, files        │
+ │ (kho tệp + │                       │ users, roles, ACL,  │
+ │ cách ly)   │                       │ audit, files        │
+ └────────────┘                       │                     │
                                       └─────────────────────┘
 ```
 
-Server và trang quản trị **dùng chung** CSDL, kho tệp và `audit.log`, nên quản trị viên thấy ngay thay đổi của server (và ngược lại).
+Server và trang quản trị **dùng chung** CSDL, kho tệp và `audit.log`, nên quản trị viên thấy ngay thay đổi của server (và ngược lại). Kho S3 gồm bucket tệp chính (`ftp-files`) và bucket cách ly (`ftp-files-quarantine`) cho tệp nhiễm. Trên Azure, đĩa dữ liệu chứa SeaweedFS được snapshot tự động hằng đêm (mục 14.6).
 
 ---
 
@@ -399,8 +400,8 @@ Server và trang quản trị **dùng chung** CSDL, kho tệp và `audit.log`, n
 | Web quản trị | FastAPI 0.115, Uvicorn 0.30, Jinja2 3.1, itsdangerous, `psycopg[binary]` 3.2, `boto3` 1.36 | Phiên đăng nhập ký bằng `FTPADMIN_SECRET` |
 | Băm mật khẩu | PBKDF2WithHmacSHA256 (muối ngẫu nhiên, số vòng lặp lưu cùng chuỗi băm) | `auth/PasswordHasher` |
 | Test | JUnit 5.10.2, Testcontainers (PostgreSQL 1.21.4), Python script | |
-| IaC | Terraform (provider `azurerm`) | RG, VNet, NSG, 2 VM, đĩa, PostgreSQL |
-| Cấu hình máy | Ansible (roles `base`, `docker`, `storage`, `ftpserver`) | Có Ansible Vault cho bí mật |
+| IaC | Terraform (provider `azurerm`) | RG, VNet, NSG, 2 VM, đĩa, PostgreSQL, managed identity + vai trò chụp snapshot |
+| Cấu hình máy | Ansible (roles `base`, `docker`, `storage`, `ftpserver`) | Bí mật mã hóa bằng Ansible Vault (tệp mật khẩu ngoài repo) |
 | Container | Docker, Docker Compose | Base `eclipse-temurin:21-jre`, chạy bằng user `ftp` (không root) |
 | CI/CD | GitHub Actions | test, build image, jpackage, release |
 | Chất lượng mã | SonarCloud | `.sonarcloud.properties` |
@@ -412,7 +413,7 @@ Server và trang quản trị **dùng chung** CSDL, kho tệp và `audit.log`, n
 ```
 BTL_LTM/
 ├── README.md                    Tổng quan, hướng dẫn chạy, thiết kế Azure
-├── baocao.md                    (tệp này)
+├── README.md                    (tệp này, báo cáo)
 ├── logo.png
 ├── ftp/                         ── FTP SERVER ──
 │   ├── pom.xml, Dockerfile, docker-compose.yml, ftpserver.conf
@@ -438,7 +439,8 @@ BTL_LTM/
 │   ├── scripts/                 smoke, concurrency, pasv_leak, ftps, bench_throughput, gen-keystore.sh
 │   ├── ftproot/                 Thư mục gốc mẫu (docs/sample.txt)
 │   └── admin-web/               ── TRANG QUẢN TRỊ ──
-│       ├── main.py (858 dòng), storage.py (215 dòng), test_admin.py
+│       ├── main.py (965 dòng), storage.py (215 dòng), test_admin.py
+│       ├── scripts/             migrate_personal_homes.py (chuyển tệp nhân viên từ gốc vào /home/<chủ>)
 │       ├── templates/           base, login, dashboard, users, files, audit, breakglass + partial
 │       ├── static/              favicon, logo
 │       ├── Dockerfile, requirements.txt
@@ -450,9 +452,10 @@ BTL_LTM/
 │       │   └── ui/              MainWindow (1.423 dòng), FileIcons, Icons, Formats,
 │       │                        ErrorText, FileOpener, AppIcon
 │       └── resources/           app.css, icon logo-16..256.png
-├── terraform/                   main.tf, storage.tf, db.tf, variables.tf, outputs.tf, versions.tf
-├── ansible/                     site.yml, ansible.cfg, group_vars, inventory, roles/{base,docker,storage,ftpserver}
-├── scripts/backup-seaweedfs.sh  Snapshot đĩa dữ liệu VM-B
+├── terraform/                   main.tf, storage.tf, db.tf, backup.tf (identity + quyền snapshot), variables.tf, outputs.tf, versions.tf
+├── ansible/                     site.yml, ansible.cfg, group_vars (vault.yml mã hóa), inventory, roles/{base,docker,storage,ftpserver}
+│                                (storage/templates: clamd.conf.j2, disk-snapshot.sh.j2, docker-compose.yml.j2, env.j2)
+├── scripts/backup-seaweedfs.sh  Snapshot đĩa dữ liệu VM-B thủ công (bản tự động: cron disk-snapshot.sh)
 ├── docs/                        Thiết kế/triển khai Azure, bảo mật & hiệu năng, phân công, bàn giao
 └── .github/workflows/ci.yml     Pipeline CI/CD
 ```
@@ -502,7 +505,7 @@ Hỗ trợ cả **Passive** và **Active**, tiếp tục truyền (`REST`), nố
 - Cột **Quyền RBAC/ACL**: kiểm tra bên trong handler qua các hàm của `ClientSession` (mục 9):
   - `can(p, READ)` = RBAC `file:list` **và** (`file:manage` hoặc ACL `READ` trên `p`);
   - `can(p, DOWNLOAD)` = `file:download` và (`file:manage` hoặc ACL `DOWNLOAD`);
-  - `can(p, WRITE)` = `file:upload` và (`file:manage` hoặc ACL `WRITE`);
+  - `can(p, WRITE)` = `file:upload` và (`file:manage` hoặc ACL `WRITE`); riêng nhân viên có thư mục cá nhân (9.3) bị từ chối `WRITE` trên chính `/` và `/home` (không tạo/đổi tên mục mới trực tiếp ở đó);
   - `canDo("file:rename", p, WRITE)` = `file:rename` và (`file:manage` hoặc ACL `WRITE`);
   - `canDelete(p)` = (`file:delete` và (`file:manage` hoặc ACL `WRITE`)) **hoặc** (chủ sở hữu và có `file:upload`);
   - `canShare(p)` = `file:share` và (`file:manage` hoặc là chủ sở hữu).
@@ -532,7 +535,7 @@ Lưu ý: `NOOP` và `SYST` **cần đăng nhập** (gửi trước `PASS` nhận
 | Lệnh | Cú pháp | Chức năng | Đăng nhập | Ghi | Quyền RBAC/ACL | Mã trả lời | RFC |
 |---|---|---|---|---|---|---|---|
 | `USER` | `USER <tên>` | Ghi nhận tên đăng nhập, chuyển `WAIT_PASS` | không | không | — | `331` (không tiết lộ user có tồn tại hay không); thiếu tham số `501` | 959 |
-| `PASS` | `PASS <mật khẩu>` | Xác thực PBKDF2 qua `UserManager`; thành công thì nạp quyền RBAC, nhốt user trong `home` (tự tạo nếu chưa có), về `AUTHENTICATED` | không | không | — | `230 User logged in, proceed (roles: …)`; không đi ngay sau `USER` `503`; sai mật khẩu `530` (về `CONNECTED`); sai lần thứ 3 trong phiên `421` rồi đóng kết nối; thư mục home không dùng được `530 Home directory unavailable` | 959 |
+| `PASS` | `PASS <mật khẩu>` | Xác thực PBKDF2 qua `UserManager`; thành công thì nạp quyền RBAC, nhốt user trong `home` (tự tạo nếu chưa có); nhân viên có home `/`, có `file:upload` và không có `file:manage` được tạo thêm thư mục cá nhân `/home/<user>` (ghi chủ sở hữu) và bắt đầu phiên ở đó (`PWD` = `/home/<user>`); về `AUTHENTICATED` | không | không | — | `230 User logged in, proceed (roles: …)`; không đi ngay sau `USER` `503`; sai mật khẩu `530` (về `CONNECTED`); sai lần thứ 3 trong phiên `421` rồi đóng kết nối; thư mục home không dùng được `530 Home directory unavailable` | 959 |
 
 Mật khẩu không bao giờ ghi log (`dispatch` in `****` thay cho tham số của `PASS`).
 
@@ -560,11 +563,11 @@ Không đủ quyền `READ` thì `CWD`/`SIZE`/`MDTM`/`RETR` trả cùng thông b
 | `TYPE` | `TYPE A` \| `TYPE I` | Ghi nhận kiểu truyền ASCII/nhị phân (mặc định của phiên là nhị phân). **Ghi chú:** giá trị chỉ lưu vào field `type`, code truyền tệp không đọc lại nên dữ liệu luôn được gửi nguyên byte, không đổi xuống dòng | có | không | — | `200 Type set to …`; kiểu khác (kể cả `A N`, `E`, `L`) `504` | 959 |
 | `PASV` | `PASV` | Đóng kênh dữ liệu cũ (nếu có), mở `ServerSocket` trên cổng rảnh đầu tiên trong dải `data.port.min..max`; chuyển `DATA_READY` | có | không | — | `227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)` với địa chỉ `pasv.address` (hoặc IP cục bộ của kênh điều khiển), cổng = `p1*256+p2`; không mở được cổng `425` | 959 |
 | `PORT` | `PORT h1,h2,h3,h4,p1,p2` | Chế độ chủ động: ghi nhớ địa chỉ client, server sẽ `connect()` khi truyền; chuyển `DATA_READY` | có | không | — | `200`; thiếu/sai số trường, số ngoài 0..255 `501`; IP khác IP của kênh điều khiển `501` (chống FTP bounce) | 959 |
-| `LIST` | `LIST` | Gửi danh sách thư mục **hiện tại** dạng `ls -l` (có tên chủ sở hữu); chỉ gồm các mục user có quyền `READ`. Tham số (nếu có) bị bỏ qua | có | không | `can(thư mục hiện tại, READ)`, lọc từng mục bằng `can(mục, READ)` | `150` rồi `226`; chưa `PASV`/`PORT` `425`; không đủ quyền `550`; lỗi kênh dữ liệu `426` | 959 |
-| `NLST` | `NLST` | Như `LIST` nhưng mỗi dòng chỉ một tên | có | không | như `LIST` | như `LIST` | 959 |
+| `LIST` | `LIST [thư mục]` | Gửi danh sách thư mục hiện tại, hoặc thư mục trong tham số, dạng `ls -l` (có tên chủ sở hữu); chỉ gồm các mục user có quyền `READ`. Cờ kiểu `ls` (ví dụ `-la`) bị bỏ qua | có | không | `can(thư mục cần liệt kê, READ)` (như `CWD`), lọc từng mục bằng `can(mục, READ)` | `150` rồi `226`; chưa `PASV`/`PORT` `425`; không đủ quyền `550`; lỗi kênh dữ liệu `426` | 959 |
+| `NLST` | `NLST [thư mục]` | Như `LIST` nhưng mỗi dòng chỉ một tên | có | không | như `LIST` | như `LIST` | 959 |
 | `RETR` | `RETR <tệp>` | Gửi nội dung tệp qua kênh dữ liệu (đệm 8192 byte), bắt đầu từ offset `REST` nếu có | có | không | `can(tệp, READ)` và `can(tệp, DOWNLOAD)`; tệp không bị chặn bởi `ScanService.blockReason` | `150` rồi `226`; thiếu tham số `501`; không tồn tại/không có `READ` `550 File not found`; không có `DOWNLOAD` `550 Permission denied`; tệp bị chặn `550 File unavailable: <lý do>`; offset `REST` lớn hơn kích thước `550`; chưa `PASV`/`PORT` `425`; lỗi kênh dữ liệu `426` | 959, 3659 |
-| `STOR` | `STOR <tệp>` | Nhận tệp; tải mới thì ghi vào vùng tạm, quét `prescan` rồi `commit` nguyên tử (8.6); `REST n` + `STOR` ghi tiếp trực tiếp từ offset `n`. Người tải tệp mới lên là chủ sở hữu | có | **có** | `can(tệp, WRITE)` nếu ghi đè, `can(thư mục cha, WRITE)` nếu tệp mới | `150` rồi `226`; thiếu tham số `501`; tên vượt ra ngoài home `553`; không đủ quyền, thư mục cha không tồn tại, đích là thư mục, offset `REST` sai `550`; phát hiện mã độc `550 WARNING: malware detected (…)`; chưa `PASV`/`PORT` `425`; lỗi kênh dữ liệu `426`; không lưu được `451` | 959 |
-| `APPE` | `APPE <tệp>` | Như `STOR` nhưng nối vào cuối tệp và ghi trực tiếp (không qua vùng tạm, quét **sau** khi ghi; tệp nhiễm bị xóa) | có | **có** | như `STOR` | như `STOR` | 959 |
+| `STOR` | `STOR <tệp>` | Nhận tệp; tải mới thì ghi vào vùng tạm, quét `prescan` rồi `commit` nguyên tử (8.6); `REST n` + `STOR` ghi tiếp trực tiếp từ offset `n`. Người tải tệp mới lên là chủ sở hữu | có | **có** | `can(tệp, WRITE)` nếu ghi đè, `can(thư mục cha, WRITE)` nếu tệp mới | `150` rồi `226`; thiếu tham số `501`; tên vượt ra ngoài home `553`; không đủ quyền, thư mục cha không tồn tại, đích là thư mục, offset `REST` sai `550`; phát hiện mã độc `550 WARNING: malware detected (…)`; vượt `scan.max_bytes` (khi `scan.enforce=true`) `552 File exceeds maximum upload size`, dữ liệu đã nhận bị bỏ; chưa `PASV`/`PORT` `425`; lỗi kênh dữ liệu `426`; không lưu được `451` | 959 |
+| `APPE` | `APPE <tệp>` | Như `STOR` nhưng nối vào cuối tệp và ghi trực tiếp (không qua vùng tạm, quét **sau** khi ghi; tệp nhiễm bị chuyển vào vùng cách ly, không cách ly được thì xóa) | có | **có** | như `STOR` | như `STOR` | 959 |
 | `REST` | `REST <offset>` | Đặt vị trí bắt đầu (byte) cho đúng **một** lệnh `RETR`/`STOR`/`APPE` kế tiếp | có | không | — | `350 Restarting at <n>. Send STOR or RETR to initiate transfer`; không phải số hoặc âm `501` | 3659 |
 
 Thứ tự kiểm tra trong `RETR` và `STOR`: tham số → đường dẫn và quyền → trạng thái `DATA_READY` (`425`) → offset `REST`. Vì vậy một user không đủ quyền nhận `550` ngay cả khi chưa gửi `PASV`. Riêng `LIST`/`NLST` kiểm tra `DATA_READY` trước quyền. Sau mỗi lệnh truyền (thành công hay lỗi) kênh dữ liệu bị đóng và phiên về `AUTHENTICATED`, nên lệnh truyền tiếp theo phải gửi lại `PASV`/`PORT`.
@@ -815,6 +818,7 @@ Client ──STOR──▶ resolve path, kiểm tra quyền ghi, đã PASV/PORT 
    │  byte tệp
    ▼
 FileStore.beginUpload(...)   ← bản ghi TẠM theo sessionId (chưa vào kho)
+   │  vượt scan.max_bytes (khi enforce) ──▶ ngừng đọc, up.abort() ──▶ 552, audit UPLOAD thất bại
    │  đóng kênh dữ liệu
    ├─ lỗi giữa chừng ──▶ up.abort() ──▶ 426 Transfer aborted
    └─ xong ──▶ ScanService.prescan(up.reopen())  (gửi cho clamd INSTREAM)
@@ -824,11 +828,11 @@ FileStore.beginUpload(...)   ← bản ghi TẠM theo sessionId (chưa vào kho)
                                          ghi bảng files, ghi chủ sở hữu, audit ──▶ 226
 ```
 
-Nhờ cơ chế tạm + commit: hai client cùng `STOR` một tên không làm hỏng tệp; tệp nhiễm không bao giờ nằm trong kho. Ngoại lệ: `APPE`/`REST` ghi trực tiếp và được quét **sau** khi ghi (tệp nhiễm bị xóa).
+Nhờ cơ chế tạm + commit: hai client cùng `STOR` một tên không làm hỏng tệp; tệp nhiễm không bao giờ nằm trong kho. Ngoại lệ: `APPE`/`REST` ghi trực tiếp và được quét **sau** khi ghi; tệp nhiễm phát hiện sau commit (kể cả bởi quét nền hay quét lại định kỳ, mục 10) được **chuyển vào vùng cách ly** (bucket `<bucket>-quarantine` với S3, `quarantine.dir` với kho local), đặt `QUARANTINED` + `quarantine_path`, ghi audit `MALWARE`; không cách ly được thì xóa (hoặc giữ `INFECTED` để `RETR` chặn).
 
 ### 8.7 Chống thoát thư mục (path traversal)
 
-`PathResolver` tính `rootDir.toRealPath()` **một lần** lúc khởi động, mỗi lệnh có đường dẫn đều qua `resolve(currentDir, arg)`: `normalize()` rồi kiểm tra `startsWith(rootDir)`, vi phạm → `SecurityException` → `550`. Mỗi user bị nhốt trong `home` riêng (ví dụ `sv` ở `/sv`); `PWD` trả đường dẫn ảo để không lộ đường dẫn thật của OS. Có test riêng `PathResolverTest`.
+`PathResolver` tính `rootDir.toRealPath()` **một lần** lúc khởi động, mỗi lệnh có đường dẫn đều qua `resolve(currentDir, arg)`: `normalize()` rồi kiểm tra `startsWith(rootDir)`, vi phạm → `SecurityException` → `550`. Mỗi user bị nhốt trong `home` riêng (ví dụ `sv` ở `/sv`); nhân viên có home `/` vẫn bị nhốt ở `/` (để chia sẻ chéo hoạt động) nhưng bắt đầu ở `/home/<user>` (mục 9.3), `CWD ..` từ đó cũng không ra ngoài `/`. `PWD` trả đường dẫn ảo để không lộ đường dẫn thật của OS. Có test riêng `PathResolverTest`.
 
 ### 8.8 Cấu hình `ftpserver.conf`
 
@@ -844,6 +848,10 @@ Nhờ cơ chế tạm + commit: hai client cùng `STOR` một tên không làm h
 | `tls.keystore`, `tls.keystore.password`, `tls.required` | tắt | FTPS; `tls.required=true` bắt buộc mã hóa |
 | `scan.clamd` / `scan.command` | tắt | Quét qua clamd (TCP) hoặc lệnh ngoài |
 | `scan.enforce` | false | Chặn tải tệp chưa quét xong (`PENDING`) |
+| `scan.max_bytes` | 524288000 (500 MiB) | Kích thước tối đa một lần `STOR`/`APPE`, chỉ áp dụng khi `scan.enforce=true`; `0` = không giới hạn; vượt thì `552` (env `FTP_SCAN_MAX_BYTES`) |
+| `scan.rescan_days` | 7 | Quét lại định kỳ tệp `PENDING` và tệp `CLEAN` quét lần cuối quá N ngày; `0` = tắt (env `FTP_SCAN_RESCAN_DAYS`) |
+| `s3.quarantine.bucket` | `<s3.bucket>-quarantine` | Bucket cách ly tệp nhiễm khi dùng S3 (env `FTP_S3_QUARANTINE_BUCKET`, phải trùng với admin-web) |
+| `quarantine.dir` | (không đặt) | Thư mục cách ly khi dùng kho local (env `FTP_QUARANTINE`); không đặt thì tệp nhiễm bị xóa |
 | `audit.log` | `logs/audit.log` | Đường dẫn nhật ký |
 
 Ngoài ra ghi đè bằng env: `FTP_STORAGE`, `FTP_S3_ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET/REGION/PREFIX`, `FTP_DB_URL/USER/PASSWORD`, `FTP_TLS_KEYSTORE(_PASSWORD)`, `FTP_CLAMD`, `FTP_SCAN_COMMAND`, `FTP_SCAN_ENFORCE`, `FTP_SEED_PASSWORD`...
@@ -1050,13 +1058,13 @@ sequenceDiagram
 |---|---|---|
 | Đường truyền | FTPS explicit (AUTH TLS, PBSZ 0, PROT P), có thể bắt buộc (`tls.required`) | `tls/TlsSupport`, `AuthCommandHandler`, `PbszCommandHandler`, `ProtCommandHandler` |
 | Xác thực | Mật khẩu băm PBKDF2-HMAC-SHA256 + muối, so sánh an toàn | `auth/PasswordHasher`, `UserManager` |
-| Mật khẩu mặc định | `FTP_SEED_PASSWORD` tự đổi mật khẩu các tài khoản mẫu; không đặt thì in `CANH BAO` | `auth/SeedAccounts` |
+| Mật khẩu mặc định | `FTP_SEED_PASSWORD` tự đổi mật khẩu các tài khoản mẫu (`admin`, `fm`, `auditor`, `sv`) lúc khởi động; không đặt thì in `CANH BAO`. Trên Azure lấy từ `vault_ftp_seed_password` (Ansible Vault) | `auth/SeedAccounts` |
 | Phân quyền vai trò | RBAC: vai trò + quyền + **scope thư mục** | `rbac/RbacService` |
 | Phân quyền tệp | ACL từng tệp/thư mục: `READ` < `DOWNLOAD` < `WRITE` | `acl/AclService`, `Perm` |
-| Cách ly đường dẫn | `PathResolver`, nhốt user trong `home` | `fs/PathResolver` |
+| Cách ly đường dẫn | `PathResolver`, nhốt user trong `home`; nhân viên có thư mục cá nhân `/home/<user>`, không tạo mục mới trực tiếp ở `/`, `/home` | `fs/PathResolver`, `ClientSession`, `PassCommandHandler` |
 | Kiểm toán | Audit file + bảng DB, ghi cả lần bị từ chối, kèm IP nguồn | `audit/AuditLog` |
 | Truy cập khẩn cấp | Break-glass có thời hạn, có lý do, không tự cấp | `SiteCommandHandler`, bảng `breakglass_grants` |
-| Mã độc | Quét clamd trước khi commit, chặn tải tệp nhiễm | `scan/` |
+| Mã độc | Quét clamd trước khi commit, chặn tệp nén/tài liệu có mật khẩu, cách ly tệp nhiễm phát hiện sau, quét lại định kỳ, giới hạn kích thước tải lên | `scan/`, `StorCommandHandler`, `clamd.conf.j2` |
 | Tách quyền | `system_admin` và `security_auditor` **không đọc nội dung tệp** | migration `V005`, `V007` |
 
 ### 9.2 RBAC — 4 vai trò, 13 quyền
@@ -1086,6 +1094,10 @@ Tính **tách biệt nhiệm vụ** (separation of duties, migration `V007`): ng
 | `WRITE` | Thêm: ghi đè/nối (`STOR`/`APPE`), đổi tên, tạo tệp trong thư mục |
 
 - Quyền cấp cho thư mục áp dụng cho mọi thứ bên trong. Chia sẻ chỉ có tác dụng giữa các user có thể "thấy nhau" (cùng thư mục `home` chung, ví dụ `/shared`).
+- Người được cấp quyền trên một mục nằm sâu bên trong thư mục của người khác được **`READ` trên các thư mục cha** của mục đó (`AclService.hasGrantBelow`), để `CWD`/`LIST` duyệt được tới tệp được chia sẻ; danh sách vẫn lọc theo từng mục nên không thấy các tệp khác trong thư mục đó.
+- Mục **chưa có chủ sở hữu** vẫn là khu dùng chung như thiết kế ban đầu (ai có `file:upload` đều ghi được).
+
+**Thư mục cá nhân.** Nhân viên có home `/`, có `file:upload`, không có `file:manage` và không phải tài khoản chỉ đọc được tự tạo `/home/<user>` (ghi là chủ sở hữu) lúc đăng nhập và bắt đầu phiên ở đó (`PWD` = `/home/<user>`). Gốc nhốt (chroot) vẫn là `/` chứ không phải `/home/<user>`, vì nhốt chặt sẽ làm hỏng chia sẻ chéo giữa các user. Thay vào đó, `WRITE` trên chính `/` và `/home` bị từ chối với nhóm user này (`ClientSession.isSharedTopLevel`): tạo tệp/thư mục mới hay đổi tên vào hai nơi này nhận `550`; thư mục cá nhân của người khác là tệp có chủ nên mặc định riêng tư (không liệt kê được, `CWD` nhận `550`). Dữ liệu cũ được chuyển bằng `ftp/admin-web/scripts/migrate_personal_homes.py` (mặc định chạy thử, `--apply` mới thực hiện; chạy trong container `ftpadmin`): tệp nhân viên đang nằm ở gốc được dời vào `/home/<chủ sở hữu>`. Script đã chạy `--apply` trên môi trường Azure.
 
 ### 9.4 Quyền xóa (mô hình hai điều kiện)
 
@@ -1131,6 +1143,14 @@ Server: keystore PKCS12 sinh bằng `scripts/gen-keystore.sh <host>` (tự ký �
 
 `clamscan` (không daemon) nạp lại CSDL mỗi lần (~7 giây/tệp); `clamdscan` với daemon nhanh (~0,3 giây/tệp). Test `realClamscanDetectsEicar` chạy thật với tệp EICAR khi máy có `clamscan`.
 
+**Cấu hình clamd trên Azure** (`ansible/roles/storage/templates/clamd.conf.j2`): `AlertEncrypted yes` (biến Ansible `clamd_alert_encrypted`, mặc định `true`) — tệp zip/rar/7z/PDF/Office **có mật khẩu** không quét được bên trong nên bị báo `Heuristics.Encrypted.*` và bị từ chối như tệp nhiễm (tránh mã độc lọt qua dưới dạng "sạch"); zip thường vẫn tải lên được. Healthcheck của container clamd gửi `PING` tới `127.0.0.1:3310` (script có sẵn của image dùng `localhost`, phân giải ra `::1` nên luôn báo unhealthy).
+
+**Giới hạn kích thước.** Khi `scan.enforce=true`, mỗi lần `STOR`/`APPE` tối đa `scan.max_bytes` (mặc định 524288000 = 500 MiB, `0` = không giới hạn, env `FTP_SCAN_MAX_BYTES`); vượt thì server ngừng nhận, bỏ dữ liệu đã nhận và trả `552`.
+
+**Cách ly tự động.** Prescan vẫn từ chối tệp nhiễm đã biết **trước** khi lưu (`550 WARNING: malware detected`). Tệp chỉ bị phát hiện nhiễm **sau** khi đã vào kho (quét sau `APPE`/`REST`, quét nền khi prescan không chạy được, quét lại định kỳ) được chuyển sang bucket `ftp-files-quarantine` (`s3.quarantine.bucket` / `FTP_S3_QUARANTINE_BUCKET`, mặc định `<bucket>-quarantine`; kho local dùng `quarantine.dir` / `FTP_QUARANTINE`), đặt `QUARANTINED` + `quarantine_path` và ghi audit `MALWARE`. Admin khôi phục hoặc xóa hẳn từ trang `/files`.
+
+**Quét lại định kỳ** (`scan.rescan_days` / `FTP_SCAN_RESCAN_DAYS`, mặc định 7, `0` = tắt): 10 phút sau khi server khởi động rồi cứ 24 giờ một lần, server quét lại các tệp `PENDING` và tệp `CLEAN` quét lần cuối đã quá N ngày (bắt mã độc zero-day sau khi CSDL chữ ký cập nhật), tối đa 2000 tệp mỗi lượt; tệp nhiễm bị cách ly như trên. Trên Azure đã thấy log `Rescan: 2 file(s)`.
+
 ### 10.2 Trạng thái tệp (cột `files.status`)
 
 | Giá trị | Hiển thị trên web | Hành vi tải về |
@@ -1138,11 +1158,11 @@ Server: keystore PKCS12 sinh bằng `scripts/gen-keystore.sh <host>` (tự ký �
 | `PENDING` | Chờ quét | Bị chặn nếu `scan.enforce=true` |
 | `CLEAN` | Sạch | Cho phép |
 | `INFECTED` | Nhiễm mã độc | **Luôn chặn** |
-| `QUARANTINED` | Đã cách ly | **Luôn chặn** |
+| `QUARANTINED` | Đã cách ly (tệp nằm ở bucket/thư mục cách ly, đường dẫn trong `quarantine_path`) | **Luôn chặn** |
 
 ### 10.3 Khi clamd lỗi
 
-Tệp vẫn được commit nhưng ở `PENDING` và bị chặn tải (khi `enforce`), chờ quét lại — ưu tiên **an toàn** hơn **sẵn sàng**. Trang web có nút **Quét** để quét lại và **Cách ly** để chuyển tệp sang bucket `<bucket>-quarantine`. Dashboard cảnh báo các upload mã độc trong 24 giờ và báo nếu CSDL virus của clamd cũ hơn 3 ngày.
+Tệp vẫn được commit nhưng ở `PENDING` và bị chặn tải (khi `enforce`), chờ quét lại (tự động trong lượt quét lại định kỳ kế tiếp) — ưu tiên **an toàn** hơn **sẵn sàng**. Trang web có nút **Quét** để quét lại và **Cách ly** để chuyển tệp sang bucket `<bucket>-quarantine`. Dashboard cảnh báo các upload mã độc trong 24 giờ và báo nếu CSDL virus của clamd cũ hơn 3 ngày.
 
 ---
 
@@ -1319,7 +1339,7 @@ Tổng cộng 21 route. Template Jinja2: `base`, `login`, `dashboard`, `users`, 
 
 ### 13.3 `storage.py`
 
-Lớp trừu tượng kho dùng cho web: `from_env(root, quarantine)` chọn backend đĩa hoặc S3 (boto3), băm SHA-256 theo luồng, bọc lỗi S3 thành thông báo rõ. Tệp cách ly chuyển sang bucket `<bucket>-quarantine`.
+Lớp trừu tượng kho dùng cho web: `from_env(root, quarantine)` chọn backend đĩa hoặc S3 (boto3), băm SHA-256 theo luồng, bọc lỗi S3 thành thông báo rõ. Tệp cách ly chuyển sang bucket `<bucket>-quarantine` (trên Azure là `ftp-files-quarantine`) — cùng bucket mà FTP server dùng khi tự cách ly tệp nhiễm (mục 10), nên admin khôi phục/xóa hẳn được cả hai loại.
 
 ### 13.4 Kiểm thử
 
@@ -1334,7 +1354,7 @@ Lớp trừu tượng kho dùng cho web: `from_env(root, quarantine)` chọn bac
 | Thành phần | Cấu hình | Vai trò |
 |---|---|---|
 | **VM-A** `Standard_B2ats_v2` (1 GB) | `10.20.1.10` + public IP tĩnh, Ubuntu 24.04, OS disk P6 64 GB + data disk 64 GB, swap 2 GB | Chạy **ftpserver** (`-Xmx192m`) và **admin-web** |
-| **VM-B** `Standard_B2als_v2` (4 GB) | `10.20.1.11`, chỉ trong VNet, OS 30 GB + data disk 64 GB StandardSSD, swap 4 GB | Chạy **SeaweedFS** (S3 :8333) và **clamd** (:3310) |
+| **VM-B** `Standard_B2als_v2` (4 GB) | `10.20.1.11`, chỉ trong VNet, OS 30 GB + data disk 64 GB StandardSSD, swap 4 GB, managed identity (system-assigned) | Chạy **SeaweedFS** (S3 :8333) và **clamd** (:3310); tự chụp snapshot đĩa dữ liệu hằng đêm |
 | **PostgreSQL Flexible Server** B1ms | 32 GB, PG 16, bắt buộc TLS | Tài khoản, ACL, audit, bảng `files` |
 | **VNet** `10.20.0.0/16` | subnet `10.20.1.0/24` | Mạng riêng giữa hai VM |
 
@@ -1355,7 +1375,8 @@ clamd **không có xác thực** nên tuyệt đối không mở ra ngoài. Clou
 | Tệp | Tài nguyên |
 |---|---|
 | `main.tf` | Resource group, VNet, subnet, public IP, NSG + liên kết, NIC, VM-A, data disk + attachment, lịch auto-shutdown 23:00, `local_file.ansible_inventory` (sinh `ansible/inventory/hosts.ini`) |
-| `storage.tf` | VM-B: public IP (tùy chọn, chỉ để ra internet kéo image/CSDL virus), NSG, NIC, VM, đĩa, auto-shutdown |
+| `storage.tf` | VM-B: public IP (tùy chọn, chỉ để ra internet kéo image/CSDL virus), NSG, NIC, VM (có system-assigned managed identity), đĩa, auto-shutdown |
+| `backup.tf` | Resource group `rg-<prefix>-backup` chứa snapshot; gán cho identity của VM-B vai trò **Disk Backup Reader** (trên data disk) và **Disk Snapshot Contributor** (trên RG backup) |
 | `db.tf` | `random_string` hậu tố tên, `random_password`, PostgreSQL Flexible Server, database `ftpserver`, hai firewall rule |
 | `variables.tf`, `outputs.tf`, `versions.tf` | Biến (prefix, location, kích thước VM/đĩa, CIDR cho phép, tags, giờ tắt...), đầu ra, khóa phiên bản provider |
 
@@ -1364,10 +1385,10 @@ clamd **không có xác thực** nên tuyệt đối không mở ra ngoài. Clou
 `site.yml` gồm 3 play:
 
 1. **Cả hai VM**: role `base` (swap, định dạng và mount data disk) + role `docker` (Docker Engine, compose).
-2. **VM-B** (`storage`): role `storage` dựng SeaweedFS + clamd bằng Docker Compose (`mem_limit`, `GOMEMLIMIT`), chờ cổng 8333/3310 (tối đa 15 phút vì lần đầu clamd tải CSDL virus).
+2. **VM-B** (`storage`): role `storage` dựng SeaweedFS + clamd bằng Docker Compose (`mem_limit`, `GOMEMLIMIT`; SeaweedFS có `init: true` + `stop_grace_period: 30s` để dừng sạch; clamd dùng `clamd.conf.j2` với `AlertEncrypted`, healthcheck `PING` tới `127.0.0.1:3310`), chờ cổng 8333/3310 (tối đa 15 phút vì lần đầu clamd tải CSDL virus); cài `/srv/ftp/disk-snapshot.sh` (template `disk-snapshot.sh.j2`) và cron chụp snapshot (mục 14.6).
 3. **VM-A** (`app`): role `ftpserver` sinh `ftpserver.conf`, `.env` (quyền 0600), kéo image `ghcr.io/…/{ftpserver,ftpadmin}:<app_version>` do CI đã build (VM không build gì), `compose up`, dọn image cũ quá 7 ngày, chờ cổng 2121. Đổi `ftpserver.conf` tự khởi động lại service; mở quyền duyệt thư mục `certs` để container đọc keystore; bật FTPS bắt buộc trên Azure.
 
-Bí mật nằm trong `group_vars/ftpserver/vault.yml` (mã hóa bằng Ansible Vault; mẫu: `vault.yml.example`) gồm `vault_ftp_s3_access_key/secret_key`, `vault_ftp_seed_password`, mật khẩu keystore.
+Bí mật nằm trong `group_vars/ftpserver/vault.yml` (**mã hóa** bằng Ansible Vault; mẫu: `vault.yml.example`) gồm `vault_ftp_s3_access_key/secret_key`, `vault_ftp_seed_password` (đã đặt: mật khẩu mặc định của `admin`/`fm`/`auditor`/`sv` bị thay lúc server khởi động), mật khẩu keystore, `vault_ghcr_username`/`vault_ghcr_token` (PAT quyền `read:packages` để VM `docker login ghcr.io` kéo image private). Mật khẩu vault nằm ở `~/.ansible-vault-pass` **ngoài repo**, `ansible.cfg` trỏ tới bằng `vault_password_file` nên không cần `--ask-vault-pass`.
 
 ### 14.5 Luồng triển khai
 
@@ -1378,8 +1399,8 @@ terraform init && terraform apply
 cd ../ansible && export ANSIBLE_CONFIG=$PWD/ansible.cfg
 ansible-galaxy collection install -r requirements.yml
 cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml
-ansible-vault encrypt group_vars/ftpserver/vault.yml
-ansible-playbook site.yml --ask-vault-pass -e app_version=sha-1a2b3c4   # tag image CI đã đẩy; bỏ -e = latest
+ansible-vault encrypt group_vars/ftpserver/vault.yml            # dùng ~/.ansible-vault-pass (chmod 600)
+ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook site.yml -e app_version=sha-89ca994   # tag image CI đã đẩy (sha-<7 ký tự>); bỏ -e = latest
 ```
 
 ### 14.6 Vận hành
@@ -1387,9 +1408,10 @@ ansible-playbook site.yml --ask-vault-pass -e app_version=sha-1a2b3c4   # tag im
 | Việc | Cách làm |
 |---|---|
 | Bật/tắt | Auto-shutdown 23:00 chỉ **tắt**, không tự bật. Bật **VM-B trước**, rồi VM-A (`az vm start`) |
-| Sao lưu | Azure Backup (`terraform/backup.tf`): snapshot incremental data disk VM-B hằng ngày 23:30 (sau giờ tự tắt VM → nhất quán), giữ 7 ngày, vault + snapshot ở RG riêng `rg-<prefix>-backup`. `scripts/backup-seaweedfs.sh` để chụp thủ công |
+| Sao lưu | Gói Azure for Students **không tạo được Backup vault** (lỗi `406 NotAcceptable`, vùng khác bị policy chặn) nên tự làm: cron trên VM-B lúc 15:45 UTC (22:45 giờ VN, trước giờ tự tắt 23:00) chạy `/srv/ftp/disk-snapshot.sh` — dừng SeaweedFS, lấy token từ IMDS bằng managed identity, gọi Azure REST tạo snapshot **incremental** data disk vào `rg-<prefix>-backup`, khởi động lại SeaweedFS (gián đoạn khoảng 10 giây), giữ `backup_retention_days` (mặc định 7) bản gắn tag `created-by=disk-snapshot`. Log ở `/var/log/disk-snapshot.log`. `scripts/backup-seaweedfs.sh` vẫn dùng để chụp thủ công |
+| Khôi phục | `az disk create --source <snapshot-id> ...` tạo đĩa mới từ snapshot rồi gắn vào VM-B ở LUN 0 thay đĩa dữ liệu cũ |
 | Đổi IP nhà | Sửa `ssh_allowed_cidr`/`admin_web_allowed_cidr` rồi `terraform apply` |
-| Cập nhật ứng dụng | Push `main` → CI đẩy image `sha-<commit>` → `ansible-playbook site.yml -e app_version=sha-<commit>` |
+| Cập nhật ứng dụng | Push `main` → CI đẩy `ghcr.io/toannd135/btl_ltm/{ftpserver,ftpadmin}:sha-<7 ký tự>` → `ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook site.yml -e app_version=sha-<7 ký tự>` (VM chỉ kéo image, không build). Bản đang chạy: `sha-89ca994` |
 | Rollback | Chạy lại playbook với `app_version` cũ (danh sách tag ở GitHub → Packages) |
 | Xóa hạ tầng | `terraform destroy` xóa **cả dữ liệu** SeaweedFS lẫn PostgreSQL — sao lưu trước |
 
@@ -1406,7 +1428,7 @@ Pipeline `.github/workflows/ci.yml` (GitHub Actions) theo nguyên tắc *build o
 | Job | Việc |
 |---|---|
 | `server-test` | `mvn verify` build + test server, giữ `ftpserver.jar` đã test cho job `image` |
-| `infra-check` | `terraform fmt` + `validate`, `ansible --syntax-check` |
+| `infra-check` | `terraform fmt` + `validate`, `ansible --syntax-check` (tạo tệp `~/.ansible-vault-pass` giả vì `ansible.cfg` trỏ tới tệp mật khẩu vault) |
 | `admin-web-test` | Test trang quản trị trên SQLite **và** PostgreSQL |
 | `ui-package` | Ma trận hệ điều hành: build jar + gom dependency JavaFX theo OS, tính version, `jpackage` ra `.msi` / `.dmg` / `.deb`; ký MSI, notarize DMG (tùy chọn). Build đủ 3 OS ở mọi lần chạy |
 | `image` | Chỉ khi push `main`/tag và test đạt: build `ftpserver`, `ftpadmin` → đẩy GHCR với tag `sha-<commit>`, `latest` (main), `X.Y.Z` (tag) |
@@ -1424,8 +1446,8 @@ Ngoài ra có `.sonarcloud.properties` cho phân tích chất lượng mã.
 
 | Loại | Nội dung | Số lượng |
 |---|---|---|
-| Unit/Integration Java | `AclServiceTest`, `AuditLogDbTest`, `PasswordHasherTest`, `SeedAccountsTest`, `ConfigTest`, `DialectRoundTripTest` (Postgres Testcontainers), `MigrationAndAuthTest`, `FileStoreTest`, `PathResolverTest`, `RbacServiceTest`, `ClamdClientTest`, `ScanServiceTest` | 12 lớp, **60 test** (chạy thực tế, xem 16.3) |
-| Web | `ftp/admin-web/test_admin.py` | 73 kiểm tra (SQLite; CI thêm PostgreSQL) |
+| Unit/Integration Java | `AclServiceTest`, `AuditLogDbTest`, `PasswordHasherTest`, `SeedAccountsTest`, `ConfigTest`, `DialectRoundTripTest` (Postgres Testcontainers), `MigrationAndAuthTest`, `FileStoreTest`, `PathResolverTest`, `RbacServiceTest`, `ClamdClientTest`, `ScanServiceTest` | 12 lớp, **65 test** (chạy thực tế, xem 16.3) |
+| Web | `ftp/admin-web/test_admin.py` | 97/97 kiểm tra PASS (SQLite; CI thêm PostgreSQL) |
 | Kịch bản đầu cuối (server đang chạy) | `smoke_test.py` (chức năng cơ bản), `concurrency_test.py` (nhiều client), `pasv_leak_test.py` (rò rỉ cổng PASV), `ftps_test.py` (FTPS, cần keystore) | 4 script |
 | Hiệu năng | `bench_throughput.py` | xem dưới |
 
@@ -1450,29 +1472,42 @@ Nhận xét:
 - Cột "MB/s up/down" của script bị thổi phồng khi client không chạy chồng nhau; báo cáo dùng cột wall-clock.
 - Loopback chỉ phản ánh chi phí phần mềm. **Chưa đo** FTPS, S3/SeaweedFS, clamd, và đường truyền thật tới Azure.
 
-### 16.3 Kết quả chạy kiểm thử thực tế (ngày 2026-11-10)
+### 16.3 Kết quả chạy kiểm thử thực tế (cập nhật ngày 2026-11-11, bản `89ca994`)
 
 Các lệnh dưới đây được chạy trực tiếp trên máy phát triển khi viết báo cáo.
 
-**Kiểm thử Java (`mvn -o test` trong `ftp/`)**: **60 test, 0 lỗi, 0 thất bại, 1 bỏ qua; `BUILD SUCCESS`.**
+**Kiểm thử Java (`mvn test` trong `ftp/`)**: **65 test, 0 lỗi, 0 thất bại, 1 bỏ qua (test S3); `BUILD SUCCESS`.**
 
 | Lớp test | Số test | Phạm vi kiểm tra |
 |---|---|---|
-| `AclServiceTest` | 9 | Quyền READ/DOWNLOAD/WRITE, kế thừa từ thư mục, chủ sở hữu |
+| `AclServiceTest` | 10 | Quyền READ/DOWNLOAD/WRITE, kế thừa từ thư mục, chủ sở hữu, `READ` trên thư mục cha khi có quyền bên dưới |
 | `AuditLogDbTest` | 1 | Ghi audit vào CSDL |
 | `PasswordHasherTest` | 4 | Băm và xác minh PBKDF2 |
 | `SeedAccountsTest` | 3 | Đổi mật khẩu tài khoản mẫu |
-| `ConfigTest` | 3 | Đọc cấu hình, ghi đè bằng biến môi trường |
+| `ConfigTest` | 4 | Đọc cấu hình, ghi đè bằng biến môi trường, `scan.max_bytes` (mặc định, chỉ khi `enforce`, kiểm tra giá trị) |
 | `DialectRoundTripTest` | 5 | Cùng thao tác trên hai dialect SQL |
 | `MigrationAndAuthTest` | 6 | Chạy migration và xác thực |
 | `FileStoreTest` | 2 (1 bỏ qua) | Kho tệp |
 | `PathResolverTest` | 8 | Chặn thoát thư mục gốc |
 | `RbacServiceTest` | 8 | Vai trò, quyền, scope |
 | `ClamdClientTest` | 5 | Giao thức INSTREAM |
-| `ScanServiceTest` | 6 | Quét trước commit, chặn tải, trạng thái |
-| **Tổng** | **60** | |
+| `ScanServiceTest` | 9 | Quét trước commit, chặn tải, trạng thái, cách ly tệp nhiễm (sau upload, quét nền), quét lại định kỳ tệp `CLEAN` cũ |
+| **Tổng** | **65** | |
 
-**Kiểm thử trang quản trị (`test_admin.py`)**: **90 kiểm tra `PASS`, kết thúc `ALL ADMIN TESTS PASSED`** (chạy với SQLite; CI chạy thêm bản PostgreSQL). Các nhóm gồm đăng nhập/đăng xuất, quyền theo vai trò, quản lý người dùng, thao tác tệp, break-glass (cấp, thu hồi, biến mất khỏi danh sách), dashboard cảnh báo mã độc 24 giờ, thống kê dung lượng/lưu lượng/top người dùng/top IP lỗi theo khoảng 24h–7d–30d, tìm tệp và cột chủ sở hữu, đăng nhập lần cuối.
+**Kiểm thử trang quản trị (`test_admin.py`)**: **97/97 kiểm tra `PASS`, kết thúc `ALL ADMIN TESTS PASSED`** (chạy với SQLite; CI chạy thêm bản PostgreSQL). Các nhóm gồm đăng nhập/đăng xuất, quyền theo vai trò, quản lý người dùng, thao tác tệp, break-glass (cấp, thu hồi, biến mất khỏi danh sách), dashboard cảnh báo mã độc 24 giờ, thống kê dung lượng/lưu lượng/top người dùng/top IP lỗi theo khoảng 24h–7d–30d, tìm tệp và cột chủ sở hữu, đăng nhập lần cuối.
+
+**Kiểm thử đầu cuối trên Azure** (bản `sha-89ca994`, qua FTPS, dùng hai tài khoản nhân viên tạm rồi xóa):
+
+| Kịch bản | Kết quả |
+|---|---|
+| Đăng nhập nhân viên | Vào thẳng `/home/<user>` (`PWD`) |
+| Tạo tệp/thư mục ở `/`, `/home`, `/sv` | Bị từ chối `550` |
+| Liệt kê thư mục cá nhân của người khác | Không liệt kê được |
+| `RETR` tệp của người khác trước `SITE SHARE` | Bị từ chối; sau khi chia sẻ `DOWNLOAD` thì tải được, ghi đè vẫn bị từ chối |
+| Tải lên EICAR | Bị từ chối (`malware detected`) |
+| Tải lên zip có mật khẩu / zip thường | Zip có mật khẩu bị từ chối (`Heuristics.Encrypted`), zip thường được nhận |
+| `CWD ..` liên tiếp | Không thoát ra ngoài thư mục gốc |
+| Quét lại định kỳ | Log server có `Rescan: 2 file(s)` |
 
 **Chưa chạy trong lần này**: các script đầu cuối cần server đang chạy (`smoke_test.py`, `concurrency_test.py`, `pasv_leak_test.py`, `ftps_test.py`) và `bench_throughput.py`. Số liệu hiệu năng ở mục 16.2 là kết quả đo ngày 2026-11-06 trong tài liệu `docs/BAO-MAT-VA-HIEU-NANG.md`. Test GUI chưa có.
 
@@ -1553,7 +1588,7 @@ cd admin-web && python test_admin.py
 
 ## 18. Tài khoản dùng thử và kịch bản demo
 
-> Chỉ cho môi trường học tập/demo. Đặt `FTP_SEED_PASSWORD` (≥ 8 ký tự) hoặc đổi mật khẩu trên web trước khi triển khai thật.
+> Chỉ cho môi trường học tập/demo. Đặt `FTP_SEED_PASSWORD` (≥ 8 ký tự) hoặc đổi mật khẩu trên web trước khi triển khai thật. Trên Azure đã đặt `vault_ftp_seed_password` nên mật khẩu mặc định trong bảng dưới **không còn dùng được**; xem mật khẩu bằng `ansible-vault view group_vars/ftpserver/vault.yml`.
 
 | Tài khoản | Mật khẩu | Vai trò | Thư mục gốc | Dùng để thử |
 |---|---|---|---|---|
@@ -1569,6 +1604,7 @@ Kịch bản demo gợi ý:
 4. `admin` vào web: tạo tài khoản, gán vai trò, khóa/mở khóa, cấp break-glass.
 5. `auditor` chạy `SITE AUDIT 20` hoặc xem trang Nhật ký: thấy mọi thao tác kèm IP nguồn.
 6. Kết nối từ GUI tới server bật TLS → thấy "🔒 Mã hóa TLS", dấu vân tay chứng chỉ trong log.
+7. `admin` tạo một nhân viên mới với home `/` → nhân viên đăng nhập vào thẳng `/home/<user>`; thử tạo thư mục ở `/` → `550`; thử tải lên zip có mật khẩu → bị từ chối như mã độc.
 
 ---
 
@@ -1612,16 +1648,16 @@ Ký hiệu: **●** chủ trì (chịu trách nhiệm hoàn thành và giải th
 | 1 | Khung server, vòng đời phiên | `Main`, `Config`, `FtpServer`, `ClientSession`, `CommandRegistry`, `FtpReply`, `SessionState`, `Services` | ● | ○ | ○ | ○ |
 | 2 | Lệnh phiên | `USER`, `PASS`, `QUIT`, `NOOP`, `SYST`, `FEAT`, `OPTS`, `REIN`, `TYPE` | ● | | | ○ |
 | 3 | Kênh dữ liệu | `DataConnection`, `DataMode`, `TransferType`, `PASV`, `PORT` | ○ | ● | | |
-| 4 | Liệt kê, tải xuống, tải lên | `LIST`, `NLST`, `ListingFormatter`, `RETR`, `STOR`, `APPE`, `REST`, `SIZE`, `MDTM` (bản ghi tạm rồi commit) | | ● | ○ | ○ |
+| 4 | Liệt kê, tải xuống, tải lên | `LIST`, `NLST` (có tham số thư mục), `ListingFormatter`, `RETR`, `STOR`, `APPE`, `REST`, `SIZE`, `MDTM` (bản ghi tạm rồi commit, giới hạn `scan.max_bytes`) | | ● | ○ | ○ |
 | 5 | Kho tệp và đường dẫn an toàn | `FileStore`, `LocalFileStore`, `PathResolver` | | | ● | ○ |
 | 6 | Lệnh thư mục và tệp | `CWD`, `CDUP`, `PWD`, `MKD`, `RMD`, `DELE`, `RNFR`, `RNTO` | | | ● | ○ |
 | 7 | Kho đối tượng S3 | `S3FileStore`, cấu hình SeaweedFS, `docker-compose.yml` | | ○ | ● | |
 | 8 | CSDL và migration | `Database`, `Migrator`, `V001`–`V007` (SQLite + PostgreSQL) | ○ | | | ● |
 | 9 | Xác thực, tài khoản mẫu | `PasswordHasher`, `UserManager`, `SeedAccounts` | | | | ● |
 | 10 | Mã hóa FTPS phía server | `TlsSupport`, `AUTH`, `PBSZ`, `PROT`, `gen-keystore.sh` | ○ | | | ● |
-| 11 | Phân quyền | `RbacService`, `AclService`, `Perm`, `ClientSession.canDelete` | | | ○ | ● |
+| 11 | Phân quyền | `RbacService`, `AclService` (gồm `READ` thư mục cha khi có quyền bên dưới), `Perm`, `ClientSession.canDelete`, thư mục cá nhân `/home/<user>` (`PassCommandHandler`, `isSharedTopLevel`), `migrate_personal_homes.py` | | | ○ | ● |
 | 12 | Audit, break-glass, `SITE` | `AuditLog`, `SiteCommandHandler` (`SHARE`, `ACL`, `USERS`, `AUDIT`, `BREAKGLASS`) | | | | ● |
-| 13 | Quét mã độc phía server | `ScanService`, `ClamdClient`, chặn tải, quét sau `APPE`/`REST` | | ○ | | ● |
+| 13 | Quét mã độc phía server | `ScanService`, `ClamdClient`, chặn tải, quét sau `APPE`/`REST`, cách ly tự động, quét lại định kỳ, `clamd.conf.j2` (`AlertEncrypted`) | | ○ | | ● |
 | 14 | Client: kết nối, đăng nhập, log | `Launcher`, `Main`, `RemoteSession`, `FtpSession` (điều khiển), màn hình đăng nhập | ● | | ○ | |
 | 15 | Client: truyền dữ liệu | `FtpSession` (PASV, list, upload, download, REST), tiến độ, hủy, kéo-thả, `FileOpener` | | ● | ○ | |
 | 16 | Client: bảng và thao tác tệp | Hai bảng, sắp xếp, cột, tạo/đổi tên/xóa, `FileIcons`, `Formats`, `Icons`, `AppIcon`, `ErrorText`, `app.css` | | | ● | |
@@ -1631,11 +1667,11 @@ Ký hiệu: **●** chủ trì (chịu trách nhiệm hoàn thành và giải th
 | 20 | Hạ tầng Azure | `terraform/*.tf`, `ansible/` (roles `base`, `docker`, `storage`, `ftpserver`) | ● | | ○ | |
 | 21 | CI/CD | `.github/workflows/ci.yml`, SonarCloud | ● | ○ | | |
 | 22 | Đóng gói client | `jpackage`, `packaging/`, job `ui-package` | | | ● | ○ |
-| 23 | Sao lưu và vận hành | `scripts/backup-seaweedfs.sh`, hướng dẫn vận hành | ○ | | ● | |
+| 23 | Sao lưu và vận hành | `terraform/backup.tf` (managed identity + vai trò), cron `disk-snapshot.sh.j2`, `scripts/backup-seaweedfs.sh`, hướng dẫn vận hành | ○ | | ● | |
 | 24 | Kiểm thử Java | 12 lớp test trong `ftp/src/test` (mỗi người viết test cho phần mình) | ○ | ● | ○ | ○ |
 | 25 | Kiểm thử đầu cuối và hiệu năng | `smoke_test`, `concurrency_test`, `pasv_leak_test`, `ftps_test`, `bench_throughput`, `test_admin.py` | | ● | | ○ |
 | 26 | Tài liệu kỹ thuật | `README.md`, `LUONG-DU-LIEU.md`, `docs/*` | ○ | ○ | ● | ○ |
-| 27 | Viết và ráp báo cáo | `baocao.md` (chương phụ trách ở mục 20.4) | ○ | ○ | ● | ○ |
+| 27 | Viết và ráp báo cáo | `README.md` (chương phụ trách ở mục 20.4) | ○ | ○ | ● | ○ |
 
 ### 20.3 Khối lượng ước tính
 
@@ -1663,7 +1699,7 @@ Số dòng tính gần đúng theo mã nguồn hiện có; ngoài ra mỗi ngư�
 |---|---|---|---|---|---|
 | **1** | Khung server + client đăng nhập được (`USER/PASS/QUIT`); chốt interface; dựng Terraform nền | Đọc code mẫu, viết stub kênh dữ liệu | Stub `FileStore`, dựng khung GUI hai bảng | Dựng `Database` + migration, `PasswordHasher` | Chốt hợp đồng giữa các phần (20.6) |
 | **2** | Ansible roles, CI test | `PASV` + `LIST` + `RETR`/`STOR` | `LocalFileStore`, lệnh thư mục, bảng GUI | Xác thực thật từ CSDL, `RbacService` | Server chạy được luồng tải lên/xuống cơ bản |
-| **3** | Hoàn thiện triển khai Azure, `trivy`/`gitleaks` | `REST`/hủy truyền, admin web (tệp, quét), `S3FileStore` phối hợp C | Đổi tên, xóa, cột hiển thị, S3, jpackage | TLS + TOFU, ACL, `SITE SHARE`, audit, break-glass, quét clamd | Bảo mật và lưu trữ S3 chạy được |
+| **3** | Hoàn thiện triển khai Azure, Ansible Vault cho bí mật | `REST`/hủy truyền, admin web (tệp, quét), `S3FileStore` phối hợp C | Đổi tên, xóa, cột hiển thị, S3, jpackage | TLS + TOFU, ACL, `SITE SHARE`, audit, break-glass, quét clamd | Bảo mật và lưu trữ S3 chạy được |
 | **4** | Triển khai thử trên Azure, hướng dẫn cài đặt | Test đầu cuối, đo hiệu năng, sửa lỗi | Ráp báo cáo, ảnh minh họa, backup | Admin web (người dùng, vai trò, nhật ký), rà soát bảo mật | Chạy kịch bản demo chung, nộp báo cáo, chuẩn bị bảo vệ |
 
 ### 20.6 Hợp đồng giữa các thành viên
@@ -1703,25 +1739,27 @@ Ai cũng phải trả lời được sơ đồ tổng thể: một lệnh `STOR`
 | Hạn chế | Chi tiết |
 |---|---|
 | Thao tác thư mục trên S3 | Ghi đè/đổi tên **thư mục** không nguyên tử (copy + xóa từng object); lỗi giữa chừng có thể để cây dở |
-| `LIST`/`NLST` | Bỏ qua tham số đường dẫn, luôn liệt kê thư mục hiện tại |
-| Tệp rất lớn | `STOR` chờ quét xong mới trả lời; giới hạn quét clamd 500 MB; S3 tối đa 5 GB/tệp |
-| `APPE`/`REST` | Ghi trực tiếp, bỏ qua prescan (quét sau, xóa nếu nhiễm); với S3 ghi lại cả tệp |
+| Tệp rất lớn | `STOR` chờ quét xong mới trả lời; khi `scan.enforce=true` mỗi lần tải lên tối đa `scan.max_bytes` (mặc định 500 MiB, vượt thì `552`); S3 tối đa 5 GB/tệp |
+| `APPE`/`REST` | Ghi trực tiếp, bỏ qua prescan (quét sau, cách ly nếu nhiễm); với S3 ghi lại cả tệp |
 | Di trú dữ liệu | Tệp cũ trên đĩa VM-A **không tự chuyển** sang SeaweedFS khi đổi sang kho S3 |
 | Vai trò | Thay đổi có hiệu lực từ lần đăng nhập sau; `SITE AUDIT/SCAN/BREAKGLASS` chỉ dùng được với quyền scope `/` |
 | Trang quản trị | Chạy HTTP, bind `127.0.0.1`; cần HTTPS (qua proxy/tunnel) khi đưa ra ngoài |
-| Mật khẩu mẫu | Mật khẩu demo cũ vẫn còn trong lịch sử git; phải đặt `FTP_SEED_PASSWORD` |
+| Mật khẩu mẫu | Mật khẩu demo cũ vẫn còn trong lịch sử git; phải đặt `FTP_SEED_PASSWORD` (trên Azure đã đặt qua `vault_ftp_seed_password`) |
 | Kiểm thử | GUI chưa có test tự động; chưa đo FTPS/S3/clamd/Internet thật; chưa thử khôi phục từ snapshot |
 | Mô hình chi phí | Chưa kiểm chứng ưu đãi miễn phí trên subscription thật |
+| Lưu trữ | SeaweedFS chạy **một nút**, không nhân bản (replication); mất đĩa thì chỉ còn snapshot đêm trước |
+| Mã hóa nội bộ | Kết nối ứng dụng ↔ S3 (SeaweedFS) là HTTP thường bên trong VNet riêng; VM chưa bật `encryption_at_host` |
+| Sao lưu | Mỗi đêm SeaweedFS dừng khoảng 10 giây khi chụp snapshot; chỉ giữ 7 bản; thư mục cá nhân chưa có test tự động (mới kiểm đầu cuối trên Azure) |
 
 ### 21.2 Hướng phát triển
 
 - HTTPS cho trang quản trị (reverse proxy), SSO/2FA cho tài khoản quản trị.
-- `MLSD`/`MLST`, `EPSV`/`EPRT` (IPv6), hỗ trợ `LIST <path>`.
+- `MLSD`/`MLST`, `EPSV`/`EPRT` (IPv6).
 - Hạn mức dung lượng (quota) theo user, giới hạn tốc độ và số kết nối theo IP, khóa tạm khi đăng nhập sai liên tiếp.
-- Quét lại định kỳ toàn kho khi CSDL virus cập nhật; hàng đợi quét bất đồng bộ cho tệp rất lớn.
+- Kích hoạt quét lại ngay khi CSDL virus cập nhật (hiện quét lại theo chu kỳ 24 giờ); hàng đợi quét bất đồng bộ cho tệp rất lớn.
 - Test tự động cho GUI (TestFX), đo hiệu năng qua mạng thật và với FTPS/clamd.
 - Đồng bộ audit sang hệ thống tập trung (SIEM) và cảnh báo thời gian thực.
-- Sao lưu tự động có lịch và kiểm thử khôi phục.
+- Kiểm thử khôi phục từ snapshot định kỳ; nhân bản SeaweedFS nhiều nút; HTTPS giữa ứng dụng và S3; bật `encryption_at_host`.
 
 ---
 
@@ -1731,9 +1769,9 @@ Hệ thống hoàn thành ba ứng dụng gắn kết (FTP server tự cài đ�
 
 1. **Giao thức tự cài đặt hoàn chỉnh**: 31 handler, PASV/PORT, FTPS explicit, REST/APPE, đa luồng ổn định (200 client đồng thời, 0 lỗi, SHA-256 khớp).
 2. **Bảo mật nhiều lớp, kiểm tra trên server**: RBAC có scope + ACL từng tệp + chủ sở hữu, tách biệt nhiệm vụ (quản trị/kiểm toán không đọc được dữ liệu), break-glass có thời hạn, audit cả lần bị từ chối.
-3. **An toàn dữ liệu**: tệp được quét clamd **trước khi commit**, tệp nhiễm không bao giờ vào kho; lỗi máy quét thì chọn phương án an toàn (`PENDING` và chặn tải).
+3. **An toàn dữ liệu**: tệp được quét clamd **trước khi commit**, tệp nhiễm đã biết không bao giờ vào kho; tệp chỉ bị phát hiện sau (quét lại định kỳ) được tự động cách ly; tệp nén có mật khẩu bị từ chối; lỗi máy quét thì chọn phương án an toàn (`PENDING` và chặn tải); đĩa dữ liệu được snapshot hằng đêm.
 4. **Kiến trúc mở rộng**: `FileStore` (đĩa/S3) và hai dialect CSDL (SQLite/PostgreSQL) qua migration, nhờ vậy chạy được từ máy cá nhân tới Azure.
-5. **Hạ tầng như mã**: Terraform + Ansible dựng toàn bộ môi trường Azure có phân tách mạng; CI/CD kiểm tra test, CVE, bí mật, cấu hình hạ tầng và đóng gói bản cài đặt đa nền tảng.
+5. **Hạ tầng như mã**: Terraform + Ansible dựng toàn bộ môi trường Azure có phân tách mạng; CI/CD kiểm tra test, cấu hình hạ tầng, build image lên GHCR và đóng gói bản cài đặt đa nền tảng; bí mật triển khai mã hóa bằng Ansible Vault.
 
 Các hạn chế (mục 21) chủ yếu là việc hoàn thiện vận hành và đo lường mở rộng, không ảnh hưởng đến kiến trúc cốt lõi.
 
@@ -1803,7 +1841,7 @@ Các hạn chế (mục 21) chủ yếu là việc hoàn thiện vận hành và
 | Kho tệp | `FTP_STORAGE`, `FTP_ROOT`, `FTP_S3_ENDPOINT`, `FTP_S3_ACCESS_KEY`, `FTP_S3_SECRET_KEY`, `FTP_S3_BUCKET`, `FTP_S3_REGION`, `FTP_S3_PREFIX`, `FTP_S3_QUARANTINE_BUCKET`, `FTP_QUARANTINE` |
 | CSDL | `FTP_DB`, `FTP_DB_URL`, `FTP_DB_USER`, `FTP_DB_PASSWORD` |
 | TLS | `FTP_TLS_KEYSTORE`, `FTP_TLS_KEYSTORE_PASSWORD` |
-| Quét mã độc | `FTP_CLAMD`, `FTP_SCAN_COMMAND`, `FTP_SCAN_ENFORCE` |
+| Quét mã độc | `FTP_CLAMD`, `FTP_SCAN_COMMAND`, `FTP_SCAN_ENFORCE`, `FTP_SCAN_MAX_BYTES` (mặc định 524288000, `0` = không giới hạn), `FTP_SCAN_RESCAN_DAYS` (mặc định 7, `0` = tắt) |
 | Khác | `FTP_SEED_PASSWORD`, `FTP_AUDIT_LOG`, `FTP_HOME` |
 | Trang quản trị | `FTPADMIN_SECRET`, `FTPADMIN_TRUST_PROXY` |
 
@@ -1811,14 +1849,14 @@ Các hạn chế (mục 21) chủ yếu là việc hoàn thiện vận hành và
 
 | Lệnh | Handler | Lớp liên quan |
 |---|---|---|
-| `USER`/`PASS` | `UserCommandHandler`, `PassCommandHandler` | `auth/UserManager`, `PasswordHasher` |
+| `USER`/`PASS` | `UserCommandHandler`, `PassCommandHandler` | `auth/UserManager`, `PasswordHasher`; tạo thư mục cá nhân `/home/<user>` (`ClientSession.setPersonalHome`) |
 | `PWD`/`CWD`/`CDUP` | `Pwd/Cwd/CdupCommandHandler` | `fs/PathResolver` |
 | `MKD`/`RMD`/`DELE`/`RNFR`/`RNTO` | tương ứng | `PathResolver`, `FileStore`, `AclService`, `ClientSession.canDelete` |
 | `TYPE` | `TypeCommandHandler` | chỉ đổi field `type` của phiên |
 | `PASV`/`PORT` | `Pasv/PortCommandHandler` | `data/DataConnection` |
-| `LIST`/`NLST` | `List/NlstCommandHandler` | `DataConnection`, `ListingFormatter`, `AclService` (lọc theo quyền xem) |
+| `LIST`/`NLST` | `List/NlstCommandHandler` | `DataConnection`, `ListingFormatter` (giải tham số thư mục, bỏ cờ `ls`), `AclService` (lọc theo quyền xem) |
 | `RETR` | `RetrCommandHandler` | `DataConnection`, `FileStore.read`, `ScanService.blockReason` |
-| `STOR`/`APPE` | `StorCommandHandler` | `DataConnection`, `FileStore.beginUpload/commit/abort`, `ScanService.prescan` |
+| `STOR`/`APPE` | `StorCommandHandler` | `DataConnection`, `FileStore.beginUpload/commit/abort`, `ScanService.prescan` / `scanUploadNow` (cách ly), `Config.scanMaxBytes` |
 | `AUTH`/`PBSZ`/`PROT` | tương ứng | `tls/TlsSupport` |
 | `SITE` | `SiteCommandHandler` | `AclService`, `RbacService`, `AuditLog`, `ScanService` |
 | `QUIT` | `QuitCommandHandler` | đổi `state`; đóng socket ở `ClientSession.cleanup()` |
@@ -1826,6 +1864,18 @@ Các hạn chế (mục 21) chủ yếu là việc hoàn thiện vận hành và
 ---
 
 ## 25. Nhật ký thay đổi
+
+### 2026-11-11 — Thư mục cá nhân, cách ly tệp nhiễm, giới hạn tải lên, sao lưu tự động (bản `89ca994`, đã chạy trên Azure)
+
+| Hạng mục | Thay đổi |
+|---|---|
+| Thư mục cá nhân | Nhân viên có home `/` được tạo `/home/<user>` khi đăng nhập và bắt đầu ở đó; không tạo mục mới trực tiếp ở `/`, `/home` (`550`); chroot vẫn là `/` để chia sẻ chéo; ACL cho `READ` thư mục cha khi có quyền trên mục bên trong; script `migrate_personal_homes.py` (đã `--apply` trên Azure) (9.3) |
+| `LIST`/`NLST` | Nhận tham số thư mục (bỏ qua cờ `ls` như `-la`), kiểm tra `READ` như `CWD` (8.2.4) |
+| Quét mã độc | Tệp nhiễm phát hiện sau commit được cách ly sang `ftp-files-quarantine` (`QUARANTINED`); giới hạn `scan.max_bytes` → `552`; quét lại định kỳ 24 giờ tệp `PENDING` và tệp `CLEAN` cũ hơn `scan.rescan_days`; clamd `AlertEncrypted yes`, sửa healthcheck clamd (mục 10) |
+| Sao lưu | Thay Azure Backup (không tạo được vault trên gói Student) bằng cron snapshot incremental trên VM-B dùng managed identity, giữ 7 bản (14.6) |
+| Bí mật, triển khai | `vault.yml` mã hóa, tệp mật khẩu `~/.ansible-vault-pass` ngoài repo; đặt `vault_ftp_seed_password`; token GHCR để kéo image private; CI tạo tệp mật khẩu vault giả cho `syntax-check` (14.4, 15) |
+
+**Kiểm chứng**: `mvn test` 65 test, 0 thất bại (1 bỏ qua S3); `test_admin.py` toàn bộ PASS; kiểm thử đầu cuối qua FTPS trên Azure (16.3).
 
 ### 2026-11-11 — Làm sạch code, tài liệu kiến trúc, cải thiện giao diện quản trị
 
