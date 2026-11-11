@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Tìm kiếm · FTP Admin{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Kết quả tìm kiếm</h1>
+  <div class="sub">{% if q %}Từ khóa <b>“{{ q }}”</b> · chỉ hiện mục bạn có quyền xem{% else %}Nhập tên tài khoản, đường dẫn tệp hoặc địa chỉ IP ở ô tìm kiếm phía trên.{% endif %}</div></div></div>
+{% if q %}
+<div class="row g-3">
+  {% if 'user:manage' in perms %}<div class="col-xl-5"><section class="panel h-100">
+    <div class="panel-head"><span>Tài khoản <span class="hint text-muted small">{{ res.users|length }}</span></span><a href="/users" class="small fw-normal">Quản lý →</a></div>
+    <table class="table align-middle"><thead><tr><th>Tên đăng nhập</th><th>Thư mục gốc</th><th>Trạng thái</th></tr></thead><tbody>
+    {% for u in res.users %}<tr><td class="fw-medium">{{ u.username }}</td><td class="font-monospace small">{{ u.home }}</td><td>{% if u.enabled %}<span class="tag ok">Hoạt động</span>{% else %}<span class="tag warn">Bị khóa</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="3" class="text-center text-muted">Không có tài khoản khớp</td></tr>{% endfor %}</tbody></table>
+  </section></div>{% endif %}
+  {% if 'scan:view' in perms or 'scan:manage' in perms %}<div class="col-xl-7"><section class="panel h-100">
+    <div class="panel-head"><span>Tệp tin <span class="hint text-muted small">{{ res.files|length }}</span></span><a href="/files?q={{ q | urlencode }}" class="small fw-normal">Mở trong trang Tệp tin →</a></div>
+    <table class="table align-middle"><thead><tr><th>Đường dẫn</th><th class="text-end">Kích thước</th><th>Trạng thái</th></tr></thead><tbody>
+    {% for f in res.files %}<tr><td class="text-break">{{ f.path }}</td><td class="text-end text-nowrap">{{ fmt_bytes(f.size) }}</td>
+      <td><span class="tag {{ {'CLEAN': 'ok', 'PENDING': 'warn', 'INFECTED': 'danger'}.get(f.status, '') }}">{{ status_label(f.status) }}</span></td></tr>
+    {% else %}<tr><td colspan="3" class="text-center text-muted">Không có tệp khớp</td></tr>{% endfor %}</tbody></table>
+  </section></div>{% endif %}
+  {% if 'audit:view' in perms %}<div class="col-12"><section class="panel">
+    <div class="panel-head"><span>Nhật ký theo tài khoản hoặc IP “{{ q }}” <span class="hint text-muted small">20 bản ghi mới nhất</span></span>
+      <span class="d-flex gap-2"><a href="/audit?user={{ q | urlencode }}" class="small fw-normal">Lọc theo tài khoản →</a><a href="/audit?ip={{ q | urlencode }}" class="small fw-normal">Lọc theo IP →</a></span></div>
+    {% set rows = res.audit %}{% include "_audit_table.html" %}
+  </section></div>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,11 +1,53 @@
-<div class="table-responsive"><table class="table table-sm table-hover mb-0 align-middle">
-  <thead><tr><th>Thời gian</th><th>Người dùng</th><th>IP</th><th>Sự kiện</th><th>Kết quả</th><th>Chi tiết</th></tr></thead>
+<div class="table-responsive"><table class="table table-hover align-middle audit-table">
+  <colgroup><col style="width:165px"><col style="width:120px"><col style="width:130px"><col style="width:200px"><col style="width:110px"><col></colgroup>
+  <thead><tr><th>Thời gian</th><th>Tài khoản</th><th>IP</th><th>Sự kiện</th><th>Kết quả</th><th>Chi tiết</th></tr></thead>
   <tbody>
-  {% for r in rows %}
-    <tr>
-      <td class="text-nowrap small"><time class="localtime" datetime="{{ r.ts }}">{{ r.ts[:19].replace('T', ' ') }} UTC</time></td><td>{{ r.user if r.user != '-' else '—' }}</td><td class="text-nowrap">{% if r.ip and r.ip != '-' %}{{ r.ip }}{% elif r.session == 'web' %}<span class="text-muted">Web (nội bộ)</span>{% else %}<span class="text-muted">—</span>{% endif %}</td><td><code>{{ r.event }}</code></td>
-      <td><span class="badge text-bg-{{ 'success' if r.result == 'OK' else 'danger' }}">{{ r.result }}</span></td><td class="small">{{ r.detail }}</td>
+  {% for r in rows %}{% set d = r.detail | detail_parts %}
+    <tr data-row="{{ {'id': r.id, 'ts': r.ts, 'session': r.session, 'ip': r.ip, 'user': r.user, 'event': r.event, 'result': r.result, 'detail': r.detail} | tojson | forceescape }}" tabindex="0">
+      <td class="text-nowrap mono-num"><time class="localtime" datetime="{{ r.ts }}">{{ r.ts[:19].replace('T', ' ') }} UTC</time></td>
+      <td class="text-nowrap">{{ r.user if r.user != '-' else '—' }}</td>
+      <td class="text-nowrap mono-ip">{% if r.ip and r.ip != '-' %}{{ r.ip }}{% elif r.session == 'web' %}<span class="text-muted">web nội bộ</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+      <td><div>{{ event_labels.get(r.event, r.event) }}</div><code class="small">{{ r.event }}</code></td>
+      <td>{% if r.result == 'OK' %}<span class="tag ok">Thành công</span>{% else %}<span class="tag danger">Thất bại</span>{% endif %}</td>
+      <td class="detail">{% if d.text %}<span>{{ d.text }}</span>{% endif %}
+        {% if d.pairs %}<div class="kv mt-1">{% for k, vals in d.pairs %}{% for v in vals %}<span class="tag {{ v | perm_risk if k == 'Quyền' else '' }} mono" title="{{ k }}{{ ' — quyền rủi ro cao' if k == 'Quyền' and (v | perm_risk) == 'perm-high' }}">{% if k != 'Quyền' %}<span class="text-muted">{{ k }}:</span> {% endif %}{{ v }}</span>{% endfor %}{% endfor %}</div>{% endif %}</td>
     </tr>
-  {% else %}<tr><td colspan="6" class="text-center text-muted">Chưa có dữ liệu</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="6" class="text-center text-muted py-4">Chưa có dữ liệu</td></tr>{% endfor %}
   </tbody>
 </table></div>
+<dialog class="drawer" id="auditDrawer" aria-labelledby="auditDrawerTitle">
+  <div class="d-flex justify-content-between align-items-center px-3 py-3 border-bottom">
+    <strong id="auditDrawerTitle">Chi tiết sự kiện</strong>
+    <button type="button" class="btn-close" aria-label="Đóng" onclick="this.closest('dialog').close()"></button>
+  </div>
+  <div class="p-3"><div class="drawer-session" id="auditDrawerSession" hidden><div class="small text-muted">Phiên</div>
+    <div class="d-flex flex-wrap align-items-center gap-2"><span class="font-monospace fw-semibold" id="auditDrawerSessionId"></span>
+    <a href="#" id="auditDrawerSessionLink" class="small">Lọc theo phiên này →</a></div></div><dl id="auditDrawerList"></dl><div class="small text-muted mb-1 mt-3">Bản ghi gốc (JSON)</div><pre id="auditDrawerRaw"></pre></div>
+</dialog>
+<script>
+(function () {
+  var dlg = document.getElementById('auditDrawer'); if (!dlg || dlg.dataset.bound) return; dlg.dataset.bound = 1;
+  var labels = {{ event_labels | tojson }}, names = { ts: 'Thời gian (UTC)', user: 'Tài khoản', ip: 'IP', session: 'Phiên', event: 'Sự kiện', result: 'Kết quả', detail: 'Chi tiết', id: 'Mã bản ghi' };
+  function open(tr) {
+    var r = JSON.parse(tr.dataset.row), dl = document.getElementById('auditDrawerList'); dl.textContent = '';
+    ['ts', 'user', 'ip', 'session', 'event', 'result', 'detail', 'id'].forEach(function (k) {
+      var dt = document.createElement('dt'), dd = document.createElement('dd');
+      dt.textContent = names[k]; dd.textContent = k === 'event' ? (labels[r.event] ? labels[r.event] + ' (' + r.event + ')' : r.event) : (r[k] == null ? '—' : r[k]);
+      dl.append(dt, dd);
+    });
+    document.getElementById('auditDrawerRaw').textContent = JSON.stringify(r, null, 2);
+    var hasSess = r.session && r.session !== '-';
+    document.getElementById('auditDrawerSession').hidden = !hasSess;
+    if (hasSess) {
+      document.getElementById('auditDrawerSessionId').textContent = r.session;
+      document.getElementById('auditDrawerSessionLink').href = '/audit?session=' + encodeURIComponent(r.session);
+    }
+    dlg.showModal();
+  }
+  document.querySelectorAll('tr[data-row]').forEach(function (tr) {
+    tr.addEventListener('click', function (e) { if (!e.target.closest('a')) open(tr); });
+    tr.addEventListener('keydown', function (e) { if (e.key === 'Enter') open(tr); });
+  });
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+})();
+</script>

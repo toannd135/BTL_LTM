@@ -1,86 +1,299 @@
 {% extends "base.html" %}
-{% block body_class %}dash-fixed{% endblock %}
-{% block main_class %}{% endblock %}
+{% block title %}Dashboard · FTP Admin{% endblock %}
+{% block body_class %}dash-fit{% endblock %}
 {% block content %}
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3 flex-shrink-0">
-  <h3 class="mb-0">Dashboard</h3>
-  {% if activity %}<div class="btn-group btn-group-sm" role="group" aria-label="Khoảng thời gian">
-    {% for key, val in ranges.items() %}<a href="/?range={{ key }}" class="btn btn-outline-secondary{{ ' active' if key == range }}"{% if key == range %} aria-current="true"{% endif %}>{{ val[2] | replace(' qua', '') }}</a>{% endfor %}
-  </div>{% endif %}
+{% macro icon(d) %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{{ d | safe }}</svg>{% endmacro %}
+{% macro delta(t, bad_when_up=False) %}{% if t %}{% if t.pct is none %}<span class="delta {{ 'bad' if bad_when_up else 'good' }}">mới</span>{% elif t.pct == 0 %}<span class="delta flat">0%</span>{% else %}<span class="delta {{ ('bad' if t.up else 'good') if bad_when_up else ('good' if t.up else 'flat') }}">{{ '▲' if t.up else '▼' }} {{ t.label }}</span>{% endif %}{% else %}<span class="delta flat">—</span>{% endif %}{% endmacro %}
+{% set files = files or {} %}{% set pending = files.get('PENDING', 0) %}{% set infected = files.get('INFECTED', 0) %}{% set quarantined = files.get('QUARANTINED', 0) %}
+{% set can_scan = 'scan:view' in perms or 'scan:manage' in perms %}
+
+<div class="page-head">
+  <div>
+    <h1>Tổng quan hệ thống</h1>
+    <div class="sub">{% if activity %}Số liệu {{ range_label }} · {% endif %}cập nhật lúc <span id="loadedAt">—</span></div>
+  </div>
+  {% if activity %}<nav class="seg" aria-label="Khoảng thời gian">
+    {% for key, val in ranges.items() %}<a href="/?range={{ key }}" class="{{ 'on' if key == range }}"{% if key == range %} aria-current="true"{% endif %}>{{ val[2] | replace(' qua', '') }}</a>{% endfor %}
+    <form method="get" action="/" class="seg-pick {{ 'on' if range == 'month' }}"><input type="hidden" name="range" value="month">
+      <label for="pickMonth">Tháng</label><input type="month" id="pickMonth" name="m" value="{{ period.value if period and range == 'month' else '' }}"
+        min="{{ years[-1] }}-01" max="{{ this_month }}" onchange="if (this.value) this.form.submit()" aria-label="Chọn tháng"></form>
+    <form method="get" action="/" class="seg-pick {{ 'on' if range == 'year' }}"><input type="hidden" name="range" value="year">
+      <label for="pickYear">Năm</label><select id="pickYear" name="y" onchange="if (this.value) this.form.submit()" aria-label="Chọn năm">
+        <option value="">—</option>{% for yr in years %}<option value="{{ yr }}" {{ 'selected' if period and range == 'year' and period.y == yr }}>{{ yr }}</option>{% endfor %}</select></form>
+  </nav>{% endif %}
 </div>
-{% if malware %}<div id="malware-alert" data-key="{{ malware[0].ts }}" class="alert alert-danger flex-shrink-0 position-relative pe-5"><button type="button" class="btn-close position-absolute top-0 end-0 m-2" aria-label="Đóng" onclick="dismissMalware()"></button><strong>Cảnh báo mã độc (24 giờ qua):</strong> {{ malware|length }}{{ '+' if malware|length >= 5 }} lần upload bị từ chối/xóa.
-  <ul class="mb-0 small">{% for m in malware %}<li><code>{{ m.ts }}</code> {{ m.user }} — {{ m.detail }}</li>{% endfor %}</ul>
-  <a href="/audit?event=MALWARE" class="alert-link small">Xem nhật ký</a></div>
+<script>document.getElementById('loadedAt').textContent = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });</script>
+
+{# Canh bao gon mot dong de khong day luoi xuong #}
+{% if malware %}<div id="malware-alert" data-key="{{ malware[0].ts }}" class="alert alert-danger d-flex align-items-center gap-2 py-2 mb-3">
+  <strong class="text-nowrap">Đã chặn mã độc {{ malware|length }}{{ '+' if malware|length >= 5 }} lần / 24 giờ.</strong>
+  <span class="text-truncate">Gần nhất: {{ malware[0].user }} · {{ malware[0].detail }}</span>
+  <a href="/audit?event=MALWARE" class="alert-link text-nowrap ms-auto">Xem nhật ký</a>
+  <button type="button" class="btn-close ms-1" aria-label="Đóng" onclick="dismissMalware()"></button></div>
 <script>
 (function(){var el=document.getElementById('malware-alert');if(!el)return;
  try{if(localStorage.getItem('malwareDismissed')===el.dataset.key)el.remove();}catch(e){}
  window.dismissMalware=function(){try{localStorage.setItem('malwareDismissed',el.dataset.key);}catch(e){}el.remove();};})();
 </script>{% endif %}
-{% if clamd_stale %}<div class="alert alert-warning flex-shrink-0">Dữ liệu nhận diện virus đã cũ {{ clamd_stale }} ngày. <details class="d-inline"><summary class="d-inline">Dành cho quản trị hệ thống</summary>Kiểm tra <code>freshclam</code> trên VM-B (clamd).</details></div>{% endif %}
-{% set files = files or {} %}{% set pending = files.get('PENDING', 0) %}{% set infected = files.get('INFECTED', 0) %}
-<div class="row g-3 mb-3 flex-shrink-0">
-  {% if users %}<div class="col-6 col-md-4 col-xl-2"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Người dùng</div><div class="fs-2">{{ users.total }}</div><div class="small text-muted">{{ users.locked }} bị khóa</div></div></div></div>{% endif %}
-  {% if 'scan:view' in perms or 'scan:manage' in perms %}<div class="col-6 col-md-4 col-xl-2"><a href="/files?status=PENDING" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if pending }} h-100"><div class="card-body"><div class="text-muted small">Tệp chờ quét</div><div class="fs-2 {{ 'text-warning fw-bold' if pending else 'text-dark' }}">{{ pending }}</div></div></div></a></div>
-  <div class="col-6 col-md-4 col-xl-2"><a href="/files?status=INFECTED" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-danger' if infected }} h-100"><div class="card-body"><div class="text-muted small">Phát hiện mã độc</div><div class="fs-2 {{ 'text-danger fw-bold' if infected else 'text-dark' }}">{{ infected }}{% if infected %} <span class="fs-6">⚠</span>{% endif %}</div><div class="small text-muted">{{ files.get('QUARANTINED', 0) }} đang cách ly</div></div></div></a></div>{% endif %}
-  {% if activity %}<div class="col-6 col-md-4 col-xl-2"><a href="/audit?event=LOGIN&result=FAIL" class="text-decoration-none"><div class="card shadow-sm stat-card {{ 'stat-warn' if failed_logins }} h-100"><div class="card-body"><div class="text-muted small">Đăng nhập FTP thất bại</div><div class="fs-2 {{ 'text-danger fw-bold' if failed_logins >= 5 else 'text-warning fw-bold' if failed_logins else 'text-dark' }}">{{ failed_logins }}</div><div class="small text-muted">{{ range_label }}</div></div></div></a></div>{% endif %}
-  {% if storage %}<div class="col-6 col-md-4 col-xl-2"><a href="/files" class="text-decoration-none"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Dung lượng lưu trữ</div><div class="fs-2 text-dark text-nowrap">{{ fmt_bytes(storage.bytes) }}</div><div class="small text-muted">{{ '{:,}'.format(storage.count) }} tệp</div></div></div></a></div>{% endif %}
-  {% if traffic %}<div class="col-6 col-md-4 col-xl-2"><a href="/audit?event=UPLOAD" class="text-decoration-none"><div class="card shadow-sm stat-card h-100"><div class="card-body"><div class="text-muted small">Lưu lượng truyền</div><div class="fs-5 text-dark text-nowrap lh-sm mt-1"><span title="Upload">↑ {{ fmt_bytes(traffic.up) }}</span><br><span title="Download">↓ {{ fmt_bytes(traffic.down) }}</span></div><div class="small text-muted">{{ range_label }}</div></div></div></a></div>{% endif %}
+{% if clamd_stale %}<div class="alert alert-warning py-2 mb-3">Cơ sở dữ liệu nhận diện virus đã cũ {{ clamd_stale }} ngày — kiểm tra <code>freshclam</code> trên máy chạy clamd.</div>{% endif %}
+
+<div class="kpis">
+  {% if users %}<a class="kpi" href="/users">
+    <div class="kpi-top"><span class="kpi-label">Tài khoản</span><span class="kpi-icon">{{ icon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>') }}</span></div>
+    <div class="kpi-value">{{ users.total }}</div>
+    <div class="kpi-meta">{% if users.locked %}<span class="tag warn">{{ users.locked }} bị khóa</span>{% else %}Không có tài khoản bị khóa{% endif %}</div></a>{% endif %}
+  {% if can_scan %}<div class="kpi">
+    <div class="kpi-top"><span class="kpi-label">Tệp chờ quét</span><span class="kpi-icon {{ 'warn' if pending }}">{{ icon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>') }}</span></div>
+    <div class="kpi-value">{{ pending }}</div>
+    <div class="kpi-meta">{% if pending %}
+      {% if 'scan:manage' in perms %}<form method="post" action="/files/scan-pending" onsubmit="var b=this.querySelector('button');b.disabled=true;b.querySelector('.spin').hidden=false;b.querySelector('.play').hidden=true">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn btn-primary btn-xs" title="Quét tối đa 20 tệp chờ, cũ nhất trước">
+          <svg class="play" viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg><span class="spin spinner-border" hidden aria-hidden="true"></span>Quét ngay</button></form>{% endif %}
+      <a href="/files?status=PENDING">Xem danh sách</a>
+    {% else %}<span class="text-success">✓ Đã quét hết</span>{% endif %}</div></div>
+  <a class="kpi" href="/files?status=INFECTED">
+    <div class="kpi-top"><span class="kpi-label">Phát hiện mã độc</span><span class="kpi-icon {{ 'danger' if infected }}">{{ icon('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4M12 16h.01"/>') }}</span></div>
+    <div class="kpi-value">{{ infected }}</div>
+    <div class="kpi-meta">{% if infected %}<span class="tag danger">Chưa xử lý</span>{% endif %}{{ quarantined }} tệp đang cách ly</div></a>{% endif %}
+  {% if storage %}<a class="kpi" href="/files">
+    <div class="kpi-top"><span class="kpi-label">Dung lượng lưu trữ</span><span class="kpi-icon">{{ icon('<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>') }}</span></div>
+    <div class="kpi-value">{{ fmt_bytes(storage.bytes) }}</div>
+    <div class="kpi-meta">{{ '{:,}'.format(storage.count) }} tệp trong kho</div></a>{% endif %}
+  {% if activity %}<a class="kpi" href="/audit?event=LOGIN&result=FAIL">
+    <div class="kpi-top"><span class="kpi-label">Đăng nhập FTP thất bại</span><span class="kpi-icon {{ 'danger' if failed_logins >= 5 else 'warn' if failed_logins }}">{{ icon('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>') }}</span></div>
+    <div class="kpi-value">{{ failed_logins }}</div>
+    <div class="kpi-meta">{{ delta(trends.failed, True) }} so với kỳ trước</div></a>{% endif %}
+  {% if traffic %}<a class="kpi" href="/audit?event=UPLOAD">
+    <div class="kpi-top"><span class="kpi-label">Lưu lượng truyền</span><span class="kpi-icon">{{ icon('<path d="M7 17V5M3 9l4-4 4 4M17 7v12M13 15l4 4 4-4"/>') }}</span></div>
+    <div class="kpi-value kpi-pair"><span title="Tải lên">↑ {{ fmt_bytes(traffic.up) }} {{ delta(trends.up) }}</span><span title="Tải về">↓ {{ fmt_bytes(traffic.down) }} {{ delta(trends.down) }}</span></div>
+    </a>{% endif %}
 </div>
 
-{% if activity %}
-<div class="card shadow-sm mb-3 dash-chart"><div class="card-header bg-white">Hoạt động {{ range_label }} <span class="text-muted small" id="tzLabel">{{ '(theo ngày, UTC)' if activity.daily else '(giờ máy của bạn)' }}</span></div>
-  <div class="card-body"><div class="chart-wrap"><canvas id="activityChart"></canvas></div></div></div>
-{% endif %}
+{# ---------- Luoi chinh: vua khung hinh tren man hinh lon, moi khoi tu cuon ben trong ---------- #}
+<div class="dash-grid {{ 'audit' if activity else 'ops' }}">
 
-{% if activity or storage %}
-<div class="row g-3 mb-3 flex-shrink-0">
-  {% if storage %}<div class="col-lg-4"><div class="card shadow-sm h-100"><div class="card-header bg-white">Lưu trữ theo người dùng</div>
-    <table class="table table-sm mb-0 align-middle" id="topStorage"><thead><tr><th>Chủ sở hữu</th><th class="text-end">Tệp</th><th class="text-end">Dung lượng</th></tr></thead><tbody>
-    {% for o in storage.owners %}<tr><td>{{ o.who or '(không rõ)' }}</td><td class="text-end">{{ o.n }}</td><td class="text-end text-nowrap">{{ fmt_bytes(o.s) }}</td></tr>
-    {% else %}<tr><td colspan="3" class="text-center text-muted small">Chưa có tệp</td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
-  {% if traffic %}<div class="col-lg-4"><div class="card shadow-sm h-100"><div class="card-header bg-white">Người dùng truyền nhiều nhất <span class="text-muted small">{{ range_label }}</span></div>
-    <table class="table table-sm mb-0 align-middle" id="topTraffic"><thead><tr><th>Người dùng</th><th class="text-end">↑ Upload</th><th class="text-end">↓ Download</th></tr></thead><tbody>
-    {% for name, up, down in traffic.users %}<tr><td><a href="/audit?user={{ name | urlencode }}">{{ name }}</a></td><td class="text-end text-nowrap">{{ fmt_bytes(up) }}</td><td class="text-end text-nowrap">{{ fmt_bytes(down) }}</td></tr>
-    {% else %}<tr><td colspan="3" class="text-center text-muted small">Chưa có lượt truyền</td></tr>{% endfor %}</tbody></table></div></div>
-  <div class="col-lg-4"><div class="card shadow-sm h-100"><div class="card-header bg-white">IP đăng nhập thất bại <span class="text-muted small">{{ range_label }}</span></div>
-    <table class="table table-sm mb-0 align-middle" id="failIps"><thead><tr><th>IP</th><th class="text-end">Lần</th><th class="text-end">Tài khoản</th><th class="text-end">Gần nhất</th></tr></thead><tbody>
-    {% for f in fail_ips %}<tr><td class="text-nowrap"><a href="/audit?event=LOGIN&result=FAIL">{{ f.ip }}</a></td><td class="text-end {{ 'text-danger fw-bold' if f.n >= 5 }}">{{ f.n }}</td><td class="text-end">{{ f.users }}</td><td class="text-end small text-nowrap"><time class="localtime" datetime="{{ iso_utc(f.last) }}">{{ iso_utc(f.last)[:16].replace('T', ' ') }}</time></td></tr>
-    {% else %}<tr><td colspan="4" class="text-center text-muted small">Không có</td></tr>{% endfor %}</tbody></table></div></div>{% endif %}
-</div>
-{% endif %}
-
-{% if activity %}
-
-<div class="card shadow-sm flex-shrink-0">
-  <div class="card-header bg-white d-flex flex-wrap gap-2 justify-content-between align-items-center">
-    <span>Hoạt động gần đây</span>
-    <form method="get" action="/audit" class="d-flex flex-wrap align-items-center gap-2">
-      <input name="user" class="form-control form-control-sm flex-grow-1" placeholder="Người dùng" aria-label="Lọc theo người dùng" style="max-width:140px;min-width:100px">
-      <input name="event" class="form-control form-control-sm flex-grow-1" placeholder="Sự kiện" aria-label="Lọc theo sự kiện" style="max-width:140px;min-width:100px">
-      <button class="btn btn-sm btn-outline-primary">Lọc</button>
-      <a href="/audit" class="btn btn-sm btn-primary">Xem tất cả →</a>
-    </form>
+  {% if activity %}
+  <div class="dash-col">
+    <section class="panel grow">
+      <div class="panel-head"><span>Lưu lượng truyền tải <span class="hint text-muted small" id="tzLabel">{{ '(theo ngày, UTC)' if activity.daily else '' }}</span></span>
+        <span class="legend"><span><i style="background:#2f6fde"></i>Tải lên</span><span><i style="background:#0e9384"></i>Tải về</span></span></div>
+      <div class="panel-body grow"><div class="chart-box"><canvas id="trafficChart" aria-label="Biểu đồ lưu lượng tải lên và tải về"></canvas></div></div>
+    </section>
+    <section class="panel grow">
+      <div class="panel-head"><span>Hoạt động {{ range_label }}</span>
+        <span class="legend"><span><i style="background:#8fb0ea"></i>Đăng nhập</span><span><i style="background:#f79009"></i>Đăng nhập lỗi</span><span><i style="background:#f04438"></i>Mã độc</span></span></div>
+      <div class="panel-body grow"><div class="chart-box"><canvas id="activityChart" aria-label="Biểu đồ đăng nhập và sự kiện bảo mật"></canvas></div></div>
+    </section>
   </div>
-  {% include "_audit_table.html" %}
+  {% endif %}
+
+  <div class="dash-col">
+    {% if alerts is not none %}
+    <section class="panel {{ 'grow' if not activity and not intake else 'grow-sm' }}">
+      <div class="panel-head"><span>Cảnh báo bảo mật{% if alerts %} <span class="tag danger ms-1">{{ alerts|length }}</span>{% endif %}</span>
+        <a href="/files?status=INFECTED" class="small fw-normal">Tất cả tệp nhiễm →</a></div>
+      <div class="scroll">
+      {% for f in alerts %}
+      <div class="alert-item">
+        <span class="tag {{ 'danger' if f.status == 'INFECTED' else 'warn' }}" style="min-width:92px;justify-content:center">{{ 'Nghiêm trọng' if f.status == 'INFECTED' else 'Đã cách ly' }}</span>
+        <div class="flex-grow-1" style="min-width:0">
+          <div class="path">{{ f.path }}</div>
+          <div class="meta">{{ f.detail or 'Không rõ chữ ký' }} · {{ f.owner or 'Hệ thống' }} · {{ fmt_bytes(f.size) }} · <span class="font-monospace" title="SHA-256: {{ f.sha256 }}">{{ f.sha256[:12] }}</span></div>
+        </div>
+        {% if 'scan:manage' in perms %}<div class="d-flex gap-1 flex-shrink-0">
+          {% if f.status == 'INFECTED' %}
+          <form method="post" action="/files/{{ f.id }}/quarantine"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-secondary">Cách ly</button></form>
+          <form method="post" action="/files/{{ f.id }}/approve" onsubmit="return confirm('Đánh dấu tệp này là an toàn? Chỉ làm khi chắc chắn là báo nhầm.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-secondary">Bỏ qua</button></form>
+          {% else %}
+          <form method="post" action="/files/{{ f.id }}/restore" onsubmit="return confirm('Khôi phục tệp về vị trí cũ? Tệp sẽ phải quét lại.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-secondary">Khôi phục</button></form>
+          <form method="post" action="/files/{{ f.id }}/delete" onsubmit="return confirm('Xóa hẳn tệp này? Không thể hoàn tác.')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-danger">Xóa hẳn</button></form>
+          {% endif %}
+        </div>{% endif %}
+      </div>
+      {% else %}
+      <div class="empty safe">{{ icon('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>') }}<strong>Hệ thống an toàn</strong><span>Không phát hiện mối đe dọa — không có tệp nhiễm hay đang cách ly.</span></div>
+      {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% if activity %}
+    <section class="panel grow">
+      <div class="panel-head"><span>Hoạt động gần đây</span><a href="/audit" class="small fw-normal">Xem tất cả →</a></div>
+      <div class="scroll">
+        <table class="table table-hover align-middle recent">
+          <thead><tr><th>Giờ</th><th>Tài khoản</th><th>Hành động</th><th class="text-end">Kết quả</th></tr></thead>
+          <tbody>
+          {% for r in rows %}<tr onclick="location.href='/audit?user={{ r.user | urlencode }}'">
+            <td class="text-nowrap text-muted small"><time class="localtime short" datetime="{{ r.ts }}">{{ r.ts[11:16] }}</time></td>
+            <td class="text-truncate" style="max-width:110px">{{ r.user if r.user != '-' else '—' }}</td>
+            <td class="text-truncate">{{ event_labels.get(r.event, r.event) }}</td>
+            <td class="text-end">{% if r.result == 'OK' %}<span class="tag ok">OK</span>{% else %}<span class="tag danger strong">Lỗi</span>{% endif %}</td>
+          </tr>{% else %}<tr><td class="text-center text-muted py-4">Chưa có dữ liệu</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if files and not activity %}
+    {% set total = files.values() | sum %}
+    {% set states = (('CLEAN', '#17b26a'), ('PENDING', '#f79009'), ('INFECTED', '#f04438'), ('QUARANTINED', '#98a2b3')) %}
+    <section class="panel">
+      <div class="panel-head"><span>Trạng thái quét tệp</span><a href="/files" class="small fw-normal">Quản lý tệp →</a></div>
+      <div class="panel-body">
+        <div class="d-flex rounded overflow-hidden mb-3" style="height:10px;background:#eef0f3">
+          {% for st, color in states %}{% if files.get(st) %}<span style="width:{{ files.get(st) / total * 100 }}%;background:{{ color }}" title="{{ status_label(st) }}: {{ files.get(st) }}"></span>{% endif %}{% endfor %}
+        </div>
+        <div class="row g-2">
+          {% for st, color in states %}
+          <div class="col-6 col-md-3"><a href="/files?status={{ st }}" class="text-decoration-none text-reset d-flex align-items-center gap-2"><span class="dot" style="background:{{ color }}"></span>{{ status_label(st) }}<b class="ms-auto num">{{ files.get(st, 0) }}</b></a></div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if intake and not activity %}
+    <section class="panel grow">
+      <div class="panel-head"><span>Tệp vào kho 14 ngày qua <span class="hint text-muted small">theo ngày sửa đổi, trạng thái quét hiện tại</span></span>
+        <span class="legend"><span><i style="background:#17b26a"></i>Sạch</span><span><i style="background:#f79009"></i>Chờ quét</span><span><i style="background:#f04438"></i>Nhiễm</span><span><i style="background:#98a2b3"></i>Cách ly</span></span></div>
+      <div class="panel-body grow"><div class="chart-box"><canvas id="intakeChart" aria-label="Biểu đồ số tệp vào kho theo ngày"></canvas></div></div>
+    </section>
+    {% endif %}
+  </div>
+
+  <div class="dash-col">
+    <section class="panel" id="health">
+      <div class="panel-head"><span>Sức khỏe hệ thống</span><span class="hint text-muted small">máy chạy trang quản trị</span></div>
+      <div class="panel-body">
+        <div class="d-flex align-items-center justify-content-between mb-3 pb-3 border-bottom">
+          <div><div class="fw-semibold">Dịch vụ FTP</div><div class="small text-muted font-monospace">{{ health.target }}</div></div>
+          {% if health.ftp_up %}<span class="tag ok"><span class="dot ok"></span>Đang chạy · {{ health.latency }} ms</span>{% else %}<span class="tag danger"><span class="dot down"></span>Không phản hồi</span>{% endif %}
+        </div>
+        {% macro meter(label, pct, note='') %}{% if pct is not none %}<div class="meter"><div class="meter-row"><span>{{ label }}</span><span class="num"><span class="text-muted small me-2">{{ note }}</span>{{ pct }}%</span></div>
+          <div class="meter-bar"><span class="{{ 'danger' if pct >= 90 else 'warn' if pct >= 75 }}" style="width:{{ pct }}%"></span></div></div>{% endif %}{% endmacro %}
+        {{ meter('CPU (tải 1 phút)', health.cpu) }}
+        {{ meter('Bộ nhớ', health.ram, fmt_bytes(health.mem_total) if health.mem_total else '') }}
+        {% if health.disk %}<a href="#rankPanel" class="meter-link" title="Xem ai đang chiếm dung lượng" onclick="var t=document.querySelector('[data-tab=topStorage]');if(t)t.click()">{{ meter('Ổ đĩa kho tệp', health.disk.pct, fmt_bytes(health.disk.used) ~ ' / ' ~ fmt_bytes(health.disk.total)) }}</a>
+        {% if health.disk.pct >= 90 %}<div class="disk-warn mt-2"><span class="dot down pulse"></span>
+          <span>Còn {{ fmt_bytes(health.disk.total - health.disk.used) }}. {{ 'Tải lên sẽ lỗi khi hết chỗ.' if health.disk.pct >= 95 else 'Sắp đầy.' }}</span>
+          {% if 'scan:manage' in perms %}<a href="/files?status=QUARANTINED" class="ms-auto text-nowrap">Dọn tệp cách ly →</a>{% endif %}</div>{% endif %}{% endif %}
+      </div>
+    </section>
+
+    {% if storage or traffic %}
+    <section class="panel grow" id="rankPanel">
+      <div class="panel-head tabs-head">
+        <div class="tabs" role="tablist">
+          {% if storage %}<button type="button" role="tab" data-tab="topStorage" aria-selected="true">Lưu trữ</button>{% endif %}
+          {% if traffic %}<button type="button" role="tab" data-tab="topTraffic" aria-selected="{{ 'false' if storage else 'true' }}">Truyền nhiều</button>
+          <button type="button" role="tab" data-tab="failIps" aria-selected="false">IP lỗi{% if fail_ips %} <span class="tag danger ms-1">{{ fail_ips|length }}</span>{% endif %}</button>{% endif %}
+        </div>
+      </div>
+      <div class="scroll">
+        {% if storage %}{% set top_bytes = (storage.owners | map(attribute='s') | max) if storage.owners else 0 %}
+        <table class="table align-middle" id="topStorage" role="tabpanel"><thead><tr><th>Chủ sở hữu</th><th class="text-end">Tệp</th><th class="text-end">Dung lượng</th><th style="width:24%"></th></tr></thead><tbody>
+        {% for o in storage.owners %}<tr><td>{% if o.who %}{% if 'audit:view' in perms %}<a href="/audit?user={{ o.who | urlencode }}&event=UPLOAD" title="Lịch sử tải lên của {{ o.who }}">{{ o.who }}</a>{% else %}{{ o.who }}{% endif %}{% else %}<span title="Tệp không ghi nhận chủ sở hữu (tạo trước khi có ACL hoặc do hệ thống)">Hệ thống <span class="tag sys">chưa gán</span></span>{% endif %}</td>
+          <td class="text-end">{{ o.n }}</td><td class="text-end text-nowrap">{{ fmt_bytes(o.s) }}</td>
+          <td><div class="meter-bar"><span style="width:{{ (o.s / top_bytes * 100) if top_bytes else 0 }}%"></span></div></td></tr>
+        {% else %}<tr><td colspan="4" class="text-center text-muted">Chưa có tệp</td></tr>{% endfor %}</tbody></table>{% endif %}
+        {% if traffic %}
+        <table class="table align-middle" id="topTraffic" role="tabpanel"{% if storage %} hidden{% endif %}><thead><tr><th>Người dùng</th><th class="text-end">↑ Tải lên</th><th class="text-end">↓ Tải về</th></tr></thead><tbody>
+        {% for name, up, down in traffic.users %}<tr><td><a href="/audit?user={{ name | urlencode }}">{{ name }}</a></td><td class="text-end text-nowrap">{{ fmt_bytes(up) }}</td><td class="text-end text-nowrap">{{ fmt_bytes(down) }}</td></tr>
+        {% else %}<tr><td colspan="3" class="text-center text-muted">Chưa có lượt truyền</td></tr>{% endfor %}</tbody></table>
+        <table class="table align-middle" id="failIps" role="tabpanel" hidden><thead><tr><th>Địa chỉ IP</th><th class="text-end">Lần</th><th class="text-end">TK</th><th class="text-end">Gần nhất</th></tr></thead><tbody>
+        {% for f in fail_ips %}<tr><td class="text-nowrap font-monospace"><a href="/audit?ip={{ f.ip | urlencode }}&event=LOGIN&result=FAIL">{{ f.ip }}</a></td><td class="text-end">{% if f.n >= 5 %}<span class="tag danger">{{ f.n }}</span>{% else %}{{ f.n }}{% endif %}</td><td class="text-end">{{ f.users }}</td><td class="text-end text-nowrap small"><time class="localtime short" datetime="{{ iso_utc(f.last) }}">{{ iso_utc(f.last)[5:16].replace('T', ' ') }}</time></td></tr>
+        {% else %}<tr><td colspan="4" class="text-center text-muted">Không có</td></tr>{% endfor %}</tbody></table>
+        {% endif %}
+      </div>
+    </section>
+    {% endif %}
+  </div>
 </div>
+
+<script>
+  // Tab bang xep hang + rut gon gio (HH:MM) cho cac o hep
+  (function () {
+    var p = document.getElementById('rankPanel'); if (p) p.querySelectorAll('[data-tab]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        p.querySelectorAll('[data-tab]').forEach(function (x) { x.setAttribute('aria-selected', x === b); document.getElementById(x.dataset.tab).hidden = x !== b; });
+      });
+    });
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    document.querySelectorAll('time.short').forEach(function (el) { var d = new Date(el.getAttribute('datetime'));
+      if (!isNaN(d)) { var today = new Date().toDateString() === d.toDateString();
+        el.textContent = (today ? '' : pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ') + pad(d.getHours()) + ':' + pad(d.getMinutes()); el.classList.remove('localtime'); } });
+  })();
+</script>
+{% if intake and not activity %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+  (function () {
+    var d = {{ intake | tojson }}, pad = function (n) { return String(n).padStart(2, '0'); };
+    var fmtBytes = function (n) { var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; };
+    var labels = d.slots.map(function (s) { var t = new Date(s); return pad(t.getUTCDate()) + '/' + pad(t.getUTCMonth() + 1); });
+    if (!window.Chart) return;
+    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily; Chart.defaults.font.size = 11; Chart.defaults.color = '#667085';
+    var ds = [['CLEAN', 'Sạch', '#17b26a'], ['PENDING', 'Chờ quét', '#f79009'], ['INFECTED', 'Nhiễm', '#f04438'], ['QUARANTINED', 'Cách ly', '#98a2b3']]
+      .map(function (x) { return { label: x[1], data: d.series[x[0]], backgroundColor: x[2] }; });
+    new Chart(document.getElementById('intakeChart'), { type: 'bar', data: { labels: labels, datasets: ds },
+      options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+        datasets: { bar: { borderRadius: 2, maxBarThickness: 28, categoryPercentage: .7 } },
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1d2433', padding: 10, boxPadding: 4, usePointStyle: true,
+          filter: function (it) { return it.parsed.y > 0; },
+          callbacks: { title: function (it) { return 'Ngày ' + labels[it[0].dataIndex]; },
+                       footer: function (it) { return 'Dung lượng: ' + fmtBytes(d.bytes[it[0].dataIndex]); } } } },
+        scales: { x: { stacked: true, grid: { display: false }, border: { color: '#e3e6eb' }, ticks: { maxRotation: 0, autoSkipPadding: 10 } },
+                  y: { stacked: true, beginAtZero: true, grid: { color: '#eef0f3' }, border: { display: false }, ticks: { precision: 0, maxTicksLimit: 5, padding: 8 } } } } });
+  })();
+</script>
+{% endif %}
+{% if activity %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
   var a = {{ activity | tojson }};
-  if (!a.daily) document.getElementById('tzLabel').textContent = '(' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')';
+  if (a.unit) document.getElementById('tzLabel').textContent = a.unit === 'day' ? '(theo ngày, giờ Việt Nam)' : '(theo tháng, giờ Việt Nam)';
+  else if (!a.daily) document.getElementById('tzLabel').textContent = '(' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')';
+  function fmtBytes(n) { var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return (i ? n.toFixed(1) : n) + ' ' + u[i]; }
+  function fmtTick(n) { var u = ['B', 'KB', 'MB', 'GB', 'TB'], i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return Math.round(n) + ' ' + u[i]; }
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var labels = a.labels || a.slots.map(function (s) { var t = new Date(s);
+    return a.daily ? pad(t.getUTCDate()) + '/' + pad(t.getUTCMonth() + 1) : pad(t.getHours()) + ':00'; });
+  var fullLabel = function (i) { if (a.full) return a.full[i]; var t = new Date(a.slots[i]);
+    return a.daily ? 'Ngày ' + labels[i] : pad(t.getDate()) + '/' + pad(t.getMonth() + 1) + ', ' + labels[i] + '–' + pad((t.getHours() + 1) % 24) + ':00'; };
   if (window.Chart) {
-    new Chart(document.getElementById('activityChart'), {
-      type: 'bar',
-      data: { labels: a.slots.map(function (s) { var t = new Date(s);
-        return a.daily ? (String(t.getUTCDate()).padStart(2, '0') + '/' + String(t.getUTCMonth() + 1).padStart(2, '0'))
-                       : String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'); }), datasets: [
-        { label: 'Đăng nhập', data: a.series.LOGIN, backgroundColor: '#0d6efd' },
-        { label: 'Upload', data: a.series.UPLOAD, backgroundColor: '#198754' },
-        { label: 'Download', data: a.series.DOWNLOAD, backgroundColor: '#fd7e14' } ] },
-      options: { maintainAspectRatio: false, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }
-    });
+    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+    Chart.defaults.font.size = 11;
+    Chart.defaults.color = '#667085';
+    var grid = { color: '#eef0f3' };
+    var tooltip = { backgroundColor: '#1d2433', padding: 10, boxPadding: 4, usePointStyle: true,
+      callbacks: { title: function (it) { return fullLabel(it[0].dataIndex); } } };
+    var xAxis = { grid: { display: false }, ticks: { maxRotation: 0, autoSkipPadding: 14 }, border: { color: '#e3e6eb' } };
+    var area = function (c) { var g = document.getElementById('trafficChart').getContext('2d').createLinearGradient(0, 0, 0, 240);
+      g.addColorStop(0, c + '30'); g.addColorStop(1, c + '00'); return g; };
+    new Chart(document.getElementById('trafficChart'), { type: 'line',
+      data: { labels: labels, datasets: [
+        { label: 'Tải lên', data: a.series.UP_BYTES, borderColor: '#2f6fde', backgroundColor: area('#2f6fde'), fill: true },
+        { label: 'Tải về', data: a.series.DOWN_BYTES, borderColor: '#0e9384', backgroundColor: area('#0e9384'), fill: true }] },
+      options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+        elements: { line: { cubicInterpolationMode: 'monotone', borderWidth: 2 }, point: { radius: 0, hoverRadius: 4 } },
+        plugins: { legend: { display: false }, tooltip: Object.assign({}, tooltip, { callbacks: { title: tooltip.callbacks.title,
+          label: function (c) { return ' ' + c.dataset.label + ': ' + fmtBytes(c.parsed.y); } } }) },
+        scales: { x: xAxis, y: { beginAtZero: true, grid: grid, border: { display: false },
+          ticks: { callback: function (v) { return fmtTick(v); }, maxTicksLimit: 5, padding: 8 } } } } });
+    new Chart(document.getElementById('activityChart'), { type: 'bar',
+      data: { labels: labels, datasets: [
+        { label: 'Đăng nhập', data: a.series.LOGIN, backgroundColor: a.series.LOGIN.map(function (v, i) { return a.series.LOGIN_FAIL[i] || a.series.MALWARE[i] ? '#f6c48a' : '#8fb0ea'; }) },
+        { label: 'Đăng nhập lỗi', data: a.series.LOGIN_FAIL, backgroundColor: '#f79009' },
+        { label: 'Mã độc', data: a.series.MALWARE, backgroundColor: '#f04438' }] },
+      options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+        datasets: { bar: { borderRadius: 2, maxBarThickness: 18, categoryPercentage: .7 } },
+        plugins: { legend: { display: false }, tooltip: tooltip },
+        scales: { x: Object.assign({ stacked: true }, xAxis),
+                  y: { stacked: true, beginAtZero: true, grid: grid, border: { display: false }, ticks: { precision: 0, maxTicksLimit: 4, padding: 8 } } } } });
   }
 </script>
-{% elif not storage %}
-<p class="text-muted">Chọn mục trên thanh menu để làm việc.</p>
 {% endif %}
 {% endblock %}

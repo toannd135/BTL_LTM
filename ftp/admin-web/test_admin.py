@@ -173,12 +173,12 @@ with main.db() as d:
         d.execute("INSERT INTO users(username, password_hash, role, home) VALUES (?,?,?,?)", (f"bulk{i:02d}", "x", "user", "/"))
 def count(html, marker): return html.count(marker)
 p1 = c.get("/users").text
-check("users trang 1: 20 dong + thanh phan trang", count(p1, "/toggle") == 20 and "Hiển thị 1–20" in p1)
+check("users trang 1: mac dinh 10 dong + thanh phan trang", count(p1, "/toggle") == 10 and "Hiển thị 1–10" in p1)
 p3 = c.get("/users?page=3&per_page=20").text
 with main.db() as d:
     total_users = d.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 check("users trang cuoi: so dong dung", count(p3, "/toggle") == total_users - 40)
-check("page vuot gioi han -> kep ve trang cuoi", count(c.get("/users?page=999").text, "/toggle") == total_users - 40)
+check("page vuot gioi han -> kep ve trang cuoi", count(c.get("/users?page=999&per_page=20").text, "/toggle") == total_users - 40)
 check("page/per_page rac -> mac dinh, khong loi", c.get("/users?page=abc&per_page=7").status_code == 200)
 check("per_page=50 ap dung", count(c.get("/users?per_page=50").text, "/toggle") == min(50, total_users) and count(c.get("/users?per_page=10").text, "/toggle") == 10)
 with main.db() as d:
@@ -218,7 +218,7 @@ check("audit hien su kien do Java ghi", "java-ghi.txt" in jp and "10.0.0.9" in j
 # audit
 page = a.get("/audit?user=admin").text
 check("audit hien thao tac quan tri", "ADMIN_CREATE_USER" in page and "ADMIN_FILE_QUARANTINE" in page and "ADMIN_GRANT_ROLE" in page)
-check("audit loc theo su kien", "ADMIN_CREATE_USER" not in a.get("/audit?event=ADMIN_LOGIN").text)
+check("audit loc theo su kien", ">ADMIN_CREATE_USER</code>" not in a.get("/audit?event=ADMIN_LOGIN").text and ">ADMIN_LOGIN</code>" in a.get("/audit?event=ADMIN_LOGIN").text)
 d = a.get("/").text
 check("dashboard auditor co bieu do hoat dong 24h", "activityChart" in d and '"LOGIN"' in d)
 check("dashboard admin khong hien nhat ky (khong co audit:view)", "activityChart" not in c.get("/").text)
@@ -283,6 +283,96 @@ ev(ts_login, "auditor", "LOGIN", "OK", "ftp login")
 ev(ago(days=2), "auditor", "LOGIN", "OK", "ftp login")
 up = c.get("/users?per_page=100").text
 check("users: cot dang nhap lan cuoi lay lan moi nhat", f'datetime="{ts_login}"' in up and "Chưa đăng nhập" in up)
+
+# trang Tep: loc theo duoi tep / chu so huu
+fe = c.get("/files?ext=.BIN&per_page=50").text
+check("files: loc ext=bin (bo dau cham, khong phan biet hoa)", "bulk/" in fe and "/sv/ok.txt" not in fe and "ext=bin" in fe)
+fo = c.get("/files?owner=alice&per_page=50").text
+check("files: loc owner=alice", "/sv/ok.txt" in fo and "bulk/" not in fo)
+check("files: loc owner=- (chua co chu so huu)", "bulk/" in c.get("/files?owner=-").text)
+# thao tac hang loat
+with main.db() as d:
+    bids = [r[0] for r in d.execute("SELECT id FROM files WHERE path LIKE 'bulk/%' ORDER BY id LIMIT 3")]
+    n_appr = d.execute("SELECT COUNT(*) FROM audit_events WHERE event='ADMIN_FILE_APPROVE'").fetchone()[0]
+tf = token(c, "/files")
+rb = c.post("/files/bulk", data={"csrf": tf, "action": "approve", "ids": bids[:2]})
+with main.db() as d:
+    st = [d.execute("SELECT status FROM files WHERE id=?", (i,)).fetchone()[0] for i in bids]
+    n_appr2 = d.execute("SELECT COUNT(*) FROM audit_events WHERE event='ADMIN_FILE_APPROVE'").fetchone()[0]
+check("bulk approve: 2 tep CLEAN, tep thu 3 giu nguyen, audit tung tep", rb.status_code == 303 and st == ["CLEAN", "CLEAN", "PENDING"]
+      and n_appr2 - n_appr == 2)
+c.post("/files/bulk", data={"csrf": tf, "action": "delete", "ids": [bids[2]]})
+with main.db() as d:
+    check("bulk delete: tep chua cach ly bi bo qua", d.execute("SELECT status FROM files WHERE id=?", (bids[2],)).fetchone()[0] == "PENDING")
+check("bulk: action la -> 400", c.post("/files/bulk", data={"csrf": tf, "action": "rm", "ids": bids}).status_code == 400)
+check("bulk: thieu CSRF -> 403", c.post("/files/bulk", data={"csrf": "x", "action": "approve", "ids": [bids[2]]}).status_code == 403)
+c.post("/files/bulk", data={"csrf": tf, "action": "approve", "ids": [bids[2]] + list(range(100000, 100000 + main.BULK_MAX))})
+with main.db() as d:
+    check("bulk: vuot gioi han so tep -> khong lam gi", d.execute("SELECT status FROM files WHERE id=?", (bids[2],)).fetchone()[0] == "PENDING")
+check("auditor POST /files/bulk 403", a.post("/files/bulk", data={"csrf": ta, "action": "approve", "ids": [bids[2]]}).status_code == 403)
+check("auditor POST /files/scan-pending 403", a.post("/files/scan-pending", data={"csrf": ta}).status_code == 403)
+_sb, main.SCAN_BATCH = main.SCAN_BATCH, 0  # khong quet that (clamscan cham)
+check("admin POST /files/scan-pending -> quay lai", c.post("/files/scan-pending", data={"csrf": tf}).status_code == 303)
+main.SCAN_BATCH = _sb
+fa2 = a.get("/files").text
+check("auditor /files: khong nut dong bo / checkbox / thanh hang loat / menu thao tac",
+      "Đồng bộ" not in fa2 and "/files/bulk" not in fa2 and "row-check" not in fa2 and "Thao tác ▾" not in fa2 and "Xuất CSV" in fa2)
+check("admin /files: co checkbox + thanh hang loat", "/files/bulk" in c.get("/files").text)
+# xuat CSV
+ex = a.get("/files/export.csv?ext=txt")
+lines_csv = ex.text.lstrip("﻿").splitlines()
+check("export CSV (auditor): 200, text/csv, dung cot, theo bo loc", ex.status_code == 200 and ex.headers["content-type"].startswith("text/csv")
+      and lines_csv[0] == "path,size,status,detail,owner,sha256,scanned_at,updated_at"
+      and any(l.startswith("/sv/ok.txt,") for l in lines_csv) and not any("bulk/" in l for l in lines_csv))
+with main.db() as d:
+    check("export CSV ghi audit SCAN_VIEW export=csv", d.execute("SELECT detail FROM audit_events WHERE event='SCAN_VIEW' "
+          "ORDER BY id DESC LIMIT 1").fetchone()[0].startswith("export=csv rows="))
+check("export CSV chua dang nhap -> /login", TestClient(main.app, follow_redirects=False).get("/files/export.csv").headers.get("location") == "/login")
+# tim kiem toan cuc
+check("/search admin thay tep", c.get("/search?q=ok.txt").status_code == 200 and "/sv/ok.txt" in c.get("/search?q=ok.txt").text)
+check("/search auditor 200", a.get("/search?q=auditor").status_code == 200)
+# nhat ky: loc theo khoang thoi gian + phien
+ev(ago(days=10), "rangeu", "LOGIN", "OK", "cu")
+ev(ago(minutes=2), "rangeu", "LOGIN", "OK", "moi")
+with main.db() as d:
+    d.execute("INSERT INTO audit_events(ts, session, ip, username, event, result, detail) VALUES (?,?,?,?,?,?,?)",
+              (ago(minutes=1), "sess-xyz", "-", "rangeu", "LOGOUT", "OK", "phien rieng"))
+def rows_of(q): return count(a.get("/audit?user=rangeu" + q).text, "<time")
+check("audit range: moi luc / 7d / 30d", rows_of("") == 3 and rows_of("&range=7d") == 2 and rows_of("&range=30d") == 3)
+check("audit range=today (tzo=0) chi lay hom nay", rows_of("&range=today&tzo=0") == 2 or _dt.now(_tz.utc).hour == 0)
+frm, to = ago(days=11)[:16], ago(days=9)[:16]
+check("audit range tuy chon from/to (UTC)", rows_of(f"&range=custom&from={frm}&to={to}") == 1 and rows_of(f"&from={frm}") == 3)
+check("audit from/to rac bi bo qua", rows_of("&range=custom&from=abc&to=1;DROP") == 3)
+check("audit: phan trang giu tham so range", "range=7d" in a.get("/audit?user=rangeu&range=7d").text)
+check("audit: loc theo phien", rows_of("&session=sess-xyz") == 1)
+check("audit: tag quyen to mau theo rui ro", main.templates.env.filters["perm_risk"]("user:manage") == "perm-high"
+      and main.templates.env.filters["perm_risk"]("audit:view") == "perm-low")
+
+# dashboard + nhat ky: chon Thang / Nam (gio Viet Nam)
+cp = main.calendar_period
+check("calendar_period: moc thang theo gio VN, thang 12 sang nam sau, ky truoc",
+      cp("month", "2026-02", years=[2026]) and cp("month", "2026-02", years=[2026])["since"] == "2026-01-31T17:00:00"
+      and cp("month", "2026-02", years=[2026])["until"] == "2026-02-28T17:00:00"
+      and cp("month", "2025-12", years=[2025])["until"] == "2025-12-31T17:00:00"
+      and cp("month", "2025-12", years=[2025])["prev"] == "2025-10-31T17:00:00"
+      and cp("year", y="2026", years=[2026])["since"] == "2025-12-31T17:00:00" and cp("year", y="2026", years=[2026])["prev"] == "2024-12-31T17:00:00")
+check("calendar_period: tham so sai -> None", cp("month", "2026-13", years=[2026]) is None and cp("month", "abc", years=[2026]) is None
+      and cp("year", y="1999", years=[2026]) is None and cp("year", y="x", years=[2026]) is None and cp("month", "2030-01", years=[2030]) is None)
+now_vn = _dt.now(main.VN_TZ)
+mval, yval = now_vn.strftime("%Y-%m"), str(now_vn.year)
+check("data_years lay tu CSDL, gom nam nay", main.data_years()[0] == now_vn.year)
+dm = a.get(f"/?range=month&m={mval}").text
+check("dashboard range=month: nhan + cot theo ngay", f"Số liệu tháng {now_vn.month:02d}/{now_vn.year}" in dm and '"unit": "day"' in dm
+      and f'value="{mval}"' in dm)
+dy = a.get(f"/?range=year&y={yval}").text
+check("dashboard range=year: nhan + 12 cot thang", f"Số liệu năm {yval}" in dy and '"unit": "month"' in dy and '"T12"' in dy)
+check("dashboard range thang/nam sai -> 24 gio", all("Số liệu 24 giờ qua" in a.get(u).text for u in
+      ("/?range=month&m=2026-13", "/?range=month&m=x", "/?range=year&y=1999", "/?range=year")))
+check("dashboard admin (khong audit:view) van chay voi range=month", c.get(f"/?range=month&m={mval}").status_code == 200)
+pm, py = cp("month", mval), cp("year", y=yval)
+check("audit range=month / year dung moc gio VN", rows_of(f"&range=month&m={mval}") == main.count_audit(user="rangeu", since=pm["since"], until=pm["until"])
+      and rows_of(f"&range=year&y={yval}") == main.count_audit(user="rangeu", since=py["since"], until=py["until"]))
+check("audit range=year sai -> khong loc thoi gian", rows_of("&range=year&y=1990") == 3)
 
 # break-glass
 tb = token(c, "/breakglass")
