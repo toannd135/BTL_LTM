@@ -2,6 +2,7 @@ package ftpserver.command;
 
 import java.io.IOException;
 import java.net.Socket;
+import java.nio.file.Path;
 
 import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
@@ -13,7 +14,7 @@ import ftpserver.core.SessionState;
  * LIST: gui danh sach thu muc hien tai dang dai (kieu "ls -l", co ten chu so huu) qua kenh du lieu.
  *
  * <p>Can dang nhap, quyen READ tren thu muc hien tai va da PASV/PORT; chi liet ke muc user duoc xem.
- * Tham so (neu co) bi bo qua. Tra loi: 150 roi 226; 425 neu chua PASV/PORT; 550 neu khong du quyen;
+ * Tham so la duong dan thu muc can liet ke (bo qua co kieu "-la"); khong co thi dung thu muc hien tai. Tra loi: 150 roi 226; 425 neu chua PASV/PORT; 550 neu khong du quyen;
  * 426 neu kenh du lieu loi.
  */
 public final class ListCommandHandler implements CommandHandler {
@@ -30,14 +31,15 @@ public final class ListCommandHandler implements CommandHandler {
             session.reply(FtpReply.CANT_OPEN_DATA_CONN, "Use PASV or PORT first");
             return;
         }
-        if (!session.can(session.getCurrentDir(), Perm.READ)) {
+        Path dir = ListingFormatter.targetDir(session, arg);
+        if (dir == null) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
             return;
         }
         session.reply(FtpReply.FILE_STATUS_OK_OPENING, "About to open data connection");
         try (Socket dataSocket = session.getDataConnection().establish(DATA_CONNECT_TIMEOUT_MS)) {
             session.setState(SessionState.TRANSFERRING);
-            ListingFormatter.writeListing(session.store(), session.getCurrentDir(), dataSocket, true, p -> session.can(p, Perm.READ),
+            ListingFormatter.writeListing(session.store(), dir, dataSocket, true, p -> session.can(p, Perm.READ),
                     p -> session.acl().ownerOf(session.aclPath(p)));
         } catch (IOException e) {
             session.reply(FtpReply.CONN_CLOSED_ABORTED, "Transfer aborted");

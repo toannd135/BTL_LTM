@@ -121,8 +121,13 @@ def store_copy(store, src_rel: str, dst_rel: str, owner: str) -> list[str]:
         base, dbase = store._key(src_rel), store._key(dst_rel)
         keys = _s3_keys(store, src_rel)
         for k in keys:
-            store.s3.copy_object(Bucket=store.bucket, Key=dbase + k[len(base):],
-                                 CopySource={"Bucket": store.bucket, "Key": k})
+            dkey = dbase + k[len(base):]
+            if k.endswith("/"):
+                # Marker thu muc: SeaweedFS coi la thu muc filer, CopyObject tra NoSuchKey -> tao marker moi
+                store.s3.put_object(Bucket=store.bucket, Key=dkey, Body=b"")
+            else:
+                store.s3.copy_object(Bucket=store.bucket, Key=dkey,
+                                     CopySource={"Bucket": store.bucket, "Key": k})
         return keys
     src, dst = store._abs(src_rel), store._abs(dst_rel)
     if not src.exists():
