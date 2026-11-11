@@ -12,15 +12,35 @@
     <h1>Tổng quan hệ thống</h1>
     <div class="sub">{% if activity %}Số liệu {{ range_label }} · {% endif %}cập nhật lúc <span id="loadedAt">—</span></div>
   </div>
-  {% if activity %}<nav class="seg" aria-label="Khoảng thời gian">
-    {% for key, val in ranges.items() %}<a href="/?range={{ key }}" class="{{ 'on' if key == range }}"{% if key == range %} aria-current="true"{% endif %}>{{ val[2] | replace(' qua', '') }}</a>{% endfor %}
-    <form method="get" action="/" class="seg-pick {{ 'on' if range == 'month' }}"><input type="hidden" name="range" value="month">
-      <label for="pickMonth">Tháng</label><input type="month" id="pickMonth" name="m" value="{{ period.value if period and range == 'month' else '' }}"
-        min="{{ years[-1] }}-01" max="{{ this_month }}" onchange="if (this.value) this.form.submit()" aria-label="Chọn tháng"></form>
-    <form method="get" action="/" class="seg-pick {{ 'on' if range == 'year' }}"><input type="hidden" name="range" value="year">
-      <label for="pickYear">Năm</label><select id="pickYear" name="y" onchange="if (this.value) this.form.submit()" aria-label="Chọn năm">
-        <option value="">—</option>{% for yr in years %}<option value="{{ yr }}" {{ 'selected' if period and range == 'year' and period.y == yr }}>{{ yr }}</option>{% endfor %}</select></form>
-  </nav>{% endif %}
+  {% if activity %}<details class="menu range-pick">
+    <summary class="range-btn" aria-label="Chọn khoảng thời gian: {{ range_title }}, {{ range_dates }}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>
+      <span class="fw-semibold">{{ range_title }}</span><span class="range-dates">{{ range_dates }}</span>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </summary>
+    <div class="menu-pop range-pop">
+      <div class="range-sec">
+        <div class="range-label">Mốc nhanh</div>
+        {% for key, val in ranges.items() %}<a href="/?range={{ key }}" class="range-opt {{ 'on' if key == range }}"{% if key == range %} aria-current="true"{% endif %}>{{ val[2] | capitalize }}{% if key == range %}<span aria-hidden="true">✓</span>{% endif %}</a>{% endfor %}
+      </div>
+      <form method="get" action="/" class="range-sec">
+        <input type="hidden" name="range" value="month">
+        <label class="range-label" for="pickMonth">Theo tháng</label>
+        <div class="range-row"><select id="pickMonth" name="m" class="form-select">
+          {% for yr in years %}<optgroup label="Năm {{ yr }}">{% for mo in [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1] %}{% set v = '%d-%02d' % (yr, mo) %}{% if v <= this_month %}
+            <option value="{{ v }}" {{ 'selected' if period and period.value == v or (not period and v == this_month) }}>Tháng {{ '%02d' % mo }}/{{ yr }}</option>{% endif %}{% endfor %}</optgroup>{% endfor %}
+        </select><button class="btn btn-primary">Áp dụng</button></div>
+      </form>
+      <form method="get" action="/" class="range-sec">
+        <input type="hidden" name="range" value="year">
+        <label class="range-label" for="pickYear">Theo năm</label>
+        <div class="range-row"><select id="pickYear" name="y" class="form-select">
+          {% for yr in years %}<option value="{{ yr }}" {{ 'selected' if period and period.unit == 'month' and period.y == yr }}>Năm {{ yr }}</option>{% endfor %}
+        </select><button class="btn btn-primary">Áp dụng</button></div>
+      </form>
+      <div class="range-foot">Mốc theo giờ Việt Nam (UTC+7)</div>
+    </div>
+  </details>{% endif %}
 </div>
 <script>document.getElementById('loadedAt').textContent = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });</script>
 
