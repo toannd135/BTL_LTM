@@ -20,7 +20,10 @@ import ftpserver.db.Database;
  * <ul>
  *   <li>tep khong co chu so huu (tep cu): WRITE (khong han che them);</li>
  *   <li>chu so huu tep hoac bat ky thu muc cha nao: WRITE (nhu Google Drive);</li>
- *   <li>con lai: muc cao nhat duoc cap tren tep hoac thu muc cha, neu khong co thi null (khong thay, khong truy cap).</li>
+ *   <li>con lai: muc cao nhat duoc cap tren tep hoac thu muc cha;</li>
+ *   <li>khong co nhung duoc cap quyen tren mot muc ben trong: READ (chi thay va vao duoc thu muc de di toi muc da
+ *       chia se, vd /home/toan khi toan chia se /home/toan/a.txt; danh sach van loc theo tung muc);</li>
+ *   <li>khong co gi: null (khong thay, khong truy cap).</li>
  * </ul>
  * Tai khoan chi doc khong bao gio vuot qua DOWNLOAD. Loi CSDL khi kiem tra quyen = tu choi.
  *
@@ -103,6 +106,9 @@ public class AclService {
                 result = Perm.WRITE;
             } else {
                 result = bestGrant(c, user.name(), path);
+                if (result == null && hasGrantBelow(c, user.name(), path)) {
+                    result = Perm.READ;
+                }
             }
             if (result == Perm.WRITE && user.readOnly()) {
                 result = Perm.DOWNLOAD;
@@ -136,6 +142,19 @@ public class AclService {
                 }
             }
             return best;
+        }
+    }
+
+    /** true neu user duoc cap quyen tren mot muc nam ben trong path (de duyet toi muc duoc chia se). */
+    private static boolean hasGrantBelow(Connection c, String username, String path) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT 1 FROM file_acl WHERE username = ? AND path LIKE ? ESCAPE '\\'")) {
+            ps.setString(1, username);
+            ps.setString(2, escapeLike(path) + "/%");
+            ps.setMaxRows(1);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
         }
     }
 

@@ -197,5 +197,11 @@ resource "local_file" "ansible_inventory" {
     ftp_db_host=${azurerm_postgresql_flexible_server.main.fqdn}
     tf_ftp_db_password=${random_password.db.result}
     storage_private_ip=${local.storage_ip}
+
+    [storage:vars]
+    backup_disk_id=${azurerm_managed_disk.storage.id}
+    backup_resource_group_id=${azurerm_resource_group.backup.id}
+    backup_location=${azurerm_resource_group.backup.location}
+    backup_keep=${var.backup_retention_days}
   EOT
 }

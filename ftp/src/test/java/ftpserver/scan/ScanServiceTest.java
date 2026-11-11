@@ -150,4 +150,43 @@ class ScanServiceTest {
             }
         });
     }
+
+    /** Co thu muc cach ly: tep nhiem bi dua ra khoi cay FTP, status QUARANTINED + quarantine_path, van bi chan. */
+    @Test
+    void infectedUploadIsQuarantinedWhenStoreSupportsIt(@TempDir Path tmp) throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("root"));
+        Path qdir = tmp.resolve("quarantine");
+        ftpserver.fs.FileStore store = new ftpserver.fs.LocalFileStore(root, qdir);
+        Path bad = Files.writeString(root.resolve("bad.txt"), "X5O!P%@AP");
+        Database db = db(tmp);
+        try (var s1 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            fakeReply(s1, "stream: Eicar-Test-Signature FOUND");
+            ScanService svc = new ScanService(db, new ClamdClient("127.0.0.1", s1.getLocalPort(), 5000), true);
+            assertEquals("Eicar-Test-Signature", svc.scanUploadNow("/bad.txt", store, bad));
+        }
+        assertEquals(false, Files.exists(bad));
+        try (var c = db.open(); var ps = c.prepareStatement("SELECT id, status, quarantine_path FROM files WHERE path = '/bad.txt'");
+             var rs = ps.executeQuery()) {
+            rs.next();
+            assertEquals("QUARANTINED", rs.getString(2));
+            Path q = Path.of(rs.getString(3));
+            assertEquals(qdir.resolve(rs.getLong(1) + "_bad.txt").toAbsolutePath().normalize(), q);
+            assertEquals("X5O!P%@AP", Files.readString(q));
+        }
+        assertEquals("file is quarantined", new ScanService(db, List.of(), false).blockReason("/bad.txt"));
+    }
+
+    /** Quet nen bang scan.command tren tep trong kho: nhiem -> cach ly. */
+    @Test
+    void backgroundCommandScanQuarantines(@TempDir Path tmp) throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("root"));
+        ftpserver.fs.FileStore store = new ftpserver.fs.LocalFileStore(root, tmp.resolve("q"));
+        Path f = Files.writeString(root.resolve("v.bin"), "virus");
+        Database db = db(tmp);
+        new ScanService(db, List.of(), true).onUpload("/v.bin", store, f); // chi dang ky PENDING
+        ScanService svc = new ScanService(db, List.of("sh", "-c", "exit 1", "--"), true);
+        svc.runScan("/v.bin", f, sha(db, "/v.bin"), store, f);
+        assertEquals(false, Files.exists(f));
+        assertEquals("file is quarantined", svc.blockReason("/v.bin"));
+    }
 }

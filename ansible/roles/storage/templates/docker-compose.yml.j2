@@ -28,3 +28,11 @@ services:
     volumes:
       - ./clamav-db:/var/lib/clamav
       - ./config/clamd.conf:/etc/clamav/clamd.conf:ro
+    # clamdcheck.sh cua image goi `nc localhost 3310`; localhost co the ra ::1 trong khi clamd chi nghe IPv4
+    # => luon bao unhealthy. Ping thang 127.0.0.1. start_period dai vi nap chu ky mat vai phut.
+    healthcheck:
+      test: ["CMD-SHELL", "[ \"$$(echo PING | nc 127.0.0.1 3310)\" = PONG ]"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 6m

@@ -23,9 +23,27 @@ import java.util.stream.Stream;
 public final class LocalFileStore implements FileStore {
 
     private final Path root;
+    private final Path quarantineDir; // null = khong ho tro cach ly
 
     public LocalFileStore(Path root) {
+        this(root, null);
+    }
+
+    /** @param quarantineDir thu muc cach ly tep nhiem (nam ngoai root), null = khong cach ly */
+    public LocalFileStore(Path root, Path quarantineDir) {
         this.root = root;
+        this.quarantineDir = quarantineDir;
+    }
+
+    @Override
+    public String quarantine(Path file, String name) throws IOException {
+        if (quarantineDir == null) {
+            throw new IOException("quarantine.dir not configured");
+        }
+        Files.createDirectories(quarantineDir);
+        Path dest = quarantineDir.resolve(name.replace('/', '_')).toAbsolutePath().normalize();
+        Files.move(file, dest, StandardCopyOption.REPLACE_EXISTING);
+        return dest.toString();
     }
 
     @Override public String describe() { return "local " + root; }

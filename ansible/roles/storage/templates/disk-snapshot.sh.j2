@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# Chup snapshot incremental o du lieu SeaweedFS cua chinh VM nay, giu {{ backup_keep }} ban moi nhat.
+# Xac thuc bang managed identity cua VM (IMDS) — khong co bi mat nao tren dia.
+# Dung seaweedfs trong luc tao snapshot de du lieu nhat quan (thuong < 15 s).
+# Chay tay: sudo {{ ftp_base_dir }}/disk-snapshot.sh
+set -euo pipefail
+
+DISK_ID='{{ backup_disk_id }}'
+RG_ID='{{ backup_resource_group_id }}'
+LOCATION='{{ backup_location }}'
+KEEP={{ backup_keep }}
+API=2023-04-02
+ARM=https://management.azure.com
+NAME="snap-$(basename "$DISK_ID")-$(date -u +%Y%m%d-%H%M%S)"
+
+log() { echo "$(date -u +%FT%TZ) $*"; }
+
+TOKEN=$(curl -sf -H Metadata:true \
+  "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=$ARM/" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+arm() { curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$@"; }
+
+cd '{{ ftp_base_dir }}'
+log "dung seaweedfs"
+docker compose stop seaweedfs >/dev/null
+trap 'docker compose start seaweedfs >/dev/null; log "chay lai seaweedfs"' EXIT
+sync
+
+log "tao $NAME"
+BODY=$(printf '{"location":"%s","tags":{"created-by":"disk-snapshot"},"properties":{"incremental":true,"creationData":{"createOption":"Copy","sourceResourceId":"%s"}}}' "$LOCATION" "$DISK_ID")
+CODE=$(arm -o /tmp/disk-snapshot.out -w '%{http_code}' -X PUT --data "$BODY" "$ARM$RG_ID/providers/Microsoft.Compute/snapshots/$NAME?api-version=$API")
+case "$CODE" in
+  200|201|202) log "Azure nhan yeu cau ($CODE): diem chup da co dinh, chay lai seaweedfs" ;;
+  *) log "LOI tao snapshot ($CODE): $(head -c 500 /tmp/disk-snapshot.out)"; exit 1 ;;
+esac
+docker compose start seaweedfs >/dev/null
+trap - EXIT
+log "chay lai seaweedfs"
+
+# Xoa ban cu: chi snapshot do script nay tao (tag created-by), giu KEEP ban moi nhat
+arm "$ARM$RG_ID/providers/Microsoft.Compute/snapshots?api-version=$API" | KEEP=$KEEP python3 -c '
+import sys, json, os
+items = [s for s in json.load(sys.stdin).get("value", []) if s.get("tags", {}).get("created-by") == "disk-snapshot"]
+items.sort(key=lambda s: s["properties"].get("timeCreated", ""), reverse=True)
+for s in items[int(os.environ["KEEP"]):]:
+    print(s["id"])' | while read -r ID; do
+  log "xoa ban cu $(basename "$ID")"
+  arm -o /dev/null -X DELETE "$ARM$ID?api-version=$API"
+done
+log "xong"

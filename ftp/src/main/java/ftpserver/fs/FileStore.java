@@ -55,6 +55,18 @@ public interface FileStore {
         return Optional.empty();
     }
 
+    /**
+     * Cach ly tep: dua tep ra khoi cay thu muc FTP (nguoi dung FTP khong bao gio liet ke/truy cap duoc) vao vung cach ly
+     * cung quy uoc voi admin-web (S3: bucket cach ly, key {@code name}; local: thu muc cach ly / {@code name}).
+     *
+     * @param name ten trong vung cach ly, quy uoc "&lt;files.id&gt;_&lt;ten tep&gt;"
+     * @return gia tri cot files.quarantine_path ("s3://bucket/key" hoac duong dan tuyet doi tren dia)
+     * @throws IOException neu backend khong cau hinh vung cach ly hoac di chuyen loi (tep goc giu nguyen)
+     */
+    default String quarantine(Path file, String name) throws IOException {
+        throw new IOException("quarantine not configured");
+    }
+
     /** Mot muc trong ket qua {@link #list}; {@code size} = 0 voi thu muc. */
     record FileInfo(String name, boolean directory, long size, Instant modified) {}
 

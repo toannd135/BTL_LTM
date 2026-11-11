@@ -9,6 +9,7 @@ import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 import ftpserver.core.SessionState;
 import ftpserver.fs.PathResolver;
+import ftpserver.rbac.RbacService;
 
 /**
  * PASS &lt;mat-khau&gt;: xac thuc user da khai bao bang USER.
@@ -16,11 +17,17 @@ import ftpserver.fs.PathResolver;
  * <p>Phai di ngay sau USER (trang thai WAIT_PASS), neu khong tra 503. Thanh cong: 230 kem danh sach vai tro,
  * nap quyen RBAC va nhot user trong thu muc home. Sai mat khau: 530; sai lien tiep {@value #MAX_FAILED_LOGINS}
  * lan thi tra 421 va dong ket noi. Thu muc home khong dung duoc: 530.
+ *
+ * <p>Nhan vien (co file:upload, khong co file:manage, khong chi doc) co home "/" duoc cap thu muc ca nhan
+ * /home/&lt;user&gt; (tu tao, ghi chu so huu) va bat dau phien o do; home van la "/" de chia se cheo giua cac user
+ * van hoat dong. Xem {@link ClientSession#getPersonalHome()}.
  */
 public final class PassCommandHandler implements CommandHandler {
 
     /** So lan dang nhap sai lien tiep toi da truoc khi dong kenh dieu khien. */
     private static final int MAX_FAILED_LOGINS = 3;
+    /** Ten user hop le de lam ten thu muc ca nhan. */
+    private static final java.util.regex.Pattern SAFE_NAME = java.util.regex.Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
 
     @Override public boolean requiresAuth()  { return false; }
     @Override public boolean requiresWrite() { return false; }
@@ -53,7 +60,9 @@ public final class PassCommandHandler implements CommandHandler {
         session.setUser(user);
         session.setGrants(session.rbac().load(user));
         session.setPathResolver(home);
-        session.setCurrentDir(home.rootDir());
+        Path personal = personalHome(session, user, home);
+        session.setPersonalHome(personal);
+        session.setCurrentDir(personal != null ? personal : home.rootDir());
         session.audit("LOGIN", "roles=" + session.grants().roles() + " home=" + user.home()
                 + (session.isTlsActive() ? " tls=on" : " tls=off"), true);
         session.setState(SessionState.AUTHENTICATED);
@@ -74,6 +83,29 @@ public final class PassCommandHandler implements CommandHandler {
         } else {
             session.reply(FtpReply.NOT_LOGGED_IN, "Not logged in");
             session.setState(SessionState.CONNECTED);
+        }
+    }
+
+    /**
+     * Tao (neu chua co) /home/&lt;user&gt; cho nhan vien co home "/" va ghi chu so huu; null neu khong ap dung hoac
+     * khong tao duoc (khi do user van dang nhap binh thuong o "/").
+     */
+    private static Path personalHome(ClientSession session, User user, PathResolver home) {
+        if (!user.home().replaceFirst("^/+", "").isEmpty() || user.readOnly() || !SAFE_NAME.matcher(user.name()).matches()) {
+            return null;
+        }
+        String key = ClientSession.PERSONAL_HOMES + "/" + user.name();
+        if (!session.grants().has("file:upload", key) || session.grants().has(RbacService.FILE_MANAGE, key)) {
+            return null;
+        }
+        try {
+            Path dir = home.resolve(home.rootDir(), key.substring(1));
+            session.store().mkdirs(dir);
+            session.acl().recordOwner(session.aclPath(dir), user.name());
+            return dir;
+        } catch (IOException | RuntimeException e) {
+            System.err.println("Personal home " + key + " unavailable: " + e.getMessage());
+            return null;
         }
     }
 

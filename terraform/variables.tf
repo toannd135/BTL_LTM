@@ -79,3 +79,9 @@ variable "auto_shutdown_time" {
   type        = string
   default     = "2300"
 }
+
+variable "backup_retention_days" {
+  description = "So ban snapshot o du lieu SeaweedFS giu lai (1 ban/ngay, cron tren VM-B)"
+  type        = number
+  default     = 7
+}

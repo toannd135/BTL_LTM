@@ -120,4 +120,16 @@ class AclServiceTest {
         acl.moveTree("/shared/dir", "/shared/x");
         assertEquals("B", acl.ownerOf("/shared/dir2"));
     }
+
+    @Test
+    void grantBelowMakesAncestorsTraversableReadOnly() throws Exception {
+        acl.recordOwner("/home/A", "A");
+        acl.grant("/home/A/test/f.txt", "B", Perm.DOWNLOAD, "A");
+        assertEquals(Perm.READ, acl.effective(b, "/home/A"));
+        assertEquals(Perm.READ, acl.effective(b, "/home/A/test"));
+        assertEquals(Perm.DOWNLOAD, acl.effective(b, "/home/A/test/f.txt"));
+        assertNull(acl.effective(b, "/home/A/other.txt"));
+        assertNull(acl.effective(d, "/home/A"));
+        assertFalse(acl.allows(b, "/home/A", Perm.WRITE));
+    }
 }
