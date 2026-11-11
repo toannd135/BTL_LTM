@@ -4,6 +4,10 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import ftpserver.acl.AclService;
 import ftpserver.audit.AuditLog;
@@ -38,6 +42,10 @@ public final class Main {
     private static final String DEFAULT_CONFIG_FILE = "ftpserver.conf";
     /** Timeout (ms) cho moi lan quet qua clamd. */
     private static final int CLAMD_TIMEOUT_MS = 120_000;
+    /** Quet lai: cho clamd/SeaweedFS on dinh sau khi VM bat roi moi chay lan dau. */
+    private static final long RESCAN_INITIAL_DELAY_MIN = 10;
+    /** Gioi han tep moi lan quet lai (tep quet lau nhat truoc), tranh chiem clamd qua lau. */
+    private static final int RESCAN_MAX_FILES = 2000;
 
     public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("--version")) {
@@ -71,6 +79,7 @@ public final class Main {
         FtpServer server = new FtpServer(config, userManager, pathResolver, registry, tls, audit,
                 new Services(new AclService(database), new RbacService(database), scan, store));
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
+        scheduleRescan(config, scan, store, pathResolver);
 
         server.start();
     }
@@ -110,6 +119,38 @@ public final class Main {
         return config.s3Enabled()
                 ? PathResolver.virtual(config.rootDir())
                 : new PathResolver(config.rootDir());
+    }
+
+    /**
+     * Quet lai dinh ky (scan.rescan_days &gt; 0 va co clamd): lan dau sau {@link #RESCAN_INITIAL_DELAY_MIN} phut
+     * (VM bat lai moi ngay nen lan nay chay hang ngay), sau do moi 24 h. Luong daemon, khong chan tat server.
+     */
+    private static void scheduleRescan(Config config, ScanService scan, FileStore store, PathResolver resolver) {
+        int days = config.scanRescanDays();
+        if (days <= 0 || !scan.canPrescan()) {
+            return;
+        }
+        ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "rescan");
+            t.setDaemon(true);
+            return t;
+        });
+        Function<String, Path> toStore = vpath -> {
+            try {
+                return resolver.resolve(resolver.rootDir(), vpath);
+            } catch (SecurityException e) {
+                return null;
+            }
+        };
+        timer.scheduleAtFixedRate(() -> {
+            try {
+                int n = scan.rescanDue(store, toStore, days, RESCAN_MAX_FILES);
+                System.out.println("Rescan: " + n + " file(s) (PENDING + CLEAN older than " + days + " days)");
+            } catch (RuntimeException e) {
+                System.err.println("Rescan failed: " + e.getMessage()); // khong de loi giet lich lap
+            }
+        }, RESCAN_INITIAL_DELAY_MIN, TimeUnit.DAYS.toMinutes(1), TimeUnit.MINUTES);
+        System.out.println("Rescan: every 24h, first in " + RESCAN_INITIAL_DELAY_MIN + " min, CLEAN older than " + days + " days");
     }
 
     /** clamd tu xa (scan.clamd) uu tien hon scan.command. */

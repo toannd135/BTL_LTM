@@ -17,6 +17,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import ftpserver.audit.AuditLog;
 import ftpserver.db.Database;
@@ -356,6 +357,57 @@ public class ScanService {
             System.err.println("Quarantine lookup failed for " + vpath + ": " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Quet lai dinh ky (goi tu lich trong Main): tep PENDING (quet loi/timeout luc tai len) va tep CLEAN quet lan cuoi
+     * truoc {@code cleanOlderThanDays} ngay - chu ky moi co the nhan ra ma doc luc tai len chua biet (zero-day).
+     * Nhiem -> cach ly + audit MALWARE nhu luong quet nen; quet loi -> giu PENDING. Tep khong con trong kho bi bo qua
+     * (ban ghi se duoc don khi xoa/doi ten). Chi chay khi co clamd.
+     *
+     * @param toStore   doi duong dan ao ("/a/b.txt") sang Path trong kho
+     * @param maxFiles  so tep toi da moi lan (tep quet lau nhat truoc)
+     * @return so tep da quet
+     */
+    public int rescanDue(FileStore store, Function<String, Path> toStore, int cleanOlderThanDays, int maxFiles) {
+        if (clamd == null) {
+            return 0;
+        }
+        String cutoff = Database.nowPlusMinutes(-cleanOlderThanDays * 24L * 60L);
+        List<String[]> due = new ArrayList<>();
+        try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
+                "SELECT path, sha256 FROM files WHERE status = ? OR (status = ? AND (scanned_at IS NULL OR scanned_at < ?)) "
+                        + "ORDER BY COALESCE(scanned_at, '') LIMIT ?")) {
+            ps.setString(1, STATUS_PENDING);
+            ps.setString(2, STATUS_CLEAN);
+            ps.setString(3, cutoff);
+            ps.setInt(4, maxFiles);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    due.add(new String[] {rs.getString(1), rs.getString(2)});
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Rescan query failed: " + e.getMessage());
+            return 0;
+        }
+        int scanned = 0;
+        for (String[] row : due) {
+            String vpath = row[0];
+            String sha = row[1];
+            Path file = toStore.apply(vpath);
+            if (file == null || !store.exists(file)) {
+                continue;
+            }
+            Result r = scanWithClamd(store, file);
+            if (r.verdict() == Verdict.INFECTED) {
+                quarantineInBackground(vpath, sha, store, file, r.detail());
+            } else {
+                recordResult(vpath, sha, r);
+            }
+            scanned++;
+        }
+        return scanned;
     }
 
     /** Ket qua INFECTED tu luong quet nen: cach ly neu duoc (khong thi INFECTED, van bi chan tai) va ghi audit. */

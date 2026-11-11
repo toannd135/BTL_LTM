@@ -189,4 +189,33 @@ class ScanServiceTest {
         assertEquals(false, Files.exists(f));
         assertEquals("file is quarantined", svc.blockReason("/v.bin"));
     }
+
+    /**
+     * Quet lai dinh ky: tep CLEAN quet tu lau (chu ky moi nay moi nhan ra) bi cach ly; tep CLEAN vua quet khong bi quet lai.
+     */
+    @Test
+    void rescanDueQuarantinesStaleCleanFile_skipsFreshOne(@TempDir Path tmp) throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("root"));
+        ftpserver.fs.FileStore store = new ftpserver.fs.LocalFileStore(root, tmp.resolve("q"));
+        Path old = Files.writeString(root.resolve("old.txt"), "zero-day");
+        Path fresh = Files.writeString(root.resolve("fresh.txt"), "ok");
+        Database db = db(tmp);
+        ScanService register = new ScanService(db, List.of(), true);
+        register.onUpload("/old.txt", store, old);
+        register.onUpload("/fresh.txt", store, fresh);
+        try (var c = db.open(); var st = c.createStatement()) {
+            st.executeUpdate("UPDATE files SET status = 'CLEAN', scanned_at = '2020-01-01 00:00:00' WHERE path = '/old.txt'");
+            st.executeUpdate("UPDATE files SET status = 'CLEAN', scanned_at = '" + Database.now() + "' WHERE path = '/fresh.txt'");
+        }
+        int scanned;
+        try (var s1 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            fakeReply(s1, "stream: Win.Test.ZeroDay FOUND"); // chi mot ket noi: neu quet ca fresh.txt se loi
+            ScanService svc = new ScanService(db, new ClamdClient("127.0.0.1", s1.getLocalPort(), 5000), true);
+            scanned = svc.rescanDue(store, v -> root.resolve(v.substring(1)), 7, 100);
+        }
+        assertEquals(1, scanned);
+        assertEquals(false, Files.exists(old));
+        assertEquals("file is quarantined", register.blockReason("/old.txt"));
+        assertEquals(null, register.blockReason("/fresh.txt"));
+    }
 }
