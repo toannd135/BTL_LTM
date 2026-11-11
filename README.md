@@ -1387,7 +1387,7 @@ ansible-playbook site.yml --ask-vault-pass -e app_version=sha-1a2b3c4   # tag im
 | Việc | Cách làm |
 |---|---|
 | Bật/tắt | Auto-shutdown 23:00 chỉ **tắt**, không tự bật. Bật **VM-B trước**, rồi VM-A (`az vm start`) |
-| Sao lưu | `scripts/backup-seaweedfs.sh [prefix] [số bản]`: snapshot incremental data disk VM-B, giữ 7 bản; nên dừng SeaweedFS 1 phút để nhất quán. Snapshot cùng RG nên `terraform destroy` vẫn xóa chung → cần sao chép sang RG khác để giữ lâu dài |
+| Sao lưu | Azure Backup (`terraform/backup.tf`): snapshot incremental data disk VM-B hằng ngày 23:30 (sau giờ tự tắt VM → nhất quán), giữ 7 ngày, vault + snapshot ở RG riêng `rg-<prefix>-backup`. `scripts/backup-seaweedfs.sh` để chụp thủ công |
 | Đổi IP nhà | Sửa `ssh_allowed_cidr`/`admin_web_allowed_cidr` rồi `terraform apply` |
 | Cập nhật ứng dụng | Push `main` → CI đẩy image `sha-<commit>` → `ansible-playbook site.yml -e app_version=sha-<commit>` |
 | Rollback | Chạy lại playbook với `app_version` cũ (danh sách tag ở GitHub → Packages) |

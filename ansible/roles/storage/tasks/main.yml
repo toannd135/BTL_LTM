@@ -53,3 +53,19 @@
     host: "{{ storage_private_ip }}"
     port: 3310
     timeout: 900
+
+- name: Ghi script snapshot o du lieu
+  ansible.builtin.template:
+    src: disk-snapshot.sh.j2
+    dest: "{{ ftp_base_dir }}/disk-snapshot.sh"
+    mode: "0750"
+  when: backup_disk_id is defined
+
+- name: Lich snapshot hang ngay (truoc gio VM tu tat)
+  ansible.builtin.cron:
+    name: disk-snapshot
+    user: root
+    hour: "{{ backup_cron_hour }}"
+    minute: "{{ backup_cron_minute }}"
+    job: "{{ ftp_base_dir }}/disk-snapshot.sh >> /var/log/disk-snapshot.log 2>&1"
+  when: backup_disk_id is defined

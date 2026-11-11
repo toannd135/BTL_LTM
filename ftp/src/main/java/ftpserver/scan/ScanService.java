@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
+import ftpserver.audit.AuditLog;
 import ftpserver.db.Database;
 import ftpserver.fs.FileStore;
 import ftpserver.scan.ClamdClient.Result;
@@ -32,7 +33,9 @@ import ftpserver.scan.ClamdClient.Verdict;
  * <ul>
  *   <li>PENDING - vua tai len/ghi de, chua quet xong hoac quet loi (khong coi la sach);</li>
  *   <li>CLEAN - scanner bao sach;</li>
- *   <li>INFECTED - scanner bao nhiem (QUARANTINED do admin dat ngoai server, cung bi chan).</li>
+ *   <li>INFECTED - scanner bao nhiem nhung chua cach ly duoc (khong biet tep trong kho, hoac di chuyen loi);</li>
+ *   <li>QUARANTINED - tep nhiem da bi dua ra khoi cay thu muc FTP ({@link FileStore#quarantine}), vi tri ghi o
+ *       files.quarantine_path; admin-web khoi phuc/xoa han tu do.</li>
  * </ul>
  * Ket qua quet chi ghi neu sha256 trong DB van khop ({@link #updateStatus}) nen lan quet cu khong de len noi dung moi.
  * Hai che do: lenh cuc bo (scan.command, quet nen tren tep that) hoac {@link ClamdClient} tu xa (doc thang tu
@@ -60,6 +63,7 @@ public class ScanService {
     private final List<String> command;
     private final boolean enforce;
     private final ClamdClient clamd; // co thi quet bang clamd tu xa thay vi chay lenh
+    private volatile AuditLog auditLog; // ghi su kien cach ly tu luong quet nen; null = khong ghi
 
     /** @param command lenh quet (tep duoc them vao cuoi), rong/null = khong quet */
     public ScanService(Database db, List<String> command, boolean enforce) {
@@ -77,6 +81,11 @@ public class ScanService {
         this.clamd = clamd;
     }
 
+    /** Noi ghi audit cho ket qua quet nen (tep nhiem bi cach ly ngoai phien FTP). */
+    public void setAuditLog(AuditLog auditLog) {
+        this.auditLog = auditLog;
+    }
+
     /** true neu co lenh quet hoac clamd; khong co thi tep chi duoc ghi nhan PENDING. */
     public boolean scannerConfigured() {
         return !command.isEmpty() || clamd != null;
@@ -84,7 +93,7 @@ public class ScanService {
 
     /** Ghi nhan tep moi/da doi noi dung; chay quet nen neu co scanner. */
     public void onUpload(String vpath, Path file) {
-        register(vpath, file, false, null);
+        register(vpath, file, false, null, null, null);
     }
 
     /**
@@ -98,7 +107,7 @@ public class ScanService {
         }
         Optional<Path> local = store.localPath(file);
         if (local.isPresent()) {
-            register(vpath, local.get(), false, null);
+            register(vpath, local.get(), false, null, store, file);
             return;
         }
         Path tmp = null;
@@ -108,7 +117,7 @@ public class ScanService {
             try (InputStream in = store.read(file, 0)) {
                 Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
             }
-            register(vpath, tmp, true, mtime);
+            register(vpath, tmp, true, mtime, store, file);
         } catch (IOException | RuntimeException e) {
             System.err.println("Scan register failed for " + vpath + ": " + e.getMessage());
             deleteQuietly(tmp);
@@ -120,8 +129,11 @@ public class ScanService {
      *
      * @param deleteAfter file la ban sao tam, phai xoa sau khi xong (ke ca khi loi)
      * @param mtimeOverride mtime cua tep goc trong kho (giay), null = lay tu {@code file}
+     * @param store kho chua tep goc (de cach ly neu nhiem), null = chi ghi trang thai
+     * @param storeFile duong dan tep goc trong {@code store}
      */
-    private void register(String vpath, Path file, boolean deleteAfter, Long mtimeOverride) {
+    private void register(String vpath, Path file, boolean deleteAfter, Long mtimeOverride,
+                          FileStore store, Path storeFile) {
         String sha;
         long size;
         long mtime;
@@ -146,7 +158,7 @@ public class ScanService {
             final String hash = sha;
             Thread.startVirtualThread(() -> {
                 try {
-                    runScan(vpath, file, hash);
+                    runScan(vpath, file, hash, store, storeFile);
                 } finally {
                     if (deleteAfter) {
                         deleteQuietly(file);
@@ -184,7 +196,14 @@ public class ScanService {
         if (print == null || !upsertPending(vpath, print.sha(), print.size(), print.mtime())) {
             return;
         }
-        Thread.startVirtualThread(() -> recordResult(vpath, print.sha(), scanWithClamd(store, file)));
+        Thread.startVirtualThread(() -> {
+            Result r = scanWithClamd(store, file);
+            if (r.verdict() == Verdict.INFECTED) {
+                quarantineInBackground(vpath, print.sha(), store, file, r.detail());
+            } else {
+                recordResult(vpath, print.sha(), r);
+            }
+        });
     }
 
     /** Doc tep trong kho de lay fingerprint; loi thi in log va tra null. */
@@ -245,8 +264,9 @@ public class ScanService {
     }
 
     /**
-     * Quet dong bo ngay sau khi upload (chi khi co clamd). Neu tep nhiem ma doc: xoa khoi kho, ghi ket qua vao DB
-     * va tra ve ten mau ma doc de handler bao loi cho client; tep sach / loi quet thi tra ve null.
+     * Quet dong bo ngay sau khi upload (chi khi co clamd). Neu tep nhiem ma doc: cach ly (QUARANTINED, khong cach ly
+     * duoc thi xoa khoi kho nhu cu), ghi ket qua vao DB va tra ve ten mau ma doc de handler bao loi cho client;
+     * tep sach / loi quet thi tra ve null.
      */
     public String scanUploadNow(String vpath, FileStore store, Path file) {
         if (clamd == null) {
@@ -264,6 +284,9 @@ public class ScanService {
             return null;
         }
         String detail = r.detail();
+        if (quarantine(vpath, sha, store, file, detail) != null) {
+            return detail;
+        }
         try {
             store.delete(file);
             updateStatus(vpath, sha, STATUS_INFECTED, "deleted on upload: " + detail);
@@ -283,8 +306,78 @@ public class ScanService {
         }
     }
 
+    /**
+     * Dua tep nhiem vao vung cach ly cua kho va dat QUARANTINED + quarantine_path (chi khi sha256 trong DB van khop).
+     *
+     * @return quarantine_path, hoac null neu khong cach ly duoc (tep goc giu nguyen, noi goi tu xu ly)
+     */
+    String quarantine(String vpath, String sha, FileStore store, Path file, String detail) {
+        if (store == null || file == null) {
+            return null;
+        }
+        Long id = fileId(vpath, sha);
+        if (id == null) {
+            return null;
+        }
+        String qpath;
+        try {
+            Path name = file.getFileName();
+            qpath = store.quarantine(file, id + "_" + (name == null ? "file" : name.toString()));
+        } catch (IOException | RuntimeException e) {
+            System.err.println("Quarantine failed for " + vpath + ": " + e.getMessage());
+            return null;
+        }
+        try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
+                "UPDATE files SET status = ?, detail = ?, quarantine_path = ?, scanned_at = ?, updated_at = ? WHERE id = ?")) {
+            String now = Database.now();
+            ps.setString(1, STATUS_QUARANTINED);
+            ps.setString(2, "quarantined on scan: " + detail);
+            ps.setString(3, qpath);
+            ps.setString(4, now);
+            ps.setString(5, now);
+            ps.setLong(6, id);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("Quarantine record failed for " + vpath + " (object at " + qpath + "): " + e.getMessage());
+        }
+        return qpath;
+    }
+
+    /** files.id cua phien ban tep (path, sha256); null neu da bi ghi de/xoa hoac loi CSDL. */
+    private Long fileId(String vpath, String sha) {
+        try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
+                "SELECT id FROM files WHERE path = ? AND sha256 = ?")) {
+            ps.setString(1, vpath);
+            ps.setString(2, sha);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : null;
+            }
+        } catch (SQLException e) {
+            System.err.println("Quarantine lookup failed for " + vpath + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** Ket qua INFECTED tu luong quet nen: cach ly neu duoc (khong thi INFECTED, van bi chan tai) va ghi audit. */
+    private void quarantineInBackground(String vpath, String sha, FileStore store, Path file, String detail) {
+        String qpath = quarantine(vpath, sha, store, file, detail);
+        if (qpath == null) {
+            updateStatus(vpath, sha, STATUS_INFECTED, detail);
+        }
+        AuditLog log = auditLog;
+        if (log != null) {
+            log.log("scan", "-", "-", "MALWARE", vpath + " infected: " + detail
+                    + (qpath != null ? " - quarantined" : " - marked infected (not quarantined)"), false);
+        }
+    }
+
     /** Chay scan.command tren tep, dong bo (test goi truc tiep). Timeout/exit la -> giu PENDING. */
     void runScan(String vpath, Path file, String sha) {
+        runScan(vpath, file, sha, null, null);
+    }
+
+    /** Nhu {@link #runScan(String, Path, String)}; co {@code store} thi tep nhiem duoc cach ly. */
+    void runScan(String vpath, Path file, String sha, FileStore store, Path storeFile) {
         String status = STATUS_PENDING;
         String detail;
         try {
@@ -309,6 +402,10 @@ public class ScanService {
             }
         } catch (IOException | InterruptedException e) {
             detail = "scan error: " + e.getMessage();
+        }
+        if (status.equals(STATUS_INFECTED) && store != null) {
+            quarantineInBackground(vpath, sha, store, storeFile, detail);
+            return;
         }
         updateStatus(vpath, sha, status, detail);
     }

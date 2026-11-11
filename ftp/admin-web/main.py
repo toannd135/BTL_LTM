@@ -828,6 +828,19 @@ def file_scan(file_id: int, request: Request, admin: str = Depends(require("scan
         c.execute("UPDATE files SET status=?, detail=?, scanned_at=?, updated_at=? WHERE id=?",
                   (status, detail, now, now, file_id))
     audit(admin, "ADMIN_FILE_SCAN", f"{row['path']} -> {status} ({detail})", ok=status != "INFECTED")
+    if status == "INFECTED":
+        # giong server FTP: tep nhiem tu dong ra khoi cay thu muc nguoi dung (khoi phuc/xoa han nhu cach ly tay)
+        try:
+            qpath = STORE.quarantine(row["path"], file_id)
+        except (storage.StorageError, OSError) as e:
+            flash(request, f"{row['path']}: INFECTED - {detail}; cách ly tự động lỗi: {e}", "danger")
+            return back("/files")
+        with db() as c:
+            c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, detail=?, updated_at=? WHERE id=?",
+                      (qpath, f"quarantined on scan: {detail}", utc_now(), file_id))
+        audit(admin, "ADMIN_FILE_QUARANTINE", f"{row['path']} (auto: {detail})")
+        flash(request, f"{row['path']}: INFECTED - {detail}; đã tự động cách ly", "danger")
+        return back("/files")
     flash(request, f"{row['path']}: {status} - {detail}", "danger" if status == "INFECTED" else "info")
     return back("/files")
 

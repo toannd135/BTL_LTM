@@ -66,9 +66,10 @@ public final class Main {
                 : null;
         AuditLog audit = new AuditLog(config.auditLog(), database);
 
+        ScanService scan = scanService(config, database);
+        scan.setAuditLog(audit); // ket qua quet nen (INFECTED -> cach ly) cung vao audit
         FtpServer server = new FtpServer(config, userManager, pathResolver, registry, tls, audit,
-                new Services(new AclService(database), new RbacService(database),
-                        scanService(config, database), store));
+                new Services(new AclService(database), new RbacService(database), scan, store));
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
 
         server.start();
@@ -100,8 +101,8 @@ public final class Main {
     private static FileStore createFileStore(Config config) {
         return config.s3Enabled()
                 ? S3FileStore.connect(config.s3().endpoint(), config.s3().region(), config.s3().accessKey(),
-                        config.s3().secretKey(), config.s3().bucket(), config.s3().prefix())
-                : new LocalFileStore(config.rootDir());
+                        config.s3().secretKey(), config.s3().bucket(), config.s3().prefix(), config.s3QuarantineBucket())
+                : new LocalFileStore(config.rootDir(), config.quarantineDir());
     }
 
     /** Voi S3, root.dir chi la goc ao (khong can ton tai tren dia). */

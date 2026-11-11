@@ -103,6 +103,11 @@ resource "azurerm_linux_virtual_machine" "storage" {
   network_interface_ids           = [azurerm_network_interface.storage.id]
   tags                            = var.tags
 
+  # Managed identity de cron tu chup snapshot o du lieu (backup.tf)
+  identity {
+    type = "SystemAssigned"
+  }
+
   admin_ssh_key {
     username   = var.admin_username
     public_key = file(pathexpand(var.ssh_public_key_path))

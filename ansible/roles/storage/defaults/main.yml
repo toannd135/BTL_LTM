@@ -5,3 +5,7 @@ clamd_mem_limit: 2g
 # Tep lon hon gioi han nay clamd tu choi (INSTREAM size limit exceeded) -> tep o lai PENDING
 clamd_max_file_size: 500M
 clamav_image: clamav/clamav:stable
+# Snapshot o du lieu hang ngay (cron, gio UTC cua VM). 15:45 UTC = 22:45 VN, truoc gio tu tat 23:00.
+# backup_disk_id / backup_resource_group_id / backup_location / backup_keep do Terraform ghi vao inventory
+backup_cron_hour: "15"
+backup_cron_minute: "45"

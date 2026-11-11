@@ -46,5 +46,6 @@ public final class FtpReply {
     public static final int NOT_LOGGED_IN             = 530;
     public static final int PROT_DENIED_POLICY        = 534;
     public static final int FILE_UNAVAILABLE          = 550;
+    public static final int EXCEEDED_STORAGE          = 552;
     public static final int FILE_NAME_NOT_ALLOWED     = 553;
 }

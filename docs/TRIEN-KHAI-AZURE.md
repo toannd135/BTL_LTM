@@ -33,9 +33,10 @@ cd ../ansible
 export ANSIBLE_CONFIG=$PWD/ansible.cfg          # bắt buộc nếu repo nằm trên ổ NTFS/world-writable: Ansible bỏ qua ansible.cfg
 ansible-galaxy collection install -r requirements.yml
 cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml   # điền openssl rand -hex 32; bắt buộc có vault_ftp_s3_access_key (>= 8 ký tự) và vault_ftp_s3_secret_key (>= 16)
-ansible-vault encrypt group_vars/ftpserver/vault.yml
+(umask 077; openssl rand -base64 32 > ~/.ansible-vault-pass)   # mật khẩu vault, NGOÀI repo; ansible.cfg trỏ tới tệp này
+ansible-vault encrypt group_vars/ftpserver/vault.yml           # sửa sau này: ansible-vault edit group_vars/ftpserver/vault.yml
 # Thu muc tren o NTFS (world-writable) -> Ansible bo qua ansible.cfg, phai chi dinh
-ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook site.yml --ask-vault-pass -e app_version=sha-1a2b3c4   # bỏ -e = latest; rollback = tag cũ
+ANSIBLE_CONFIG=$PWD/ansible.cfg ansible-playbook site.yml -e app_version=sha-1a2b3c4   # bỏ -e = latest; rollback = tag cũ
 ```
 Playbook chạy 3 play: base+docker (cả 2 VM) → storage (VM-B) → ftpserver (VM-A). Lần đầu clamd tải CSDL virus và nạp signature mất vài phút
 (playbook chờ tối đa 15 phút cổng 3310); clamd dùng ~1 GB RAM (đo thực tế ≈ 954 MiB).
@@ -70,8 +71,10 @@ xóa file nếu nhiễm. File sạch trả `226` và được ghi `CLEAN` ngay. 
 Dashboard/trang Tệp còn báo vàng nếu CSDL virus của clamd cũ hơn 3 ngày (freshclam trên VM-B không cập nhật được).
 
 ## Sao lưu SeaweedFS
-`scripts/backup-seaweedfs.sh [prefix] [số-bản-giữ]` tạo snapshot incremental của data disk VM-B (giữ 7 bản mới nhất). `terraform destroy` xóa cả snapshot cùng
-resource group — muốn giữ lâu dài phải sao chép sang RG khác. Nên chạy định kỳ (cron trên máy bạn) và trước mỗi lần `terraform destroy`.
+Tự động bằng Azure Backup (`terraform/backup.tf`): Backup vault `bv-<prefix>` chụp snapshot incremental data disk VM-B mỗi ngày 23:30 giờ VN
+(VM đã tự tắt lúc 23:00 nên snapshot nhất quán), giữ `backup_retention_days` ngày (mặc định 7). Vault + snapshot nằm ở RG riêng `rg-<prefix>-backup`.
+Khôi phục: Portal → Backup vault → Backup instances → Restore (tạo disk mới) → gắn vào VM-B tại LUN 0.
+`scripts/backup-seaweedfs.sh` vẫn dùng được để chụp thủ công ngoài lịch (vd. trước khi chạy script di chuyển dữ liệu).
 
 ## Dọn dẹp
 `terraform destroy` xóa toàn bộ resource group, **kể cả data disk** (trên VM-B: dữ liệu SeaweedFS) và Azure PostgreSQL. Sao lưu `/srv/ftp` trước.
