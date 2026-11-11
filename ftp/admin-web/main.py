@@ -805,6 +805,18 @@ def trend(cur: int, prev: int) -> dict | None:
     return {"pct": pct, "up": cur >= prev, "label": ">999%" if abs(pct) > 999 else f"{abs(pct)}%"}
 
 
+def range_display(rng: str, per: dict | None, now_vn: datetime) -> dict:
+    """Tieu de nut chon thoi gian + moc thuc te dang loc (gio Viet Nam), vd 'Tháng 05/2026' / '01/05/2026 – 31/05/2026'."""
+    if per:
+        start = datetime.strptime(per["since"], ISO_FMT).replace(tzinfo=timezone.utc).astimezone(VN_TZ)
+        end = datetime.strptime(per["until"], ISO_FMT).replace(tzinfo=timezone.utc).astimezone(VN_TZ) - timedelta(days=1)
+        title = f"Tháng {per['m']:02d}/{per['y']}" if per["unit"] == "day" else f"Năm {per['y']}"
+        return {"range_title": title, "range_dates": f"{start:%d/%m/%Y} – {end:%d/%m/%Y}"}
+    start = now_vn - timedelta(hours=RANGES[rng][0])
+    fmt = "%d/%m %H:%M" if rng == "24h" else "%d/%m/%Y"
+    return {"range_title": RANGES[rng][2].capitalize(), "range_dates": f"{start.strftime(fmt)} – {now_vn.strftime(fmt)}"}
+
+
 @app.get("/")
 def dashboard(request: Request, range: str = "24h", m: str = "", y: str = "", admin: str = Depends(require())):
     perms = set(request.session["perms"])
@@ -818,7 +830,7 @@ def dashboard(request: Request, range: str = "24h", m: str = "", y: str = "", ad
     ctx = {"users": None, "files": None, "storage": None, "rows": [], "failed_logins": 0, "activity": None,
            "traffic": None, "fail_ips": [], "malware": [], "clamd_stale": clamd_stale_days(), "alerts": None, "intake": None,
            "trends": {}, "range": rng, "ranges": RANGES, "range_label": range_label, "years": years, "period": per,
-           "this_month": now_vn.strftime("%Y-%m")}
+           "this_month": now_vn.strftime("%Y-%m"), **range_display(rng, per, now_vn)}
     with db() as c:
         if "user:manage" in perms:
             ctx["users"] = c.execute("SELECT COUNT(*) total, COUNT(CASE WHEN enabled=0 THEN 1 END) locked FROM users").fetchone()
@@ -1284,7 +1296,8 @@ def do_delete(admin: str, file_id: int) -> tuple[str, str]:
         row = _file(c, file_id)
         if row["status"] != "QUARANTINED":
             return "err", "Chỉ xóa hẳn được tệp đang cách ly"
-        STORE.purge(row["quarantine_path"])
+        if row["quarantine_path"]:  # ban ghi thieu quarantine_path: khong con gi de xoa, chi xoa ban ghi
+            STORE.purge(row["quarantine_path"])
         c.execute("DELETE FROM files WHERE id=?", (file_id,))
     audit(admin, "ADMIN_FILE_DELETE", row["path"])
     return "ok", row["path"]
@@ -1320,7 +1333,13 @@ def file_restore(file_id: int, request: Request, admin: str = Depends(require("s
         if STORE.exists(row["path"]):
             flash(request, "Vị trí gốc đã có tệp khác", "danger")
             return back(files_return(request))
-        STORE.restore(row["path"], row["quarantine_path"])
+        try:
+            if not row["quarantine_path"]:
+                raise OSError("thiếu đường dẫn cách ly")
+            STORE.restore(row["path"], row["quarantine_path"])
+        except OSError as e:  # tep cach ly da mat / ban ghi thieu quarantine_path -> bao loi thay vi 500
+            flash(request, f"Không khôi phục được {row['path']}: {e}", "danger")
+            return back(files_return(request))
         c.execute("UPDATE files SET status='PENDING', quarantine_path=NULL, detail='Khoi phuc tu cach ly', "
                   "updated_at=? WHERE id=?", (utc_now(), file_id))
     audit(admin, "ADMIN_FILE_RESTORE", row["path"])
