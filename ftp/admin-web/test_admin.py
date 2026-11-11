@@ -363,9 +363,9 @@ mval, yval = now_vn.strftime("%Y-%m"), str(now_vn.year)
 check("data_years lay tu CSDL, gom nam nay", main.data_years()[0] == now_vn.year)
 dm = a.get(f"/?range=month&m={mval}").text
 check("dashboard range=month: nhan + cot theo ngay", f"Số liệu tháng {now_vn.month:02d}/{now_vn.year}" in dm and '"unit": "day"' in dm
-      and f'value="{mval}"' in dm)
+      and f'value="{mval}" selected' in dm and f"Tháng {now_vn.month:02d}/{now_vn.year}" in dm and f"01/{now_vn.month:02d}/{now_vn.year} – " in dm)
 dy = a.get(f"/?range=year&y={yval}").text
-check("dashboard range=year: nhan + 12 cot thang", f"Số liệu năm {yval}" in dy and '"unit": "month"' in dy and '"T12"' in dy)
+check("dashboard range=year: nhan + 12 cot thang + moc ngay", f"Số liệu năm {yval}" in dy and f"01/01/{yval} – 31/12/{yval}" in dy and '"unit": "month"' in dy and '"T12"' in dy)
 check("dashboard range thang/nam sai -> 24 gio", all("Số liệu 24 giờ qua" in a.get(u).text for u in
       ("/?range=month&m=2026-13", "/?range=month&m=x", "/?range=year&y=1999", "/?range=year")))
 check("dashboard admin (khong audit:view) van chay voi range=month", c.get(f"/?range=month&m={mval}").status_code == 200)
