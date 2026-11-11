@@ -57,6 +57,9 @@ jobs:
           pipx install ansible-core
           ansible-galaxy collection install -r requirements.yml
           cp group_vars/ftpserver/vault.yml.example group_vars/ftpserver/vault.yml
+          # ansible.cfg tro vault_password_file toi ~/.ansible-vault-pass; vault.yml o day la ban mau
+          # chua ma hoa nen chi can tep ton tai (mat khau gia)
+          echo ci-dummy > ~/.ansible-vault-pass
           ansible-playbook site.yml --syntax-check -i inventory/hosts.ini.example
 
   admin-web-test:
