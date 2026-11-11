@@ -1,46 +1,124 @@
 {% extends "base.html" %}
 {% block content %}
 {% set can_manage = 'scan:manage' in perms %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h3 class="mb-0">Quản lý tệp tin</h3>
-  {% if can_manage %}<form method="post" action="/files/sync"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-primary">Đồng bộ từ thư mục FTP</button></form>{% endif %}
+{% set keep = [('q', q), ('ext', ext), ('owner', owner)] | selectattr('1') | list %}
+<div class="page-head">
+  <div><h3>Quản lý tệp tin</h3><div class="sub">Kết quả quét mã độc của các tệp trong kho FTP</div></div>
+  <div class="d-flex gap-2">
+    <a href="{{ export_url }}" class="btn btn-outline-secondary" title="Xuất danh sách đang lọc ra tệp CSV">Xuất CSV</a>
+    {% if can_manage %}<form method="post" action="/files/sync"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-primary">Đồng bộ từ thư mục FTP</button></form>{% endif %}
+  </div>
 </div>
-{% if not can_manage %}<div class="alert alert-info">Chế độ chỉ xem kết quả quét (bạn cần được cấp quyền quản lý quét tệp để thao tác).</div>{% endif %}
+{% if not can_manage %}<div class="note-soft" role="note"><span class="note-ico" aria-hidden="true">ℹ</span><div><strong>Chế độ chỉ xem.</strong> Bạn xem được kết quả quét và xuất CSV; cần quyền quản lý quét tệp để quét, duyệt, cách ly hoặc xóa.</div></div>{% endif %}
 {% if not clamav %}<div class="alert alert-warning">Hệ thống quét mã độc chưa sẵn sàng: nút "Quét" sẽ để tệp ở trạng thái "Chờ quét", quản trị viên cần duyệt thủ công.</div>{% endif %}
 {% if clamd_stale %}<div class="alert alert-warning">Dữ liệu nhận diện virus đã cũ {{ clamd_stale }} ngày. <details class="d-inline"><summary class="d-inline">Dành cho quản trị hệ thống</summary>Kiểm tra <code>freshclam</code> trên VM-B (clamd).</details></div>{% endif %}
-<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-<ul class="nav nav-pills">
-  <li class="nav-item"><a class="nav-link {{ 'active' if not status }}" href="/files">Tất cả</a></li>
-  {% for s in statuses %}<li class="nav-item"><a class="nav-link {{ 'active' if status == s }}" href="/files?status={{ s }}">{{ status_label(s) }}</a></li>{% endfor %}
-</ul>
-<form method="get" action="/files" class="d-flex gap-2" role="search">
-  {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
-  <input name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Tìm theo tên tệp" aria-label="Tìm theo tên tệp" style="min-width:200px">
-  <button class="btn btn-sm btn-outline-primary">Tìm</button>
-  {% if q %}<a href="/files{{ '?status=' ~ status if status }}" class="btn btn-sm btn-link">Xóa lọc</a>{% endif %}
+
+<div class="panel mb-3"><div class="panel-body filter-bar">
+  <div class="seg mb-2" role="navigation" aria-label="Lọc theo trạng thái">
+    <a class="{{ 'on' if not status }}" href="/files{{ '?' ~ (keep | urlencode) if keep }}">Tất cả</a>
+    {% for s in statuses %}<a class="{{ 'on' if status == s }}" href="/files?{{ (keep + [('status', s)]) | urlencode }}">{{ status_label(s) }}</a>{% endfor %}
+  </div>
+  <form method="get" action="/files" class="filter-grid" role="search">
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    <div class="search-box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input name="q" value="{{ q }}" class="form-control" placeholder="Tìm theo tên hoặc đường dẫn tệp…" aria-label="Tìm theo tên tệp"></div>
+    <input name="ext" value="{{ ext }}" class="form-control" placeholder="Đuôi tệp (pdf, docx…)" aria-label="Lọc theo đuôi tệp" list="extList">
+    <datalist id="extList">{% for e in ['pdf', 'docx', 'xlsx', 'pptx', 'txt', 'csv', 'zip', 'rar', 'jpg', 'png', 'exe', 'bin'] %}<option value="{{ e }}">{% endfor %}</datalist>
+    <select name="owner" class="form-select" aria-label="Lọc theo chủ sở hữu">
+      <option value="">Mọi chủ sở hữu</option>
+      <option value="-" {{ 'selected' if owner == '-' }}>(Chưa có chủ sở hữu)</option>
+      {% for o in owners %}<option value="{{ o }}" {{ 'selected' if owner == o }}>{{ o }}</option>{% endfor %}
+      {% if owner and owner != '-' and owner not in owners %}<option value="{{ owner }}" selected>{{ owner }}</option>{% endif %}
+    </select>
+    <div class="d-flex gap-2"><button class="btn btn-primary">Lọc</button>
+      {% if keep %}<a href="/files{{ '?status=' ~ status if status }}" class="btn btn-link text-muted">Xóa lọc</a>{% endif %}</div>
+  </form>
+</div></div>
+
+{% if can_manage %}
+<form id="bulkForm" method="post" action="/files/bulk" class="bulk-bar" hidden>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <span class="fw-semibold"><span id="bulkCount">0</span> tệp đã chọn</span>
+  <span class="text-muted small">(tối đa {{ bulk_max }} tệp mỗi lần)</span>
+  <span class="ms-auto d-flex flex-wrap gap-2">
+    <button name="action" value="scan" class="btn btn-xs btn-outline-secondary">Quét</button>
+    <button name="action" value="approve" class="btn btn-xs btn-outline-secondary" data-ask="Xác nhận các tệp đã chọn an toàn và cho phép sử dụng?">Duyệt sạch</button>
+    <button name="action" value="quarantine" class="btn btn-xs btn-outline-danger" data-ask="Cách ly các tệp đã chọn? Người dùng sẽ không tải được nữa.">Cách ly</button>
+    <button name="action" value="delete" class="btn btn-xs btn-danger" data-ask="Xóa hẳn các tệp đã chọn (chỉ áp dụng cho tệp đang cách ly)? Thao tác không thể hoàn tác.">Xóa hẳn</button>
+    <button type="button" class="btn btn-xs btn-link text-muted" id="bulkClear">Bỏ chọn</button>
+  </span>
 </form>
-</div>
-<div class="card shadow-sm"><div class="table-responsive"><table class="table table-sm align-middle mb-0">
-  <thead><tr><th>Tệp</th><th>Chủ sở hữu</th><th class="text-end">Kích thước</th><th>SHA-256</th><th>Trạng thái</th><th>Quét lúc</th><th>Chi tiết</th><th></th></tr></thead>
+{% endif %}
+
+<div class="panel"><div class="table-responsive"><table class="table align-middle mb-0 files-table">
+  <thead><tr>
+    {% if can_manage %}<th class="col-check"><input type="checkbox" class="form-check-input" id="checkAll" aria-label="Chọn tất cả tệp trên trang"></th>{% endif %}
+    <th>Tệp</th><th>Chủ sở hữu</th><th class="text-end">Kích thước</th><th>SHA-256</th><th>Trạng thái</th><th>Quét lúc</th><th>Chi tiết</th>{% if can_manage %}<th class="text-end">Thao tác</th>{% endif %}</tr></thead>
   <tbody>
   {% for f in files %}
-    {% set color = {'PENDING': 'warning', 'CLEAN': 'success', 'INFECTED': 'danger', 'QUARANTINED': 'dark'}[f.status] %}
+    {% set tagc = {'PENDING': 'warn', 'CLEAN': 'ok', 'INFECTED': 'danger', 'QUARANTINED': 'danger strong'}[f.status] %}
     <tr>
-      <td>{{ f.path }}</td><td>{{ f.owner or '—' }}</td><td class="text-nowrap text-end" title="{{ '{:,}'.format(f.size) }} B">{{ fmt_bytes(f.size) }}</td><td><code class="small">{{ f.sha256[:12] }}…</code></td>
-      <td><span class="badge text-bg-{{ color }}">{{ status_label(f.status) }}</span></td>
-      <td class="small text-nowrap">{% if f.scanned_at %}<time class="localtime" datetime="{{ iso_utc(f.scanned_at) }}">{{ iso_utc(f.scanned_at)[:16].replace('T', ' ') }} UTC</time>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-      <td class="small">{{ f.detail or '' }}</td>
-      <td class="text-nowrap">
-        {% macro act(name, label, cls, ask=none) %}<form method="post" action="/files/{{ f.id }}/{{ name }}" class="d-inline"{% if ask %} onsubmit="return confirm('{{ ask }}')"{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn btn-sm btn-outline-{{ cls }}">{{ label }}</button></form>{% endmacro %}
-        {% if not can_manage %}
-        {% elif f.status == 'QUARANTINED' %}{{ act('restore', 'Khôi phục', 'secondary') }} {{ act('delete', 'Xóa hẳn', 'danger', 'Xóa hẳn tệp này? Thao tác không thể hoàn tác.') }}
-        {% else %}{{ act('scan', 'Quét', 'primary') }}
-          {% if f.status in ('PENDING', 'INFECTED') %}{{ act('approve', 'Duyệt sạch', 'success', 'Xác nhận tệp này an toàn và cho phép sử dụng?') }}{% endif %}
-          {{ act('quarantine', 'Cách ly', 'danger', 'Cách ly tệp này? Người dùng sẽ không tải được tệp nữa.') }}{% endif %}
-      </td>
+      {% if can_manage %}<td class="col-check"><input type="checkbox" class="form-check-input row-check" form="bulkForm" name="ids" value="{{ f.id }}" aria-label="Chọn {{ f.path }}"></td>{% endif %}
+      <td class="file-path">{{ f.path }}</td>
+      <td>{{ f.owner or '—' }}</td>
+      <td class="text-nowrap text-end" title="{{ '{:,}'.format(f.size) }} B">{{ fmt_bytes(f.size) }}</td>
+      <td class="text-nowrap"><span class="hash" title="{{ f.sha256 }}">{{ f.sha256[:12] }}…</span><button type="button" class="copy-btn" data-copy="{{ f.sha256 }}" title="Sao chép SHA-256" aria-label="Sao chép SHA-256 của {{ f.path }}">⧉</button></td>
+      <td><span class="tag {{ tagc }}">{{ status_label(f.status) }}</span></td>
+      <td class="small text-nowrap">{% if f.scanned_at %}<time class="localtime" datetime="{{ iso_utc(f.scanned_at) }}">{{ iso_utc(f.scanned_at)[:16].replace('T', ' ') }} UTC</time>{% else %}<span class="text-muted">Chưa quét</span>{% endif %}</td>
+      <td class="small detail-cell">
+        {% if f.status == 'PENDING' and not f.scanned_at %}<span class="tag info">Đang trong hàng đợi quét</span>{% if f.detail %}<div class="text-muted mt-1">{{ f.detail }}</div>{% endif %}
+        {% elif f.status == 'INFECTED' %}<span class="text-danger fw-medium">{{ f.detail or 'Không rõ chữ ký' }}</span>
+        {% elif f.status == 'QUARANTINED' %}<div class="text-danger fw-medium">{{ f.detail or 'Cách ly thủ công' }}</div>{% if f.quarantine_path %}<div class="text-muted">Vị trí cách ly: <span class="font-monospace">{{ f.quarantine_path }}</span></div>{% endif %}
+        {% elif f.detail %}{{ f.detail }}
+        {% else %}<span class="text-muted">—</span>{% endif %}</td>
+      {% if can_manage %}<td class="text-end">
+        {% macro act(name, label, cls='', ask=none) %}<form method="post" action="/files/{{ f.id }}/{{ name }}"{% if ask %} onsubmit="return confirm('{{ ask }}')"{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"><button class="{{ cls }}">{{ label }}</button></form>{% endmacro %}
+        <details class="menu row-menu d-inline-block text-start">
+          <summary class="btn btn-xs btn-outline-secondary">Thao tác ▾</summary>
+          <div class="menu-pop">
+          {% if f.status == 'QUARANTINED' %}{{ act('restore', 'Khôi phục về vị trí cũ') }}{{ act('delete', 'Xóa hẳn', 'danger', 'Xóa hẳn tệp này? Thao tác không thể hoàn tác.') }}
+          {% else %}{{ act('scan', 'Quét lại') }}
+            {% if f.status in ('PENDING', 'INFECTED') %}{{ act('approve', 'Duyệt sạch', '', 'Xác nhận tệp này an toàn và cho phép sử dụng?') }}{% endif %}
+            {{ act('quarantine', 'Cách ly', 'danger', 'Cách ly tệp này? Người dùng sẽ không tải được tệp nữa.') }}{% endif %}
+          </div>
+        </details></td>{% endif %}
     </tr>
-  {% else %}<tr><td colspan="8" class="text-center text-muted">{% if q %}Không có tệp khớp "{{ q }}".{% else %}Chưa có tệp. Bấm "Đồng bộ từ thư mục FTP".{% endif %}</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="{{ 9 if can_manage else 7 }}" class="text-center text-muted py-4">{% if q %}Không có tệp khớp "{{ q }}".{% elif filtered %}Không có tệp khớp bộ lọc.{% else %}Chưa có tệp. Bấm "Đồng bộ từ thư mục FTP".{% endif %}</td></tr>{% endfor %}
   </tbody>
 </table></div>
 {% include "_pager.html" %}</div>
+<script>
+(function () {
+  // sao chep SHA-256
+  document.querySelectorAll('.copy-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(b.dataset.copy).then(function () { b.textContent = '✓'; setTimeout(function () { b.textContent = '⧉'; }, 1200); });
+    });
+  });
+})();
+</script>
+{% if can_manage %}
+<script>
+(function () {
+  var form = document.getElementById('bulkForm'); if (!form) return;
+  var all = document.getElementById('checkAll'), boxes = [].slice.call(document.querySelectorAll('.row-check'));
+  function sync() {
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    form.hidden = n === 0; document.getElementById('bulkCount').textContent = n;
+    all.checked = n > 0 && n === boxes.length; all.indeterminate = n > 0 && n < boxes.length;
+    boxes.forEach(function (b) { b.closest('tr').classList.toggle('selected', b.checked); });
+  }
+  all.addEventListener('change', function () { boxes.forEach(function (b) { b.checked = all.checked; }); sync(); });
+  boxes.forEach(function (b) { b.addEventListener('change', sync); });
+  document.getElementById('bulkClear').addEventListener('click', function () { all.checked = false; boxes.forEach(function (b) { b.checked = false; }); sync(); });
+  form.addEventListener('submit', function (e) {
+    var ask = e.submitter && e.submitter.dataset.ask;
+    if (ask && !confirm(ask)) e.preventDefault();
+  });
+  sync();
+})();
+</script>
+{% endif %}
+{% include "_row_menu.html" %}
 {% endblock %}

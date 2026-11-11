@@ -13,6 +13,8 @@ import os
 import re
 import secrets
 import shutil
+import socket
+import time
 import sqlite3
 import subprocess
 from contextlib import contextmanager
@@ -20,9 +22,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -68,6 +70,48 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET, https_only=False, same_
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 STATUS_LABELS = {"PENDING": "Chờ quét", "CLEAN": "Sạch", "INFECTED": "Nhiễm mã độc", "QUARANTINED": "Đã cách ly"}
 templates.env.globals["status_label"] = lambda s: STATUS_LABELS.get(s, s)
+EVENT_LABELS = {
+    "LOGIN": "Đăng nhập FTP", "LOGOUT": "Đăng xuất FTP", "UPLOAD": "Tải lên", "DOWNLOAD": "Tải về", "DELETE": "Xóa tệp",
+    "RENAME": "Đổi tên", "MKDIR": "Tạo thư mục", "RMDIR": "Xóa thư mục", "SHARE": "Chia sẻ", "DENIED": "Bị từ chối",
+    "AUTH_TLS": "Bật TLS", "MALWARE": "Phát hiện mã độc", "QUARANTINED": "Cách ly tệp", "SCAN": "Quét tệp",
+    "SCAN_VIEW": "Xem kết quả quét", "AUDIT_VIEW": "Xem nhật ký", "SESSION_KILL": "Ngắt phiên FTP",
+    "BREAKGLASS": "Break-glass", "BREAKGLASS_GRANT": "Cấp break-glass", "BREAKGLASS_REVOKE": "Thu hồi break-glass",
+    "BREAKGLASS_USE": "Dùng break-glass", "ADMIN_LOGIN": "Đăng nhập quản trị", "ADMIN_LOGOUT": "Đăng xuất quản trị",
+    "ADMIN_CREATE_USER": "Tạo tài khoản", "ADMIN_LOCK_USER": "Khóa/mở tài khoản", "ADMIN_RESET_PASSWORD": "Đặt lại mật khẩu",
+    "ADMIN_GRANT_ROLE": "Gán vai trò", "ADMIN_REVOKE_ROLE": "Gỡ vai trò", "ADMIN_FILE_SYNC": "Đồng bộ kho tệp",
+    "ADMIN_FILE_SCAN": "Quét lại tệp", "ADMIN_FILE_APPROVE": "Duyệt tệp", "ADMIN_FILE_QUARANTINE": "Cách ly tệp",
+    "ADMIN_FILE_RESTORE": "Khôi phục tệp", "ADMIN_FILE_DELETE": "Xóa hẳn tệp",
+}
+templates.env.globals["event_labels"] = EVENT_LABELS
+templates.env.filters["role_labels"] = lambda r: ROLE_LABELS.get(r, r)
+KV_RE = re.compile(r"(?<!\S)([a-z_]+)=(\S+)")
+KV_LABELS = {"perms": "Quyền", "bytes": "Dung lượng", "mode": "Chế độ", "user": "Tài khoản", "scope": "Phạm vi",
+             "minutes": "Phút", "reason": "Lý do", "added": "Thêm", "changed": "Đổi", "role": "Vai trò"}
+
+
+def detail_parts(detail: str) -> dict:
+    """Tach chi tiet audit thanh phan chu thuong + cac cap key=value de hien thanh tag (raw van xem duoc o ngan chi tiet).
+    'reason=' lay het phan con lai vi ly do co khoang trang."""
+    detail = detail or ""
+    reason = ""
+    if " reason=" in " " + detail:
+        detail, _, reason = (" " + detail).partition(" reason=")
+        detail = detail[1:] if detail.startswith(" ") else detail
+    pairs = []
+    for k, v in KV_RE.findall(detail):
+        if k == "bytes" and v.isdigit():
+            v = fmt_bytes(int(v))
+        pairs.append((KV_LABELS.get(k, k), v.split(",") if k == "perms" else [v]))
+    text = KV_RE.sub("", detail).strip(" :;,")
+    if reason:
+        pairs.append(("Lý do", [reason]))
+    return {"text": text, "pairs": pairs}
+
+
+templates.env.filters["detail_parts"] = detail_parts
+# Muc rui ro cua quyen -> mau tag o nhat ky (mot cho duy nhat)
+PERM_HIGH = {"breakglass:grant", "user:manage", "role:manage", "scan:manage", "config:manage", "file:manage", "file:delete"}
+templates.env.filters["perm_risk"] = lambda p: "perm-high" if p in PERM_HIGH else "perm-low"
 
 
 def fmt_bytes(n) -> str:
@@ -231,30 +275,36 @@ def _audit_row(r) -> dict:
     return d
 
 
-def _audit_where(event="", user="", result="") -> tuple[str, tuple]:
+def _audit_where(event="", user="", result="", ip="", session="") -> tuple[str, tuple]:
     conds, args = [], []
-    for col, val in (("event", event), ("username", user), ("result", result)):
+    for col, val in (("event", event), ("username", user), ("result", result), ("ip", ip), ("session", session)):
         if val:
             conds.append(f"{col}=?")
             args.append(val)
     return (" WHERE " + " AND ".join(conds) if conds else ""), tuple(args)
 
 
-def read_audit(limit=500, event="", user="", result="", offset=0, since_hours=0) -> list[dict]:
-    where, args = _audit_where(event, user, result)
+def read_audit(limit=500, event="", user="", result="", offset=0, since_hours=0, ip="", since="", until="",
+               session="") -> list[dict]:
+    where, args = _audit_where(event, user, result, ip, session)
     if since_hours:
-        since = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).strftime("%Y-%m-%dT%H:%M:%S")
+        since = max(since, (datetime.now(timezone.utc) - timedelta(hours=since_hours)).strftime("%Y-%m-%dT%H:%M:%S"))
+    if since:
         where, args = (where + " AND" if where else " WHERE") + " ts >= ?", args + (since,)
+    if until:
+        where, args = (where + " AND" if where else " WHERE") + " ts < ?", args + (until,)
     with db() as c:
         rows = c.execute(f"SELECT {AUDIT_COLS} FROM audit_events{where} ORDER BY id DESC LIMIT ? OFFSET ?",
                          args + (limit, offset)).fetchall()
     return [_audit_row(r) for r in rows]
 
 
-def count_audit(event="", user="", result="", since="") -> int:
-    where, args = _audit_where(event, user, result)
+def count_audit(event="", user="", result="", since="", until="", ip="", session="") -> int:
+    where, args = _audit_where(event, user, result, ip, session)
     if since:
         where, args = (where + " AND" if where else " WHERE") + " ts >= ?", args + (since,)
+    if until:
+        where, args = (where + " AND" if where else " WHERE") + " ts < ?", args + (until,)
     with db() as c:
         return c.execute("SELECT COUNT(*) FROM audit_events" + where, args).fetchone()[0]
 
@@ -262,6 +312,106 @@ def count_audit(event="", user="", result="", since="") -> int:
 # Khoang thoi gian cua dashboard: so gio nhin lai, do rong moi cot bieu do (gio)
 RANGES = {"24h": (24, 1, "24 giờ qua"), "7d": (168, 24, "7 ngày qua"), "30d": (720, 24, "30 ngày qua")}
 BYTES_RE = re.compile(r"\bbytes=(\d+)")
+
+
+try:
+    from zoneinfo import ZoneInfo
+    VN_TZ = ZoneInfo("Asia/Saigon")
+except Exception:  # thieu tzdata: Viet Nam co dinh UTC+7, khong doi gio mua he
+    VN_TZ = timezone(timedelta(hours=7))
+ISO_FMT = "%Y-%m-%dT%H:%M:%S"
+MONTH_RE = re.compile(r"(\d{4})-(\d{2})")
+
+
+def data_years(c=None) -> list[int]:
+    """Cac nam co du lieu (tu ban ghi nhat ky/tep cu nhat den nam nay), moi nhat truoc."""
+    now_y = datetime.now(VN_TZ).year
+    first = now_y
+    try:
+        with db() as c:
+            for sql in ("SELECT MIN(ts) FROM audit_events", "SELECT MIN(updated_at) FROM files"):
+                v = str(c.execute(sql).fetchone()[0] or "")[:4]
+                if v.isdigit() and 2000 <= int(v) <= now_y:
+                    first = min(first, int(v))
+    except DB_ERRORS:
+        pass
+    return list(range(now_y, first - 1, -1))
+
+
+def _vn_utc(y: int, m: int) -> str:
+    """Dau thang m/y theo gio Viet Nam -> chuoi UTC ISO de so sanh voi audit_events.ts."""
+    return datetime(y, m, 1, tzinfo=VN_TZ).astimezone(timezone.utc).strftime(ISO_FMT)
+
+
+def calendar_period(rng: str, m: str = "", y: str = "", years: list[int] | None = None) -> dict | None:
+    """range=month&m=YYYY-MM | range=year&y=YYYY (gio Viet Nam) -> moc UTC ky nay + ky truoc; tham so sai -> None."""
+    years = years if years is not None else data_years()
+    if rng == "month":
+        mm = MONTH_RE.fullmatch(m.strip())
+        if not mm or not 1 <= int(mm.group(2)) <= 12 or int(mm.group(1)) not in years:
+            return None
+        yy, mo = int(mm.group(1)), int(mm.group(2))
+        if (yy, mo) > (datetime.now(VN_TZ).year, datetime.now(VN_TZ).month):
+            return None
+        nxt, prv = (yy + (mo == 12), mo % 12 + 1), (yy - (mo == 1), (mo - 2) % 12 + 1)
+        return {"unit": "day", "since": _vn_utc(yy, mo), "until": _vn_utc(*nxt), "prev": _vn_utc(*prv),
+                "label": f"tháng {mo:02d}/{yy}", "short": f"{mo:02d}/{yy}", "value": f"{yy}-{mo:02d}", "y": yy, "m": mo}
+    if rng == "year":
+        if not y.strip().isdigit() or int(y) not in years:
+            return None
+        yy = int(y)
+        return {"unit": "month", "since": _vn_utc(yy, 1), "until": _vn_utc(yy + 1, 1), "prev": _vn_utc(yy - 1, 1),
+                "label": f"năm {yy}", "short": str(yy), "value": str(yy), "y": yy, "m": 0}
+    return None
+
+
+def activity_calendar(per: dict) -> dict:
+    """Nhu activity_by_hour nhung cho mot thang (cot = ngay) hoac mot nam (cot = thang), moc theo gio Viet Nam.
+    Gom theo gio UTC trong SQL roi doi sang ngay/thang VN o Python (VN lech UTC so gio chan)."""
+    yy, mo = per["y"], per["m"]
+    if per["unit"] == "day":
+        first = datetime(yy, mo, 1)
+        days = ((first.replace(year=yy + (mo == 12), month=mo % 12 + 1)) - first).days
+        keys = [f"{yy}-{mo:02d}-{d:02d}" for d in range(1, days + 1)]
+        labels = [f"{d:02d}/{mo:02d}" for d in range(1, days + 1)]
+        full = [f"Ngày {d:02d}/{mo:02d}/{yy}" for d in range(1, days + 1)]
+        kfmt = "%Y-%m-%d"
+    else:
+        keys = [f"{yy}-{k:02d}" for k in range(1, 13)]
+        labels = [f"T{k}" for k in range(1, 13)]
+        full = [f"Tháng {k:02d}/{yy}" for k in range(1, 13)]
+        kfmt = "%Y-%m"
+    n, index = len(keys), {k: i for i, k in enumerate(keys)}
+    series = {k: [0] * n for k in ("LOGIN", "UPLOAD", "DOWNLOAD", "LOGIN_FAIL", "MALWARE", "UP_BYTES", "DOWN_BYTES")}
+    args = (per["since"], per["until"])
+    with db() as c:
+        rows = c.execute("SELECT substr(ts,1,13) h, event, result, COUNT(*) n FROM audit_events WHERE ts >= ? AND ts < ? "
+                         "AND event IN ('LOGIN','UPLOAD','DOWNLOAD','MALWARE') GROUP BY substr(ts,1,13), event, result",
+                         args).fetchall()
+        moves = c.execute("SELECT substr(ts,1,13) h, event, detail FROM audit_events WHERE ts >= ? AND ts < ? "
+                          "AND result='OK' AND event IN ('UPLOAD','DOWNLOAD')", args).fetchall()
+
+    def slot(h: str):
+        try:
+            t = datetime.strptime(h, "%Y-%m-%dT%H").replace(tzinfo=timezone.utc).astimezone(VN_TZ)
+        except ValueError:
+            return None
+        return index.get(t.strftime(kfmt))
+    for r in rows:
+        i = slot(r["h"])
+        if i is None:
+            continue
+        if r["event"] == "MALWARE":
+            series["MALWARE"][i] += r["n"]
+        elif r["event"] == "LOGIN" and r["result"] != "OK":
+            series["LOGIN_FAIL"][i] += r["n"]
+        elif r["result"] == "OK":
+            series[r["event"]][i] += r["n"]
+    for r in moves:
+        i, m = slot(r["h"]), BYTES_RE.search(r["detail"] or "")
+        if i is not None and m:
+            series["UP_BYTES" if r["event"] == "UPLOAD" else "DOWN_BYTES"][i] += int(m.group(1))
+    return {"slots": keys, "labels": labels, "full": full, "series": series, "daily": True, "unit": per["unit"]}
 
 
 def since_iso(hours: int) -> str:
@@ -279,25 +429,38 @@ def activity_by_hour(hours: int = 24, bucket: int = 1):
     slots = [now - timedelta(hours=bucket * k) for k in range(n - 1, -1, -1)]
     width, fmt = (10, "%Y-%m-%d") if daily else (13, "%Y-%m-%dT%H")
     index = {t.strftime(fmt): i for i, t in enumerate(slots)}
-    series = {"LOGIN": [0] * n, "UPLOAD": [0] * n, "DOWNLOAD": [0] * n}
+    series = {k: [0] * n for k in ("LOGIN", "UPLOAD", "DOWNLOAD", "LOGIN_FAIL", "MALWARE", "UP_BYTES", "DOWN_BYTES")}
+    start = slots[0].strftime(fmt)
     with db() as c:
-        rows = c.execute(f"SELECT substr(ts,1,{width}) h, event, COUNT(*) n FROM audit_events WHERE ts >= ? AND result='OK' "
-                         f"AND event IN ('LOGIN','UPLOAD','DOWNLOAD') GROUP BY substr(ts,1,{width}), event",
-                         (slots[0].strftime(fmt),)).fetchall()
+        rows = c.execute(f"SELECT substr(ts,1,{width}) h, event, result, COUNT(*) n FROM audit_events WHERE ts >= ? "
+                         f"AND event IN ('LOGIN','UPLOAD','DOWNLOAD','MALWARE') "
+                         f"GROUP BY substr(ts,1,{width}), event, result", (start,)).fetchall()
+        moves = c.execute(f"SELECT substr(ts,1,{width}) h, event, detail FROM audit_events WHERE ts >= ? AND result='OK' "
+                          f"AND event IN ('UPLOAD','DOWNLOAD')", (start,)).fetchall()
     for r in rows:
         i = index.get(r["h"])
-        if i is not None:
+        if i is None:
+            continue
+        if r["event"] == "MALWARE":
+            series["MALWARE"][i] += r["n"]
+        elif r["event"] == "LOGIN" and r["result"] != "OK":
+            series["LOGIN_FAIL"][i] += r["n"]
+        elif r["result"] == "OK":
             series[r["event"]][i] += r["n"]
+    for r in moves:  # luu luong (byte) theo tung moc, doc 'bytes=N' trong detail
+        i, m = index.get(r["h"]), BYTES_RE.search(r["detail"] or "")
+        if i is not None and m:
+            series["UP_BYTES" if r["event"] == "UPLOAD" else "DOWN_BYTES"][i] += int(m.group(1))
     return {"slots": [t.strftime("%Y-%m-%dT%H:00:00Z") for t in slots], "series": series, "daily": daily}
 
 
-def traffic_since(since: str, top: int = 5) -> dict:
+def traffic_since(since: str, top: int = 5, until: str = "") -> dict:
     """Tong byte upload/download thanh cong (doc 'bytes=N' trong detail) + top nguoi dung theo tong luu luong."""
     up = down = 0
     per_user: dict[str, list[int]] = {}
     with db() as c:
-        rows = c.execute("SELECT username, event, detail FROM audit_events WHERE ts >= ? AND result='OK' "
-                         "AND event IN ('UPLOAD','DOWNLOAD')", (since,)).fetchall()
+        rows = c.execute("SELECT username, event, detail FROM audit_events WHERE ts >= ? AND ts < ? AND result='OK' "
+                         "AND event IN ('UPLOAD','DOWNLOAD')", (since, until or "9999")).fetchall()
     for r in rows:
         m = BYTES_RE.search(r["detail"] or "")
         if not m:
@@ -312,11 +475,11 @@ def traffic_since(since: str, top: int = 5) -> dict:
     return {"up": up, "down": down, "users": users[:top]}
 
 
-def failed_login_ips(since: str, top: int = 5) -> list:
+def failed_login_ips(since: str, top: int = 5, until: str = "") -> list:
     with db() as c:
         return c.execute("SELECT COALESCE(ip, '-') ip, COUNT(*) n, COUNT(DISTINCT username) users, MAX(ts) last "
-                         "FROM audit_events WHERE event='LOGIN' AND result='FAIL' AND ts >= ? "
-                         "GROUP BY COALESCE(ip, '-') ORDER BY n DESC, last DESC LIMIT ?", (since, top)).fetchall()
+                         "FROM audit_events WHERE event='LOGIN' AND result='FAIL' AND ts >= ? AND ts < ? "
+                         "GROUP BY COALESCE(ip, '-') ORDER BY n DESC, last DESC LIMIT ?", (since, until or "9999", top)).fetchall()
 
 
 def storage_stats(c, top: int = 5) -> dict:
@@ -340,6 +503,7 @@ def last_logins(c, usernames: list[str]) -> dict[str, str]:
 
 # ---------- phan trang ----------
 PER_PAGE_CHOICES = (10, 20, 50, 100)
+DEFAULT_PER_PAGE = 10  # moi trang danh sach mac dinh 10 dong
 
 
 def to_int(value, default: int) -> int:
@@ -351,7 +515,7 @@ def to_int(value, default: int) -> int:
 
 def paginate(request: Request, total: int, page, per_page) -> dict:
     """Thong tin phan trang + URL giu nguyen cac bo loc dang co tren query string."""
-    per_page = to_int(per_page, 20)
+    per_page = to_int(per_page, DEFAULT_PER_PAGE)
     per_page = per_page if per_page in PER_PAGE_CHOICES else 20
     pages = max(1, -(-total // per_page))
     page = min(max(1, to_int(page, 1)), pages)
@@ -465,9 +629,49 @@ def check_csrf(request: Request, token: str) -> None:
         raise HTTPException(status_code=403, detail="Phiên làm việc đã hết hạn, vui lòng tải lại trang rồi thử lại")
 
 
+ROLE_LABELS = {"system_admin": "Quản trị hệ thống", "security_auditor": "Kiểm toán bảo mật",
+               "file_manager": "Quản lý tệp", "employee": "Nhân viên"}
+
+
+def notices(perms: set, health: dict) -> list[tuple[str, str, str]]:
+    """Thong bao tren chuong: (muc do, noi dung, lien ket), chi gom thu nguoi xem co quyen thay."""
+    out = []
+    if not health["ftp_up"]:
+        out.append(("danger", f"Không kết nối được FTP server ({health['target']})", "/"))
+    disk = health.get("disk")
+    if disk and disk["pct"] >= 90:
+        out.append(("danger" if disk["pct"] >= 95 else "warn",
+                    f"Ổ đĩa kho tệp đã dùng {disk['pct']}% — còn {fmt_bytes(disk['total'] - disk['used'])}", "/#health"))
+    try:
+        with db() as c:
+            if perms & set(SCAN_VIEW):
+                st = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM files "
+                                                             "WHERE status IN ('INFECTED','PENDING') GROUP BY status")}
+                if st.get("INFECTED"):
+                    out.append(("danger", f"{st['INFECTED']} tệp nhiễm mã độc chưa xử lý", "/files?status=INFECTED"))
+                if st.get("PENDING"):
+                    out.append(("warn", f"{st['PENDING']} tệp đang chờ quét", "/files?status=PENDING"))
+            if "audit:view" in perms:
+                n = c.execute("SELECT COUNT(*) FROM audit_events WHERE event='MALWARE' AND ts >= ?", (since_iso(24),)).fetchone()[0]
+                if n:
+                    out.append(("danger", f"{n} lần chặn mã độc trong 24 giờ", "/audit?event=MALWARE"))
+                n = c.execute("SELECT COUNT(*) FROM audit_events WHERE event='LOGIN' AND result='FAIL' AND ts >= ?",
+                              (since_iso(1),)).fetchone()[0]
+                if n >= 5:
+                    out.append(("warn", f"{n} lần đăng nhập FTP thất bại trong 1 giờ", "/audit?event=LOGIN&result=FAIL"))
+    except DB_ERRORS:
+        pass
+    return out
+
+
 def render(request: Request, name: str, **ctx):
     ctx.update(csrf=csrf_token(request), admin=request.session.get("user"), perms=set(request.session.get("perms", [])),
                flash=request.session.pop("flash", None))
+    if ctx["admin"]:
+        ctx.setdefault("health", system_health())
+        ctx["notices"] = notices(ctx["perms"], ctx["health"])
+        with db() as c:
+            ctx["my_roles"] = sorted({r for r, _ in user_roles(c, ctx["admin"])})
     return templates.TemplateResponse(request, name, ctx)
 
 
@@ -477,6 +681,17 @@ def flash(request: Request, msg: str, kind: str = "success") -> None:
 
 def back(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
+
+
+def files_return(request: Request) -> str:
+    """Thao tac tep bam tu dashboard thi quay lai dashboard, con lai ve /files (giu bo loc). Chi nhan duong dan noi bo."""
+    from urllib.parse import urlsplit
+    ref = urlsplit(request.headers.get("referer", ""))
+    if ref.netloc and ref.netloc != request.url.netloc:
+        return "/files"
+    if ref.path == "/" or ref.path.startswith("/files"):
+        return ref.path + ("?" + ref.query if ref.query else "")
+    return "/files"
 
 
 # ---------- login ----------
@@ -514,27 +729,144 @@ def logout(request: Request, csrf: str = Form(...)):
 
 
 # ---------- dashboard ----------
+FTP_HEALTH = (os.environ.get("FTP_HEALTH_HOST", "127.0.0.1"), int(os.environ.get("FTP_HEALTH_PORT", "2121")))
+_health_cache: dict = {"at": 0.0, "data": None}
+
+
+def _meminfo() -> tuple[int, int] | None:
+    """(tong, con trong) byte tu /proc/meminfo; khong phai Linux -> None."""
+    try:
+        info = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines() if ":" in line)
+        kb = lambda k: int(info[k].split()[0]) * 1024
+        return kb("MemTotal"), kb("MemAvailable")
+    except (OSError, KeyError, ValueError):
+        return None
+
+
+def system_health() -> dict:
+    """Trang thai cong FTP + tai CPU/RAM/dia cua may chay trang quan tri. Cache 10 giay (moi trang deu goi)."""
+    now = time.monotonic()
+    if _health_cache["data"] and now - _health_cache["at"] < 10:
+        return _health_cache["data"]
+    t0 = time.monotonic()
+    try:
+        with socket.create_connection(FTP_HEALTH, timeout=0.5):
+            ftp_up, latency = True, round((time.monotonic() - t0) * 1000)
+    except OSError:
+        ftp_up, latency = False, None
+    try:
+        cpu = min(100, round(os.getloadavg()[0] / (os.cpu_count() or 1) * 100))
+    except OSError:
+        cpu = None
+    mem = _meminfo()
+    ram = round((1 - mem[1] / mem[0]) * 100) if mem else None
+    try:
+        du = shutil.disk_usage(ROOT if ROOT.exists() else "/")
+        disk = {"pct": round(du.used / du.total * 100), "used": du.used, "total": du.total}
+    except OSError:
+        disk = None
+    worst = max([v for v in (cpu, ram, disk and disk["pct"]) if v is not None] or [0])
+    level = "down" if not ftp_up or worst >= 95 else "warn" if worst >= 90 else "ok"
+    data = {"ftp_up": ftp_up, "latency": latency, "cpu": cpu, "ram": ram, "disk": disk, "level": level,
+            "target": "%s:%d" % FTP_HEALTH, "mem_total": mem[0] if mem else None}
+    _health_cache.update(at=now, data=data)
+    return data
+
+
+def security_alerts(c, limit: int = 6) -> list:
+    """Tep nhiem / da cach ly moi nhat (bang files) kem chu so huu, de xu ly nhanh tu dashboard."""
+    return c.execute("SELECT f.id, f.path, f.size, f.sha256, f.status, f.detail, f.updated_at, o.owner FROM files f "
+                     "LEFT JOIN file_owner o ON o.path = f.path WHERE f.status IN ('INFECTED','QUARANTINED') "
+                     "ORDER BY CASE f.status WHEN 'INFECTED' THEN 0 ELSE 1 END, f.updated_at DESC LIMIT ?",
+                     (limit,)).fetchall()
+
+
+def files_by_day(c, days: int = 14) -> dict:
+    """So tep va dung luong theo ngay sua doi (mtime, gio UTC), tach theo trang thai quet hien tai. Lay tu bang files
+    nen khong can quyen xem nhat ky."""
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    slots = [(today - timedelta(days=k)) for k in range(days - 1, -1, -1)]
+    index = {d.strftime("%Y-%m-%d"): i for i, d in enumerate(slots)}
+    series = {st: [0] * days for st in STATUSES}
+    size = [0] * days
+    for r in c.execute("SELECT mtime, size, status FROM files WHERE mtime >= ?", (int(slots[0].timestamp()),)):
+        i = index.get(datetime.fromtimestamp(r["mtime"], timezone.utc).strftime("%Y-%m-%d"))
+        if i is not None and r["status"] in series:
+            series[r["status"]][i] += 1
+            size[i] += r["size"]
+    return {"slots": [d.strftime("%Y-%m-%dT00:00:00Z") for d in slots], "series": series, "bytes": size}
+
+
+def trend(cur: int, prev: int) -> dict | None:
+    """% thay doi so voi ky truoc; ky truoc = 0 thi chi bao 'moi' khi nay > 0."""
+    if prev == 0:
+        return {"pct": None, "up": True} if cur else None
+    pct = round((cur - prev) / prev * 100)
+    return {"pct": pct, "up": cur >= prev, "label": ">999%" if abs(pct) > 999 else f"{abs(pct)}%"}
+
+
 @app.get("/")
-def dashboard(request: Request, range: str = "24h", admin: str = Depends(require())):
+def dashboard(request: Request, range: str = "24h", m: str = "", y: str = "", admin: str = Depends(require())):
     perms = set(request.session["perms"])
-    rng = range if range in RANGES else "24h"
-    hours, bucket, range_label = RANGES[rng]
+    years = data_years()
+    per = calendar_period(range, m, y, years)  # Thang/Nam; tham so sai -> ve 24h
+    rng = range if per or range in RANGES else "24h"
+    hours, bucket, range_label = RANGES.get(rng, (0, 0, ""))
+    if per:
+        range_label = per["label"]
+    now_vn = datetime.now(VN_TZ)
     ctx = {"users": None, "files": None, "storage": None, "rows": [], "failed_logins": 0, "activity": None,
-           "traffic": None, "fail_ips": [], "malware": [], "clamd_stale": clamd_stale_days(),
-           "range": rng, "ranges": RANGES, "range_label": range_label}
+           "traffic": None, "fail_ips": [], "malware": [], "clamd_stale": clamd_stale_days(), "alerts": None, "intake": None,
+           "trends": {}, "range": rng, "ranges": RANGES, "range_label": range_label, "years": years, "period": per,
+           "this_month": now_vn.strftime("%Y-%m")}
     with db() as c:
         if "user:manage" in perms:
             ctx["users"] = c.execute("SELECT COUNT(*) total, COUNT(CASE WHEN enabled=0 THEN 1 END) locked FROM users").fetchone()
         if perms & set(SCAN_VIEW):
             ctx["files"] = {r["status"]: r["n"] for r in c.execute("SELECT status, COUNT(*) n FROM files GROUP BY status")}
             ctx["storage"] = storage_stats(c)
+            ctx["alerts"] = security_alerts(c)
+            ctx["intake"] = files_by_day(c)
     if "audit:view" in perms:
-        since = since_iso(hours)
+        if per:  # ky nay = thang/nam da chon, ky truoc = thang/nam lien truoc
+            since, until, prev = per["since"], per["until"], per["prev"]
+            activity = activity_calendar(per)
+        else:
+            since, until, prev = since_iso(hours), "", since_iso(hours * 2)
+            activity = activity_by_hour(hours, bucket)
         ctx["malware"] = read_audit(limit=5, event="MALWARE", since_hours=24)  # canh bao luon tinh 24h
-        ctx.update(rows=read_audit(limit=5),  # dashboard co dinh khong cuon: chi vua 5 dong, xem them o trang Nhat ky
-                   failed_logins=count_audit(event="LOGIN", result="FAIL", since=since),
-                   activity=activity_by_hour(hours, bucket), traffic=traffic_since(since), fail_ips=failed_login_ips(since))
+        ctx.update(rows=read_audit(limit=15),
+                   failed_logins=count_audit(event="LOGIN", result="FAIL", since=since, until=until),
+                   activity=activity, traffic=traffic_since(since, until=until),
+                   fail_ips=failed_login_ips(since, until=until))
+        old = traffic_since(prev, until=since)
+        ctx["trends"] = {
+            "failed": trend(ctx["failed_logins"], count_audit(event="LOGIN", result="FAIL", since=prev, until=since)),
+            "up": trend(ctx["traffic"]["up"], old["up"]), "down": trend(ctx["traffic"]["down"], old["down"])}
     return render(request, "dashboard.html", **ctx)
+
+
+@app.get("/search")
+def search(request: Request, q: str = "", admin: str = Depends(require())):
+    """Tim nhanh tren thanh tren cung: tai khoan, tep, IP/nguoi dung trong nhat ky (theo quyen cua nguoi xem)."""
+    perms = set(request.session["perms"])
+    q = q.strip()[:120]
+    res = {"users": [], "files": [], "audit": []}
+    if q:
+        like = "%" + re.sub(r"([\\%_])", r"\\\1", q.lower()) + "%"
+        with db() as c:
+            if "user:manage" in perms:
+                res["users"] = c.execute("SELECT username, enabled, home FROM users WHERE LOWER(username) LIKE ? ESCAPE '\\' "
+                                         "ORDER BY username LIMIT 20", (like,)).fetchall()
+            if perms & set(SCAN_VIEW):
+                res["files"] = c.execute("SELECT id, path, size, status FROM files WHERE LOWER(path) LIKE ? ESCAPE '\\' "
+                                         "ORDER BY updated_at DESC LIMIT 20", (like,)).fetchall()
+        if "audit:view" in perms:
+            with db() as c:
+                rows = c.execute(f"SELECT {AUDIT_COLS} FROM audit_events WHERE ip = ? OR username = ? "
+                                 "ORDER BY id DESC LIMIT 20", (q, q)).fetchall()
+            res["audit"] = [_audit_row(r) for r in rows]
+    return render(request, "search.html", q=q, res=res)
 
 
 # ---------- users ----------
@@ -543,7 +875,7 @@ def all_roles(c) -> list[str]:
 
 
 @app.get("/users")
-def users_page(request: Request, page: str = "1", per_page: str = "20", admin: str = Depends(require("user:manage"))):
+def users_page(request: Request, page: str = "1", per_page: str = str(DEFAULT_PER_PAGE), admin: str = Depends(require("user:manage"))):
     with db() as c:
         total = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         pg = paginate(request, total, page, per_page)
@@ -774,26 +1106,78 @@ def scan_with_clamav(p: Path) -> tuple[str, str]:
     return "PENDING", error
 
 
-@app.get("/files")
-def files_page(request: Request, status: str = "", q: str = "", page: str = "1", per_page: str = "20",
-               admin: str = Depends(require(*SCAN_VIEW))):
-    q = q.strip()[:200]
+FILES_FROM = " FROM files f LEFT JOIN file_owner o ON o.path = f.path"
+
+
+def _like(s: str) -> str:
+    """Thoat % _ \\ de LIKE coi chung la ky tu thuong."""
+    return re.sub(r"([\\%_])", r"\\\1", s.lower())
+
+
+def files_filter(status="", q="", ext="", owner="") -> tuple[dict, str, tuple]:
+    """Chuan hoa bo loc trang tep -> (gia tri da lam sach, WHERE, tham so). Dung chung cho /files va /files/export.csv."""
+    q, owner = q.strip()[:200], owner.strip()[:64]
+    ext = re.sub(r"[^a-z0-9]", "", ext.strip().lower().lstrip("."))[:16]
+    status = status if status in STATUSES else ""
     conds, args = [], ()
-    if status in STATUSES:
+    if status:
         conds.append("f.status=?"); args += (status,)
     if q:  # tim theo ten/duong dan, khong phan biet hoa thuong; % va _ duoc coi la ky tu thuong
         conds.append("LOWER(f.path) LIKE ? ESCAPE '\\'")
-        args += ("%" + re.sub(r"([\\%_])", r"\\\1", q.lower()) + "%",)
+        args += ("%" + _like(q) + "%",)
+    if ext:
+        conds.append("LOWER(f.path) LIKE ? ESCAPE '\\'")
+        args += ("%." + _like(ext),)
+    if owner == "-":  # tep chua co chu so huu
+        conds.append("o.owner IS NULL")
+    elif owner:
+        conds.append("o.owner=?"); args += (owner,)
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    return {"status": status, "q": q, "ext": ext, "owner": owner}, where, args
+
+
+@app.get("/files")
+def files_page(request: Request, status: str = "", q: str = "", ext: str = "", owner: str = "", page: str = "1",
+               per_page: str = str(DEFAULT_PER_PAGE), admin: str = Depends(require(*SCAN_VIEW))):
+    flt, where, args = files_filter(status, q, ext, owner)
     with db() as c:
-        total = c.execute("SELECT COUNT(*) FROM files f" + where, args).fetchone()[0]
+        total = c.execute("SELECT COUNT(*)" + FILES_FROM + where, args).fetchone()[0]
         pg = paginate(request, total, page, per_page)
-        rows = c.execute("SELECT f.*, o.owner FROM files f LEFT JOIN file_owner o ON o.path = f.path" + where
+        rows = c.execute("SELECT f.*, o.owner" + FILES_FROM + where
                          + " ORDER BY f.updated_at DESC, f.id DESC LIMIT ? OFFSET ?",
                          args + (pg["per_page"], pg["offset"])).fetchall()
-    return render(request, "files.html", files=rows, statuses=STATUSES, status=status, q=q, pg=pg,
+        owners = [r[0] for r in c.execute("SELECT DISTINCT owner FROM file_owner ORDER BY owner LIMIT 300")]
+    filtered = any(flt.values())
+    return render(request, "files.html", files=rows, statuses=STATUSES, pg=pg, owners=owners, filtered=filtered,
+                  export_url="/files/export.csv" + ("?" + urlencode({k: v for k, v in flt.items() if v}) if filtered else ""),
+                  bulk_max=BULK_MAX, **flt,
                   clamav=bool(CLAMD or shutil.which("clamdscan") or shutil.which("clamscan")),
                   clamd_stale=clamd_stale_days())
+
+
+EXPORT_MAX = 50000  # gioi han so dong moi lan xuat CSV
+
+
+@app.get("/files/export.csv")
+def files_export(request: Request, status: str = "", q: str = "", ext: str = "", owner: str = "",
+                 admin: str = Depends(require(*SCAN_VIEW))):
+    import csv, io
+    flt, where, args = files_filter(status, q, ext, owner)
+    with db() as c:
+        rows = c.execute("SELECT f.path, f.size, f.status, f.detail, o.owner, f.sha256, f.scanned_at, f.updated_at"
+                         + FILES_FROM + where + " ORDER BY f.updated_at DESC, f.id DESC LIMIT ?",
+                         args + (EXPORT_MAX,)).fetchall()
+    buf = io.StringIO()
+    buf.write("\ufeff")  # BOM de Excel doc dung tieng Viet
+    w = csv.writer(buf)
+    w.writerow(["path", "size", "status", "detail", "owner", "sha256", "scanned_at", "updated_at"])
+    for r in rows:
+        w.writerow([("'" + v if isinstance(v, str) and v[:1] in "=+-@" else v) if v is not None else "" for v in tuple(r)])
+    # dung lai su kien SCAN_VIEW (xem ket qua quet) voi chi tiet export=csv
+    audit(admin, "SCAN_VIEW", " ".join([f"export=csv rows={len(rows)}"] + [f"{k}={v}" for k, v in flt.items() if v and " " not in v]))
+    name = "files-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + ".csv"
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.post("/files/sync")
@@ -802,7 +1186,7 @@ def files_sync(request: Request, admin: str = Depends(require("scan:manage")), c
     added, changed = sync_files()
     audit(admin, "ADMIN_FILE_SYNC", f"added={added} changed={changed}")
     flash(request, f"Đồng bộ xong: {added} tệp mới, {changed} tệp thay đổi")
-    return back("/files")
+    return back(files_return(request))
 
 
 def _file(c, file_id: int):
@@ -812,6 +1196,29 @@ def _file(c, file_id: int):
     return row
 
 
+def scan_file_row(admin: str, row) -> tuple[str, str]:
+    """Quet mot tep (tai ve tam neu kho S3); nhiem thi tu cach ly giong server FTP. Tra (muc flash, thong bao)."""
+    # tai + quet co the mat nhieu phut: khong giu ket noi/giao dich DB trong luc do
+    with STORE.local_copy(row["path"]) as local:
+        status, detail = scan_with_clamav(local)
+    now = utc_now()
+    with db() as c:
+        c.execute("UPDATE files SET status=?, detail=?, scanned_at=?, updated_at=? WHERE id=?",
+                  (status, detail, now, now, row["id"]))
+    audit(admin, "ADMIN_FILE_SCAN", f"{row['path']} -> {status} ({detail})", ok=status != "INFECTED")
+    if status != "INFECTED":
+        return "info", f"{row['path']}: {status} - {detail}"
+    try:
+        qpath = STORE.quarantine(row["path"], row["id"])
+    except (storage.StorageError, OSError) as e:
+        return "danger", f"{row['path']}: INFECTED - {detail}; cách ly tự động lỗi: {e}"
+    with db() as c:
+        c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, detail=?, updated_at=? WHERE id=?",
+                  (qpath, f"quarantined on scan: {detail}", utc_now(), row["id"]))
+    audit(admin, "ADMIN_FILE_QUARANTINE", f"{row['path']} (auto: {detail})")
+    return "danger", f"{row['path']}: INFECTED - {detail}; đã tự động cách ly"
+
+
 @app.post("/files/{file_id}/scan")
 def file_scan(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
@@ -819,60 +1226,88 @@ def file_scan(file_id: int, request: Request, admin: str = Depends(require("scan
         row = _file(c, file_id)
     if row["status"] == "QUARANTINED":
         flash(request, "Tệp đang được cách ly", "danger")
-        return back("/files")
-    # tai + quet co the mat nhieu phut: khong giu ket noi/giao dich DB trong luc do
-    with STORE.local_copy(row["path"]) as local:
-        status, detail = scan_with_clamav(local)
-    now = utc_now()
+        return back(files_return(request))
+    kind, msg = scan_file_row(admin, row)
+    flash(request, msg, kind)
+    return back(files_return(request))
+
+
+SCAN_BATCH = 20  # moi lan bam "Quet ngay" quet toi da bay nhieu tep cho, cu nhat truoc
+
+
+@app.post("/files/scan-pending")
+def files_scan_pending(request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
+    check_csrf(request, csrf)
     with db() as c:
-        c.execute("UPDATE files SET status=?, detail=?, scanned_at=?, updated_at=? WHERE id=?",
-                  (status, detail, now, now, file_id))
-    audit(admin, "ADMIN_FILE_SCAN", f"{row['path']} -> {status} ({detail})", ok=status != "INFECTED")
-    if status == "INFECTED":
-        # giong server FTP: tep nhiem tu dong ra khoi cay thu muc nguoi dung (khoi phuc/xoa han nhu cach ly tay)
+        rows = c.execute("SELECT * FROM files WHERE status='PENDING' ORDER BY updated_at, id LIMIT ?", (SCAN_BATCH,)).fetchall()
+    counts, errors = {"CLEAN": 0, "INFECTED": 0}, 0
+    for row in rows:
         try:
-            qpath = STORE.quarantine(row["path"], file_id)
-        except (storage.StorageError, OSError) as e:
-            flash(request, f"{row['path']}: INFECTED - {detail}; cách ly tự động lỗi: {e}", "danger")
-            return back("/files")
-        with db() as c:
-            c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, detail=?, updated_at=? WHERE id=?",
-                      (qpath, f"quarantined on scan: {detail}", utc_now(), file_id))
-        audit(admin, "ADMIN_FILE_QUARANTINE", f"{row['path']} (auto: {detail})")
-        flash(request, f"{row['path']}: INFECTED - {detail}; đã tự động cách ly", "danger")
-        return back("/files")
-    flash(request, f"{row['path']}: {status} - {detail}", "danger" if status == "INFECTED" else "info")
-    return back("/files")
+            kind, _ = scan_file_row(admin, row)
+            counts["INFECTED" if kind == "danger" else "CLEAN"] += 1
+        except (storage.StorageError, OSError):
+            errors += 1
+    msg = f"Đã quét {len(rows)} tệp chờ: {counts['CLEAN']} không nhiễm, {counts['INFECTED']} nhiễm (đã cách ly)"
+    msg += f", {errors} lỗi đọc tệp" if errors else ""
+    flash(request, msg if rows else "Không có tệp nào đang chờ quét", "danger" if counts["INFECTED"] else "info")
+    return back(files_return(request))
+
+
+def do_approve(admin: str, file_id: int) -> tuple[str, str]:
+    """Duyet sach mot tep. Tra ('ok', path) | ('err', thong bao)."""
+    with db() as c:
+        row = _file(c, file_id)
+        if row["status"] not in ("PENDING", "INFECTED"):
+            return "err", "Chỉ duyệt được tệp đang chờ quét hoặc nhiễm mã độc"
+        c.execute("UPDATE files SET status='CLEAN', detail=?, updated_at=? WHERE id=?",
+                  (f"Duyet thu cong boi {admin}", utc_now(), file_id))
+    audit(admin, "ADMIN_FILE_APPROVE", row["path"])
+    return "ok", row["path"]
+
+
+def do_quarantine(admin: str, file_id: int) -> tuple[str, str]:
+    """Cach ly mot tep. Tra ('ok', path) | ('skip', path) neu da cach ly."""
+    with db() as c:
+        row = _file(c, file_id)
+        if row["status"] == "QUARANTINED":
+            return "skip", row["path"]
+        qpath = STORE.quarantine(row["path"], file_id)
+        c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, updated_at=? WHERE id=?",
+                  (qpath, utc_now(), file_id))
+    audit(admin, "ADMIN_FILE_QUARANTINE", row["path"])
+    return "ok", row["path"]
+
+
+def do_delete(admin: str, file_id: int) -> tuple[str, str]:
+    """Xoa han mot tep dang cach ly. Tra ('ok', path) | ('err', thong bao)."""
+    with db() as c:
+        row = _file(c, file_id)
+        if row["status"] != "QUARANTINED":
+            return "err", "Chỉ xóa hẳn được tệp đang cách ly"
+        STORE.purge(row["quarantine_path"])
+        c.execute("DELETE FROM files WHERE id=?", (file_id,))
+    audit(admin, "ADMIN_FILE_DELETE", row["path"])
+    return "ok", row["path"]
 
 
 @app.post("/files/{file_id}/approve")
 def file_approve(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
-    with db() as c:
-        row = _file(c, file_id)
-        if row["status"] not in ("PENDING", "INFECTED"):
-            flash(request, "Chỉ duyệt được tệp đang chờ quét hoặc nhiễm mã độc", "danger")
-            return back("/files")
-        c.execute("UPDATE files SET status='CLEAN', detail=?, updated_at=? WHERE id=?",
-                  (f"Duyet thu cong boi {admin}", utc_now(), file_id))
-    audit(admin, "ADMIN_FILE_APPROVE", row["path"])
-    flash(request, f"Đã duyệt {row['path']}")
-    return back("/files")
+    state, text = do_approve(admin, file_id)
+    if state == "err":
+        flash(request, text, "danger")
+    else:
+        flash(request, f"Đã duyệt {text}")
+    return back(files_return(request))
 
 
 @app.post("/files/{file_id}/quarantine")
 def file_quarantine(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
-    with db() as c:
-        row = _file(c, file_id)
-        if row["status"] == "QUARANTINED":
-            return back("/files")
-        qpath = STORE.quarantine(row["path"], file_id)
-        c.execute("UPDATE files SET status='QUARANTINED', quarantine_path=?, updated_at=? WHERE id=?",
-                  (qpath, utc_now(), file_id))
-    audit(admin, "ADMIN_FILE_QUARANTINE", row["path"])
-    flash(request, f"Đã cách ly {row['path']}")
-    return back("/files")
+    state, text = do_quarantine(admin, file_id)
+    if state == "ok":
+        flash(request, f"Đã cách ly {text}")
+    return back(files_return(request))
 
 
 @app.post("/files/{file_id}/restore")
@@ -881,42 +1316,118 @@ def file_restore(file_id: int, request: Request, admin: str = Depends(require("s
     with db() as c:
         row = _file(c, file_id)
         if row["status"] != "QUARANTINED":
-            return back("/files")
+            return back(files_return(request))
         if STORE.exists(row["path"]):
             flash(request, "Vị trí gốc đã có tệp khác", "danger")
-            return back("/files")
+            return back(files_return(request))
         STORE.restore(row["path"], row["quarantine_path"])
         c.execute("UPDATE files SET status='PENDING', quarantine_path=NULL, detail='Khoi phuc tu cach ly', "
                   "updated_at=? WHERE id=?", (utc_now(), file_id))
     audit(admin, "ADMIN_FILE_RESTORE", row["path"])
     flash(request, f"Da khoi phuc {row['path']} (chuyển về trạng thái chờ quét, cần quét lại)")
-    return back("/files")
+    return back(files_return(request))
 
 
 @app.post("/files/{file_id}/delete")
 def file_delete(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
     """Xoa han tep da cach ly."""
     check_csrf(request, csrf)
-    with db() as c:
-        row = _file(c, file_id)
-        if row["status"] != "QUARANTINED":
-            flash(request, "Chỉ xóa hẳn được tệp đang cách ly", "danger")
-            return back("/files")
-        STORE.purge(row["quarantine_path"])
-        c.execute("DELETE FROM files WHERE id=?", (file_id,))
-    audit(admin, "ADMIN_FILE_DELETE", row["path"])
-    flash(request, f"Đã xóa hẳn {row['path']}")
-    return back("/files")
+    state, text = do_delete(admin, file_id)
+    if state == "err":
+        flash(request, text, "danger")
+    else:
+        flash(request, f"Đã xóa hẳn {text}")
+    return back(files_return(request))
+
+
+BULK_MAX = 50  # so tep toi da moi lan thao tac hang loat
+BULK_LABELS = {"scan": "Quét", "approve": "Duyệt sạch", "quarantine": "Cách ly", "delete": "Xóa hẳn"}
+
+
+@app.post("/files/bulk")
+def files_bulk(request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...),
+               action: str = Form(...), ids: list[int] = Form(default=[])):
+    """Thao tac hang loat tren cac tep da chon; moi tep van ghi su kien audit rieng nhu thao tac tung tep."""
+    check_csrf(request, csrf)
+    ids = list(dict.fromkeys(ids))  # bo trung, giu thu tu
+    if action not in BULK_LABELS:
+        raise HTTPException(400, "action khong hop le")
+    if not ids:
+        flash(request, "Chưa chọn tệp nào", "danger")
+        return back(files_return(request))
+    if len(ids) > BULK_MAX:
+        flash(request, f"Mỗi lần chỉ thao tác tối đa {BULK_MAX} tệp", "danger")
+        return back(files_return(request))
+    done = skipped = errors = infected = 0
+    for fid in ids:
+        try:
+            if action == "scan":
+                with db() as c:
+                    row = _file(c, fid)
+                if row["status"] == "QUARANTINED":
+                    skipped += 1
+                    continue
+                kind, _ = scan_file_row(admin, row)
+                infected += kind == "danger"
+                state = "ok"
+            else:
+                state, _ = {"approve": do_approve, "quarantine": do_quarantine, "delete": do_delete}[action](admin, fid)
+        except HTTPException:
+            state = "skip"  # tep khong con ton tai
+        except (storage.StorageError, OSError):
+            state = "fail"
+        done += state == "ok"
+        skipped += state in ("skip", "err")
+        errors += state == "fail"
+    msg = f"{BULK_LABELS[action]}: {done}/{len(ids)} tệp thành công"
+    msg += f", {skipped} bỏ qua (không hợp lệ với thao tác này)" if skipped else ""
+    msg += f", {errors} lỗi" if errors else ""
+    msg += f", {infected} tệp nhiễm đã tự động cách ly" if infected else ""
+    flash(request, msg, "danger" if errors or infected else "success")
+    return back(files_return(request))
 
 
 # ---------- audit ----------
+AUDIT_RANGES = {"today": "Hôm nay", "24h": "24 giờ", "7d": "7 ngày", "30d": "30 ngày", "month": "Tháng", "year": "Năm",
+                "custom": "Tùy chọn"}
+ISO_MIN_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d)?")
+
+
+def audit_period(rng: str, frm: str, to: str, tzo: str, m: str = "", y: str = "", years=None) -> tuple[str, str, str]:
+    """range + from/to (UTC, 'YYYY-MM-DDTHH:MM[:SS]', trinh duyet da doi tu gio dia phuong) -> (range, since, until).
+    tzo = Date.getTimezoneOffset() cua trinh duyet (phut) de tinh "hom nay" theo gio may xem; thieu thi theo UTC."""
+    now, fmt = datetime.now(timezone.utc), "%Y-%m-%dT%H:%M:%S"
+    hours = {"24h": 24, "7d": 168, "30d": 720}
+    if rng in hours:
+        return rng, (now - timedelta(hours=hours[rng])).strftime(fmt), ""
+    if rng in ("month", "year"):  # gio Viet Nam, giong dashboard; tham so sai -> bo loc thoi gian
+        per = calendar_period(rng, m, y, years)
+        return (rng, per["since"], per["until"]) if per else ("", "", "")
+    if rng == "today":
+        off = timedelta(minutes=max(-840, min(840, to_int(tzo, 0))))
+        local_midnight = (now - off).replace(hour=0, minute=0, second=0, microsecond=0)
+        return rng, (local_midnight + off).strftime(fmt), ""
+    frm = frm.strip()[:19] if ISO_MIN_RE.fullmatch(frm.strip()[:19]) else ""
+    to = to.strip()[:19] if ISO_MIN_RE.fullmatch(to.strip()[:19]) else ""
+    return ("custom" if frm or to else ""), frm, to
+
+
 @app.get("/audit")
 def audit_page(request: Request, event: str = "", user: str = "", result: str = "", page: str = "1",
-               per_page: str = "20", admin: str = Depends(require("audit:view"))):
-    event, user, result = event.strip(), user.strip(), result.strip()
-    pg = paginate(request, count_audit(event, user, result), page, per_page)
-    rows = read_audit(pg["per_page"], event, user, result, offset=pg["offset"])
-    return render(request, "audit.html", rows=rows, pg=pg, event=event, user=user, result=result)
+               per_page: str = str(DEFAULT_PER_PAGE), ip: str = "", session: str = "", range: str = "",
+               frm: str = Query("", alias="from"), to: str = "", tzo: str = "", m: str = "", y: str = "",
+               admin: str = Depends(require("audit:view"))):
+    event, user, result, ip, session = event.strip(), user.strip(), result.strip(), ip.strip()[:64], session.strip()[:64]
+    years = data_years()
+    rng, since, until = audit_period(range, frm, to, tzo, m, y, years)
+    pg = paginate(request, count_audit(event, user, result, since, until, ip=ip, session=session), page, per_page)
+    rows = read_audit(pg["per_page"], event, user, result, offset=pg["offset"], ip=ip, since=since, until=until,
+                      session=session)
+    return render(request, "audit.html", rows=rows, pg=pg, event=event, user=user, result=result, ip=ip,
+                  session=session, range=rng, frm=since if rng == "custom" else "", to=until if rng == "custom" else "",
+                  tzo=tzo, ranges=AUDIT_RANGES, years=years, m=m if rng == "month" else "", y=y if rng == "year" else "",
+                  this_month=datetime.now(VN_TZ).strftime("%Y-%m"),
+                  filtered=bool(event or user or result or ip or session or rng))
 
 
 # ---------- break-glass ----------

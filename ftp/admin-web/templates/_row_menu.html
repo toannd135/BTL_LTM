@@ -1,0 +1,22 @@
+<script>
+// Menu "Thao tac" trong bang: dat menu-pop o vi tri co dinh de khong bi .table-responsive cat mat
+(function () {
+  if (window.__rowMenu) return; window.__rowMenu = 1;
+  function place(d) {
+    var pop = d.querySelector('.menu-pop'), r = d.querySelector('summary').getBoundingClientRect();
+    pop.style.position = 'fixed'; pop.style.right = 'auto';
+    var w = pop.offsetWidth, h = pop.offsetHeight;
+    pop.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + 'px';
+    pop.style.top = (r.bottom + 6 + h > window.innerHeight && r.top - 6 - h > 0 ? r.top - 6 - h : r.bottom + 6) + 'px';
+  }
+  document.querySelectorAll('details.row-menu').forEach(function (d) {
+    d.addEventListener('toggle', function () {
+      if (!d.open) return;
+      document.querySelectorAll('details.row-menu[open]').forEach(function (o) { if (o !== d) o.removeAttribute('open'); });
+      place(d);
+    });
+  });
+  window.addEventListener('scroll', function () { document.querySelectorAll('details.row-menu[open]').forEach(function (d) { d.removeAttribute('open'); }); }, true);
+  window.addEventListener('resize', function () { document.querySelectorAll('details.row-menu[open]').forEach(place); });
+})();
+</script>
