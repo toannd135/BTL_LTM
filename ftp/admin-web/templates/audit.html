@@ -1,11 +1,83 @@
 {% extends "base.html" %}
 {% block content %}
-<h3 class="mb-3">Nhật ký</h3>
-<form class="row g-2 mb-3" method="get">
-  <div class="col-md-3"><input name="user" value="{{ user }}" class="form-control" placeholder="Người dùng"></div>
-  <div class="col-md-3"><input name="event" value="{{ event }}" class="form-control" placeholder="Sự kiện (LOGIN, UPLOAD, ADMIN_...)"></div>
-  <div class="col-md-2"><select name="result" class="form-select"><option value="">Mọi kết quả</option><option {{ 'selected' if result == 'OK' }}>OK</option><option {{ 'selected' if result == 'FAIL' }}>FAIL</option></select></div>
-  <div class="col-md-2"><button class="btn btn-primary">Lọc</button> <a href="/audit" class="btn btn-outline-secondary">Xóa lọc</a></div>
+<div class="page-head"><h3 class="mb-0">Nhật ký</h3>
+  <span class="row-hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2 8 5.1M5.1 8l-2.9-.8M14 4.1 12 6M6 12l-1.9 2"/></svg>Bấm vào một dòng để xem chi tiết đầy đủ</span></div>
+<form class="panel mb-3 audit-filter" method="get" id="auditFilter">
+  <div class="panel-body">
+    <div class="filter-grid audit">
+      <input name="user" value="{{ user }}" class="form-control" placeholder="Người dùng" aria-label="Người dùng">
+      <input name="ip" value="{{ ip }}" class="form-control" placeholder="Địa chỉ IP" aria-label="Địa chỉ IP">
+      <input name="event" value="{{ event }}" class="form-control" placeholder="Mã sự kiện (LOGIN, UPLOAD…)" aria-label="Mã sự kiện" list="eventCodes">
+      <datalist id="eventCodes">{% for code, label in event_labels.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</datalist>
+      <select name="result" class="form-select" aria-label="Kết quả"><option value="">Mọi kết quả</option><option value="OK" {{ 'selected' if result == 'OK' }}>Thành công</option><option value="FAIL" {{ 'selected' if result == 'FAIL' }}>Thất bại</option></select>
+      <div class="d-flex gap-2"><button class="btn btn-primary">Lọc</button>{% if filtered %}<a href="/audit" class="btn btn-link text-muted">Xóa lọc</a>{% endif %}</div>
+    </div>
+    <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+      <span class="small text-muted">Thời gian:</span>
+      <input type="hidden" name="range" id="rangeInput" value="{{ range }}">
+      <input type="hidden" name="tzo" id="tzoInput" value="{{ tzo }}">
+      <input type="hidden" name="from" id="fromUtc" value="{{ frm }}">
+      <input type="hidden" name="to" id="toUtc" value="{{ to }}">
+      {% if session %}<input type="hidden" name="session" value="{{ session }}">{% endif %}
+      <div class="seg" role="group" aria-label="Khoảng thời gian">
+        <a href="#" data-range="" class="{{ 'on' if not range }}">Mọi lúc</a>
+        {% for k, label in ranges.items() %}<a href="#" data-range="{{ k }}" class="{{ 'on' if range == k }}">{{ label }}</a>{% endfor %}
+      </div>
+      <span id="customRange" class="d-inline-flex flex-wrap align-items-center gap-2" {{ 'hidden' if range != 'custom' }}>
+        <input type="datetime-local" id="fromLocal" class="form-control form-control-sm w-auto" aria-label="Từ (giờ máy bạn)">
+        <span class="text-muted small">→</span>
+        <input type="datetime-local" id="toLocal" class="form-control form-control-sm w-auto" aria-label="Đến (giờ máy bạn)">
+        <span class="small text-muted">giờ máy bạn</span>
+      </span>
+      <span id="monthRange" class="d-inline-flex align-items-center gap-2" {{ 'hidden' if range != 'month' }}>
+        <input type="month" name="m" id="monthInput" value="{{ m }}" min="{{ years[-1] }}-01" max="{{ this_month }}" class="form-control form-control-sm w-auto" aria-label="Chọn tháng">
+        <span class="small text-muted">giờ Việt Nam</span></span>
+      <span id="yearRange" class="d-inline-flex align-items-center gap-2" {{ 'hidden' if range != 'year' }}>
+        <select name="y" id="yearInput" class="form-select form-select-sm w-auto" aria-label="Chọn năm"><option value="">Chọn năm…</option>
+          {% for yr in years %}<option value="{{ yr }}" {{ 'selected' if y == yr | string }}>{{ yr }}</option>{% endfor %}</select>
+        <span class="small text-muted">giờ Việt Nam</span></span>
+      {% if session %}<span class="tag info">Phiên: <span class="font-monospace">{{ session }}</span> <a href="{{ request.url.remove_query_params(['session', 'page']) }}" class="ms-1" aria-label="Bỏ lọc phiên">×</a></span>{% endif %}
+    </div>
+  </div>
 </form>
 <div class="card shadow-sm">{% include "_audit_table.html" %}{% include "_pager.html" %}</div>
+<script>
+(function () {
+  var f = document.getElementById('auditFilter');
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  function toLocal(iso) { // UTC 'YYYY-MM-DDTHH:MM[:SS]' -> gia tri datetime-local theo gio may
+    if (!iso) return ''; var d = new Date(iso.slice(0, 19) + 'Z'); if (isNaN(d)) return '';
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function toUtc(v) { if (!v) return ''; var d = new Date(v); return isNaN(d) ? '' : d.toISOString().slice(0, 19); }
+  document.getElementById('fromLocal').value = toLocal(document.getElementById('fromUtc').value);
+  document.getElementById('toLocal').value = toLocal(document.getElementById('toUtc').value);
+  document.getElementById('tzoInput').value = new Date().getTimezoneOffset();
+  f.querySelectorAll('[data-range]').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      document.getElementById('rangeInput').value = a.dataset.range;
+      var pick = { custom: 'customRange', month: 'monthRange', year: 'yearRange' };
+      if (pick[a.dataset.range]) {
+        Object.keys(pick).forEach(function (k) { document.getElementById(pick[k]).hidden = k !== a.dataset.range; });
+        f.querySelectorAll('[data-range]').forEach(function (b) { b.classList.toggle('on', b === a); });
+        document.getElementById(pick[a.dataset.range]).querySelector('input, select').focus(); return;
+      }
+      f.requestSubmit();
+    });
+  });
+  f.addEventListener('submit', function () {
+    var custom = document.getElementById('rangeInput').value === 'custom';
+    document.getElementById('fromUtc').value = custom ? toUtc(document.getElementById('fromLocal').value) : '';
+    document.getElementById('toUtc').value = custom ? toUtc(document.getElementById('toLocal').value) : '';
+    var rg = document.getElementById('rangeInput').value;
+    if (rg !== 'month') document.getElementById('monthInput').value = '';
+    if (rg !== 'year') document.getElementById('yearInput').value = '';
+    // khong gui tham so rong cho URL gon
+    f.querySelectorAll('input[name], select[name]').forEach(function (el) { el.disabled = !el.value; });
+  });
+  ['monthInput', 'yearInput'].forEach(function (id) { document.getElementById(id).addEventListener('change', function () { if (this.value) f.requestSubmit(); }); });
+  window.addEventListener('pageshow', function () { f.querySelectorAll('[disabled]').forEach(function (el) { el.disabled = false; }); });
+})();
+</script>
 {% endblock %}

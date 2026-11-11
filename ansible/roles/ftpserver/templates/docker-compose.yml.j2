@@ -71,6 +71,8 @@ services:
       FTP_DB_URL: postgresql://{{ ftp_db_url_suffix }}
       FTP_DB_USER: ftp
       FTP_DB_PASSWORD: ${FTP_DB_PASSWORD}
+      FTP_HEALTH_HOST: ftp    # admin-web kiem tra cong FTP (widget suc khoe)
+      FTP_HEALTH_PORT: "{{ ftp_control_port }}"
       FTPADMIN_SECRET: ${FTPADMIN_SECRET}
 {% if ftp_storage == 's3' %}
       FTP_S3_ENDPOINT: http://{{ storage_private_ip }}:8333
