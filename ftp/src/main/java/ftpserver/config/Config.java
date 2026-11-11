@@ -37,9 +37,13 @@ public class Config {
     private final long scanMaxBytes;
     private final Path quarantineDir;
     private final String s3QuarantineBucket;
+    private final int scanRescanDays;
 
     /** Gioi han mac dinh cua scan.max_bytes (500 MiB). */
     public static final long DEFAULT_SCAN_MAX_BYTES = 524_288_000L;
+
+    /** Mac dinh scan.rescan_days: tep CLEAN quet lan cuoi qua 7 ngay thi quet lai (chu ky moi). */
+    public static final int DEFAULT_SCAN_RESCAN_DAYS = 7;
 
     /** Cau hinh object storage S3 (SeaweedFS). */
     public record S3Settings(String endpoint, String region, String accessKey, String secretKey, String bucket, String prefix) {}
@@ -48,7 +52,7 @@ public class Config {
                    int idleTimeoutSeconds, Path dbPath, String dbUrl, String dbUser, String dbPassword, String pasvAddress,
                    Path tlsKeystore, String tlsKeystorePassword, boolean tlsRequired, Path auditLog,
                    List<String> scanCommand, boolean scanEnforce, S3Settings s3, String scanClamd,
-                   long scanMaxBytes, Path quarantineDir, String s3QuarantineBucket) {
+                   long scanMaxBytes, Path quarantineDir, String s3QuarantineBucket, int scanRescanDays) {
         this.controlPort = controlPort;
         this.rootDir = rootDir;
         this.dataPortMin = dataPortMin;
@@ -70,6 +74,7 @@ public class Config {
         this.scanMaxBytes = scanMaxBytes;
         this.quarantineDir = quarantineDir;
         this.s3QuarantineBucket = s3QuarantineBucket;
+        this.scanRescanDays = scanRescanDays;
     }
 
     /** Cong kenh dieu khien (control.port), thuong la 21. */
@@ -114,6 +119,11 @@ public class Config {
     public Path quarantineDir() { return quarantineDir; }
     /** Bucket cach ly tep nhiem khi dung S3 (s3.quarantine.bucket / FTP_S3_QUARANTINE_BUCKET, mac dinh &lt;bucket&gt;-quarantine). */
     public String s3QuarantineBucket() { return s3QuarantineBucket; }
+    /**
+     * Quet lai dinh ky (scan.rescan_days / FTP_SCAN_RESCAN_DAYS): moi 24 h quet lai tep PENDING va tep CLEAN quet lan cuoi
+     * qua so ngay nay, de bat ma doc ma luc tai len chu ky chua biet. 0 = tat. Chi chay khi co clamd.
+     */
+    public int scanRescanDays() { return scanRescanDays; }
 
     /**
      * Doc va kiem tra tep cau hinh.
@@ -178,14 +188,21 @@ public class Config {
         Path quarantineDir = quarantine == null ? null : Path.of(quarantine.trim());
         String s3QuarantineBucket = s3 == null ? null
                 : envOr("FTP_S3_QUARANTINE_BUCKET", props.getProperty("s3.quarantine.bucket", s3.bucket() + "-quarantine")).trim();
+        int scanRescanDays = (int) parseNonNegative("scan.rescan_days", envOr("FTP_SCAN_RESCAN_DAYS",
+                props.getProperty("scan.rescan_days", String.valueOf(DEFAULT_SCAN_RESCAN_DAYS))));
 
         return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds,
                 dbPath, dbUrl, dbUser, dbPassword, pasvAddress, tlsKeystore, keystorePassword, tlsRequired, auditLog,
-                scanCommand, scanEnforce, s3, scanClamd, scanMaxBytes, quarantineDir, s3QuarantineBucket);
+                scanCommand, scanEnforce, s3, scanClamd, scanMaxBytes, quarantineDir, s3QuarantineBucket, scanRescanDays);
     }
 
     /** scan.max_bytes: so nguyen &gt;= 0 (0 = khong gioi han). */
     private static long parseMaxBytes(String v) {
+        return parseNonNegative("scan.max_bytes", v);
+    }
+
+    /** So nguyen &gt;= 0 cho khoa {@code key}; sai thi IllegalArgumentException neu ro ten khoa. */
+    private static long parseNonNegative(String key, String v) {
         try {
             long n = Long.parseLong(v.trim());
             if (n < 0) {
@@ -193,7 +210,7 @@ public class Config {
             }
             return n;
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("scan.max_bytes must be an integer >= 0, got: " + v);
+            throw new IllegalArgumentException(key + " must be an integer >= 0, got: " + v);
         }
     }
 

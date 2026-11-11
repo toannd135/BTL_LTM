@@ -8,3 +8,6 @@ StreamMaxLength {{ clamd_max_file_size }}
 MaxFileSize {{ clamd_max_file_size }}
 MaxScanSize {{ clamd_max_file_size }}
 MaxThreads 4
+# Tep nen/tai lieu co mat khau (zip, rar, 7z, PDF/Office ma hoa) clamd khong mo duoc ben trong -> neu khong chan thi
+# ma doc lot qua duoi dang "CLEAN". yes = bao Heuristics.Encrypted.* FOUND -> upload bi tu choi nhu tep nhiem.
+AlertEncrypted {{ 'yes' if clamd_alert_encrypted | bool else 'no' }}
