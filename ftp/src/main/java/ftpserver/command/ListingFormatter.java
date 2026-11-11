@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import ftpserver.acl.Perm;
+import ftpserver.core.ClientSession;
 import ftpserver.fs.FileStore;
 import ftpserver.fs.FileStore.FileInfo;
 
@@ -35,6 +37,27 @@ final class ListingFormatter {
      * @param visible    loc cac muc user duoc phep thay
      * @param ownerOf    tra ten chu so huu cua mot duong dan (co the null), chi dung khi longFormat
      */
+    /**
+     * Thu muc can liet ke cho LIST/NLST: tham so la duong dan (tuyet doi hoac tuong doi) thi dung no,
+     * khong co tham so hoac chi la co kieu "-la" thi dung thu muc hien tai.
+     * Tra null neu duong dan ra ngoai thu muc goc, khong phai thu muc, hoac user khong co quyen READ.
+     */
+    static Path targetDir(ClientSession session, String arg) {
+        String path = arg == null ? "" : arg.trim();
+        if (path.startsWith("-")) { // bo co kieu ls (-a, -la ...), giu phan duong dan phia sau neu co
+            int space = path.indexOf(' ');
+            path = space < 0 ? "" : path.substring(space + 1).trim();
+        }
+        try {
+            Path dir = path.isEmpty() ? session.getCurrentDir()
+                    : session.pathResolver().resolve(session.getCurrentDir(), path);
+            boolean ok = session.store().isDirectory(dir) && session.can(dir, Perm.READ);
+            return ok ? dir : null;
+        } catch (SecurityException e) {
+            return null;
+        }
+    }
+
     static void writeListing(FileStore store, Path dir, Socket dataSocket, boolean longFormat,
                              Predicate<Path> visible, Function<Path, String> ownerOf) throws IOException {
         List<FileInfo> entries = store.list(dir).stream()
