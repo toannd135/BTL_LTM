@@ -48,6 +48,10 @@ WEB_PERMS = {"user:manage", "role:manage", "audit:view", "scan:view", "scan:mana
 LOGIN_PERMS = WEB_PERMS - {"scan:view"}
 # vai tro RBAC -> (users.role, users.read_only) de tuong thich cot cu
 ROLE_COMPAT = {"system_admin": ("admin", 0), "security_auditor": ("readonly", 1)}
+# tach nhiem vu tinh (static SoD): cac cap vai tro khong duoc cung nam tren mot tai khoan (moi scope)
+SOD_CONFLICTS = {frozenset({"system_admin", "security_auditor"})}
+# tai khoan giu cac vai tro nay khong bi user:manage dat lai mat khau (chong chiem tai khoan quan tri/kiem toan)
+PRIVILEGED_ROLES = {"system_admin", "security_auditor"}
 BREAKGLASS_MAX_MINUTES = 480
 STATUSES = ("PENDING", "CLEAN", "INFECTED", "QUARANTINED")
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
@@ -591,6 +595,16 @@ def sync_compat_role(c, username: str) -> None:
     c.execute("UPDATE users SET role=?, read_only=? WHERE username=?", (role, ro, username))
 
 
+def role_names(c, username: str) -> set[str]:
+    """Ten vai tro cua user (moi scope, ke ca fallback)."""
+    return {r for r, _ in user_roles(c, username)}
+
+
+def sod_conflict(role: str, held: set[str]) -> str | None:
+    """Vai tro trong `held` xung dot SoD voi `role`, hoac None."""
+    return next((o for pair in SOD_CONFLICTS if role in pair for o in pair - {role} if o in held), None)
+
+
 def norm_scope(scope: str) -> str | None:
     """Chuan hoa thanh '/a/b'; co '..' hoac '.' -> None."""
     parts = [p for p in (scope or "").strip().replace("\\", "/").split("/") if p]
@@ -895,7 +909,9 @@ def users_page(request: Request, page: str = "1", per_page: str = str(DEFAULT_PE
         assigned = {u["username"]: user_roles(c, u["username"]) for u in rows}
         roles = all_roles(c)
         last = last_logins(c, [u["username"] for u in rows])
-    return render(request, "users.html", users=rows, assigned=assigned, roles=roles, pg=pg, last=last)
+    held = {u: {r for r, _ in rs} for u, rs in assigned.items()}
+    return render(request, "users.html", users=rows, assigned=assigned, roles=roles, pg=pg, last=last,
+                  held=held, sod_conflict=sod_conflict, privileged_roles=PRIVILEGED_ROLES)
 
 
 @app.post("/users")
@@ -927,15 +943,24 @@ def create_user(request: Request, admin: str = Depends(require("user:manage")), 
 @app.post("/users/{username}/toggle")
 def toggle_user(username: str, request: Request, admin: str = Depends(require("user:manage")), csrf: str = Form(...)):
     check_csrf(request, csrf)
+    refused = None  # (reason, thong bao)
     with db() as c:
         row = c.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         if not row:
             raise HTTPException(404)
         locking = row["enabled"] == 1
         if locking and (username == admin or (is_sysadmin(c, username) and _other_active_admins(c, username) == 0)):
-            flash(request, "Không thể khóa chính mình hoặc quản trị viên hệ thống cuối cùng", "danger")
-            return back("/users")
-        c.execute("UPDATE users SET enabled=? WHERE username=?", (0 if locking else 1, username))
+            refused = ("self" if username == admin else "last_admin",
+                       "Không thể khóa chính mình hoặc quản trị viên hệ thống cuối cùng")
+        elif locking and "security_auditor" in role_names(c, username):
+            refused = ("auditor_target", "Không thể khóa tài khoản kiểm toán viên (security_auditor): "
+                                         "quản trị viên không được tự loại bỏ người giám sát mình")
+        else:
+            c.execute("UPDATE users SET enabled=? WHERE username=?", (0 if locking else 1, username))
+    if refused:
+        audit(admin, "ADMIN_LOCK_USER", f"{username} refused reason={refused[0]}", ok=False)
+        flash(request, refused[1], "danger")
+        return back("/users")
     audit(admin, "ADMIN_LOCK_USER" if locking else "ADMIN_UNLOCK_USER", username)
     flash(request, f"Đã {'khóa' if locking else 'mở khóa'} {username}")
     return back("/users")
@@ -957,18 +982,35 @@ def _role_form(c, username: str, role: str, scope: str):
     return scope, None
 
 
+SELF_ROLE_MSG = "Không thể tự gán/gỡ vai trò của chính mình (tách nhiệm vụ: cần một quản trị viên khác thực hiện)"
+
+
+def _refuse(request: Request, admin: str, event: str, detail: str, reason: str, msg: str):
+    """Tu choi thao tac: ghi audit FAIL kem ly do, bao loi, quay ve /users."""
+    audit(admin, event, f"{detail} refused reason={reason}", ok=False)
+    flash(request, msg, "danger")
+    return back("/users")
+
+
 @app.post("/users/{username}/roles")
 def add_role(username: str, request: Request, admin: str = Depends(require("role:manage")), role: str = Form(...),
              scope: str = Form("/"), csrf: str = Form(...)):
     check_csrf(request, csrf)
+    if username == admin:
+        return _refuse(request, admin, "ADMIN_GRANT_ROLE", f"{username} +{role}@{scope}", "self", SELF_ROLE_MSG)
     with db() as c:
-        scope, err = _role_form(c, username, role, scope)
-        if err:
-            flash(request, err, "danger")
-            return back("/users")
-        added = c.execute("INSERT INTO user_roles(username, role, scope) VALUES (?,?,?) ON CONFLICT DO NOTHING",
-                          (username, role, scope)).rowcount
-        sync_compat_role(c, username)
+        conflict = sod_conflict(role, role_names(c, username))
+        if not conflict:
+            scope, err = _role_form(c, username, role, scope)
+            if err:
+                flash(request, err, "danger")
+                return back("/users")
+            added = c.execute("INSERT INTO user_roles(username, role, scope) VALUES (?,?,?) ON CONFLICT DO NOTHING",
+                              (username, role, scope)).rowcount
+            sync_compat_role(c, username)
+    if conflict:
+        return _refuse(request, admin, "ADMIN_GRANT_ROLE", f"{username} +{role}@{scope}", "sod_conflict",
+                       f"Tách nhiệm vụ: {username} đang giữ vai trò {conflict}, không thể gán thêm {role}")
     if not added:
         flash(request, f"{username} đã có vai trò {role}@{scope}", "info")
         return back("/users")
@@ -981,6 +1023,9 @@ def add_role(username: str, request: Request, admin: str = Depends(require("role
 def remove_role(username: str, request: Request, admin: str = Depends(require("role:manage")), role: str = Form(...),
                 scope: str = Form("/"), csrf: str = Form(...)):
     check_csrf(request, csrf)
+    if username == admin:
+        return _refuse(request, admin, "ADMIN_REVOKE_ROLE", f"{username} -{role}@{scope}", "self", SELF_ROLE_MSG)
+    last_admin = False
     with db() as c:
         scope, err = _role_form(c, username, role, scope)
         if err:
@@ -988,13 +1033,14 @@ def remove_role(username: str, request: Request, admin: str = Depends(require("r
             return back("/users")
         if (role, scope) == ("system_admin", "/"):
             row = c.execute("SELECT enabled FROM users WHERE username=?", (username,)).fetchone()
-            if username == admin or (row["enabled"] == 1 and _other_active_admins(c, username) == 0):
-                audit(admin, "ADMIN_REVOKE_ROLE", f"{username} -{role}@{scope} refused", ok=False)
-                flash(request, "Không thể tự gỡ quyền quản trị của chính mình hoặc gỡ quản trị viên hệ thống cuối cùng", "danger")
-                return back("/users")
-        removed = c.execute("DELETE FROM user_roles WHERE username=? AND role=? AND scope=?",
-                            (username, role, scope)).rowcount
-        sync_compat_role(c, username)
+            last_admin = row["enabled"] == 1 and _other_active_admins(c, username) == 0
+        if not last_admin:
+            removed = c.execute("DELETE FROM user_roles WHERE username=? AND role=? AND scope=?",
+                                (username, role, scope)).rowcount
+            sync_compat_role(c, username)
+    if last_admin:
+        return _refuse(request, admin, "ADMIN_REVOKE_ROLE", f"{username} -{role}@{scope}", "last_admin",
+                       "Không thể gỡ quản trị viên hệ thống cuối cùng")
     if not removed:
         flash(request, f"{username} không có vai trò {role}@{scope}", "info")
         return back("/users")
@@ -1011,8 +1057,15 @@ def reset_password(username: str, request: Request, admin: str = Depends(require
         flash(request, "Mật khẩu phải từ 4 ký tự", "danger")
         return back("/users")
     with db() as c:
-        if c.execute("UPDATE users SET password_hash=? WHERE username=?", (hash_password(password), username)).rowcount == 0:
+        if not c.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
             raise HTTPException(404)
+        privileged = username != admin and role_names(c, username) & PRIVILEGED_ROLES
+        if not privileged:
+            c.execute("UPDATE users SET password_hash=? WHERE username=?", (hash_password(password), username))
+    if privileged:
+        return _refuse(request, admin, "ADMIN_RESET_PASSWORD", username, "privileged_target",
+                       f"Không thể đặt lại mật khẩu cho tài khoản đặc quyền ({', '.join(sorted(privileged))}): "
+                       "chủ tài khoản phải tự đổi mật khẩu")
     audit(admin, "ADMIN_RESET_PASSWORD", username)
     flash(request, f"Đã đặt lại mật khẩu cho {username}")
     return back("/users")

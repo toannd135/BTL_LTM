@@ -130,8 +130,76 @@ c2 = login_as("admin2", "pw1234")
 check("admin2 khong dang nhap lai duoc", c2.get("/").status_code == 303)
 c3 = login_as("aud2", "pw1234")
 check("aud2 (security_auditor) vao duoc", c3.get("/").status_code == 200)
+# khoa kiem toan vien bi cam (SoD) -> kiem tra "bi da khoi phien" bang mot system_admin khac
+c.post("/users", data={"username": "admin3", "password": "pw1234", "role": "system_admin", "csrf": t})
+c4 = login_as("admin3", "pw1234")
+check("admin3 (system_admin) vao duoc", c4.get("/").status_code == 200)
+c.post("/users/admin3/toggle", data={"csrf": t})
+check("tai khoan bi khoa bi da khoi phien web", c4.get("/").status_code == 303)
+c.post("/users/admin3/toggle", data={"csrf": t})
+
+# ---- chong leo thang dac quyen: tu gan/go vai tro, SoD, reset mat khau / khoa tai khoan dac quyen ----
+def fails(event, reason):
+    with main.db() as d:
+        return d.execute("SELECT COUNT(*) FROM audit_events WHERE event=? AND result='FAIL' AND detail LIKE ?",
+                         (event, f"%reason={reason}%")).fetchone()[0]
+def pw_hash(u):
+    with main.db() as d:
+        return d.execute("SELECT password_hash FROM users WHERE username=?", (u,)).fetchone()[0]
+def enabled(u):
+    with main.db() as d:
+        return d.execute("SELECT enabled FROM users WHERE username=?", (u,)).fetchone()[0]
+before = roles_of("admin"); n0 = fails("ADMIN_GRANT_ROLE", "self")
+r = c.post("/users/admin/roles", data={"role": "security_auditor", "scope": "/", "csrf": t})
+check("tu gan vai tro cho chinh minh bi tu choi + audit FAIL", r.status_code == 303 and roles_of("admin") == before
+      and fails("ADMIN_GRANT_ROLE", "self") == n0 + 1 and "Không thể tự gán/gỡ vai trò của chính mình" in c.get("/users").text)
+c.post("/users/admin/roles", data={"role": "file_manager", "scope": "/", "csrf": t})
+check("tu gan vai tro khong dac quyen cung bi tu choi", roles_of("admin") == before)
+n0 = fails("ADMIN_REVOKE_ROLE", "self")
+c.post("/users/admin/roles/remove", data={"role": "system_admin", "scope": "/", "csrf": t})
+check("tu go vai tro cua chinh minh bi tu choi + audit FAIL", roles_of("admin") == before and fails("ADMIN_REVOKE_ROLE", "self") == n0 + 1)
+before = roles_of("aud2"); n0 = fails("ADMIN_GRANT_ROLE", "sod_conflict")
+c.post("/users/aud2/roles", data={"role": "system_admin", "scope": "/", "csrf": t})
+check("SoD: gan system_admin cho security_auditor bi tu choi + audit FAIL", roles_of("aud2") == before
+      and fails("ADMIN_GRANT_ROLE", "sod_conflict") == n0 + 1)
+before = roles_of("admin3")
+c.post("/users/admin3/roles", data={"role": "security_auditor", "scope": "/hr", "csrf": t})
+check("SoD: gan security_auditor (moi scope) cho system_admin bi tu choi", roles_of("admin3") == before
+      and fails("ADMIN_GRANT_ROLE", "sod_conflict") == n0 + 2)
+c.post("/users/sv2/roles", data={"role": "security_auditor", "scope": "/", "csrf": t})
+check("gan vai tro cho nguoi khac (khong xung dot) van duoc", ("security_auditor", "/") in roles_of("sv2"))
+c.post("/users/sv2/roles/remove", data={"role": "security_auditor", "scope": "/", "csrf": t})
+check("go vai tro cua nguoi khac van duoc", ("security_auditor", "/") not in roles_of("sv2"))
+h = pw_hash("aud2"); n0 = fails("ADMIN_RESET_PASSWORD", "privileged_target")
+c.post("/users/aud2/password", data={"password": "chiem1234", "csrf": t})
+check("admin dat lai mat khau kiem toan vien bi tu choi + audit FAIL", pw_hash("aud2") == h
+      and fails("ADMIN_RESET_PASSWORD", "privileged_target") == n0 + 1)
+h = pw_hash("admin3")
+c.post("/users/admin3/password", data={"password": "chiem1234", "csrf": t})
+check("admin dat lai mat khau admin khac bi tu choi", pw_hash("admin3") == h and fails("ADMIN_RESET_PASSWORD", "privileged_target") == n0 + 2)
+c.post("/users/sv2/password", data={"password": "nv12345", "csrf": t})
+check("dat lai mat khau nhan vien van duoc", main.verify_password("nv12345", pw_hash("sv2")))
+n0 = fails("ADMIN_LOCK_USER", "auditor_target")
 c.post("/users/aud2/toggle", data={"csrf": t})
-check("tai khoan bi khoa bi da khoi phien web", c3.get("/").status_code == 303)
+check("admin khoa kiem toan vien bi tu choi + audit FAIL", enabled("aud2") == 1 and fails("ADMIN_LOCK_USER", "auditor_target") == n0 + 1)
+was = enabled("sv2"); c.post("/users/sv2/toggle", data={"csrf": t})
+check("khoa/mo khoa nhan vien van duoc", enabled("sv2") == 1 - was)
+c.post("/users/sv2/toggle", data={"csrf": t})
+with main.db() as d:  # mo khoa kiem toan vien van duoc
+    d.execute("UPDATE users SET enabled=0 WHERE username='aud2'")
+c.post("/users/aud2/toggle", data={"csrf": t})
+check("mo khoa kiem toan vien van duoc", enabled("aud2") == 1)
+up = c.get("/users?per_page=50").text
+row_aud = up[up.index("<td class=\"fw-medium\">aud2</td>"):].split("</tr>", 1)[0]
+row_me = up[up.index("<td class=\"fw-medium\">admin</td>"):].split("</tr>", 1)[0]
+row_adm3 = up[up.index("<td class=\"fw-medium\">admin3</td>"):].split("</tr>", 1)[0]
+check("UI: hang aud2 khong co form dat mat khau, nut Khoa bi vo hieu, select khong co system_admin",
+      "/users/aud2/password" not in row_aud and "disabled title=\"Không thể khóa kiểm toán viên" in row_aud
+      and "<option>system_admin</option>" not in row_aud and "<option>file_manager</option>" in row_aud)
+check("UI: hang cua chinh minh khong co nut x go vai tro / form gan vai tro",
+      "/users/admin/roles" not in row_me and "Không thể tự gán vai trò" in row_me)
+check("UI: hang admin3 khong co reset mat khau, select khong co security_auditor",
+      "/users/admin3/password" not in row_adm3 and "<option>security_auditor</option>" not in row_adm3)
 c.post("/users/sv/password", data={"password": "moi1234", "csrf": t})
 with main.db() as d:
     check("dat lai mat khau", main.verify_password("moi1234", d.execute("SELECT password_hash FROM users WHERE username='sv'").fetchone()[0]))
