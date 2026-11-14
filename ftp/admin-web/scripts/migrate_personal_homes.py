@@ -30,7 +30,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import main  # noqa: E402  (can sys.path o tren; main doc bien moi truong FTP_* giong ung dung web)
+import config  # noqa: E402  (can sys.path o tren; config doc bien moi truong FTP_* giong ung dung web)
+import db as database  # noqa: E402
+from auditlog import audit  # noqa: E402
+from rbac import user_roles  # noqa: E402
 
 HOMES = "/home"
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")  # giong PassCommandHandler.SAFE_NAME
@@ -55,7 +58,7 @@ def eligible_owners(c) -> set[str]:
         name = u["username"]
         if (u["home"] or "/").strip("/") or u["read_only"] or not SAFE_NAME.fullmatch(name):
             continue
-        roles = sorted({r for r, _ in main.user_roles(c, name)})
+        roles = sorted({r for r, _ in user_roles(c, name)})
         if not roles:
             continue
         marks = ",".join("?" * len(roles))
@@ -164,7 +167,7 @@ def db_move(c, src: str, dst: str, owner: str) -> None:
 
 def migrate_item(item: Item, store, connect=None) -> int:
     """Chuyen mot muc: copy -> cap nhat CSDL (mot giao dich) -> xoa nguon. Tra ve so object/tep da copy."""
-    connect = connect or main.db
+    connect = connect or database.db
     sources = store_copy(store, item.src, item.dst, item.owner)
     with connect() as c:
         db_move(c, item.src, item.dst, item.owner)
@@ -173,8 +176,8 @@ def migrate_item(item: Item, store, connect=None) -> int:
 
 
 def run(apply: bool, store=None, connect=None, out=print) -> int:
-    store = store or main.STORE
-    connect = connect or main.db
+    store = store or config.STORE
+    connect = connect or database.db
     with connect() as c:
         items, kept = plan(c)
     for p, why in kept:
@@ -198,8 +201,8 @@ def run(apply: bool, store=None, connect=None, out=print) -> int:
             out(f"ERROR    {it.src} -> {it.dst}: {e}")
             continue
         out(f"MOVED    {it.src} -> {it.dst}  (objects={n})")
-        if connect is main.db:
-            main.audit("migrate", "ADMIN_MIGRATE_HOME", f"{it.src} -> {it.dst} owner={it.owner} objects={n}")
+        if connect is database.db:
+            audit("migrate", "ADMIN_MIGRATE_HOME", f"{it.src} -> {it.dst} owner={it.owner} objects={n}")
     if not apply:
         out("Dry run only. Re-run with --apply to execute.")
     return 1 if failures else 0
