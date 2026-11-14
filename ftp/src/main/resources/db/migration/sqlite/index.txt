@@ -6,3 +6,4 @@ V004__file_acl.sql
 V005__rbac.sql
 V006__audit_breakglass.sql
 V007__separate_duties.sql
+V008__ftp_sessions.sql
