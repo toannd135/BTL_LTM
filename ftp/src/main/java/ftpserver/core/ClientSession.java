@@ -70,6 +70,8 @@ public class ClientSession implements Runnable {
     private final RbacService rbac;
     private final ScanService scan;
     private final FileStore store;
+    /** Bang ftp_sessions (trang quan tri); null = tat. */
+    private final SessionRegistry sessions;
     /** Quyen RBAC cua user, nap luc dang nhap; null khi chua dang nhap. */
     private RbacService.Grants grants;
     /** Ma cac lan cap quyen break-glass da ghi audit trong phien nay (chi ghi lan dung dau tien). */
@@ -117,12 +119,16 @@ public class ClientSession implements Runnable {
         this.rbac = services.rbac();
         this.scan = services.scan();
         this.store = services.store();
+        this.sessions = services.sessions();
         this.ioSocket = controlSocket;
     }
 
     /** Vong doi phien: gui 220, doc va xu ly tung dong lenh cho den QUIT, mat ket noi hoac het thoi gian cho. */
     @Override
     public void run() {
+        if (sessions != null) {
+            sessions.register(this, remoteIp());
+        }
         try {
             controlSocket.setSoTimeout(config.idleTimeoutSeconds() * 1000);
             openStreams();
@@ -179,6 +185,9 @@ public class ClientSession implements Runnable {
         protPrivate = false;
         openStreams();
         audit("AUTH_TLS", ((SSLSocket) ioSocket).getSession().getProtocol(), true);
+        if (sessions != null) {
+            sessions.setTls(sessionId);
+        }
     }
 
     /**
@@ -250,7 +259,25 @@ public class ClientSession implements Runnable {
         if (user != null) {
             audit("LOGOUT", "session closed", true);
         }
+        if (sessions != null) {
+            sessions.unregister(sessionId);
+        }
         System.out.println("[" + sessionId + "] session closed");
+    }
+
+    /**
+     * Quan tri vien yeu cau ngat phien (goi tu thread nhip tim cua {@link SessionRegistry}):
+     * ghi audit, gui 421 roi dong socket; thread cua phien se thoat vong doc va chay {@link #cleanup()}.
+     */
+    void terminateByAdmin() {
+        audit("SESSION_KILL", "terminated by administrator", true);
+        reply(FtpReply.SERVICE_NOT_AVAILABLE, "Session terminated by administrator.");
+        DataConnection dc = dataConnection;
+        if (dc != null) {
+            dc.close();
+        }
+        closeQuietly(ioSocket);
+        closeQuietly(controlSocket);
     }
 
     private static void closeQuietly(Closeable c) {
@@ -319,6 +346,9 @@ public class ClientSession implements Runnable {
         personalHome = null;
         failedLoginCount = 0;
         state = SessionState.CONNECTED;
+        if (sessions != null) {
+            sessions.setUsername(sessionId, null);
+        }
     }
 
     // --- TLS / REST / RNFR ---
@@ -467,7 +497,12 @@ public class ClientSession implements Runnable {
     public void setPendingUsername(String pendingUsername) { this.pendingUsername = pendingUsername; }
 
     public User getUser() { return user; }
-    public void setUser(User user) { this.user = user; }
+    public void setUser(User user) {
+        this.user = user;
+        if (sessions != null && user != null) {
+            sessions.setUsername(sessionId, user.name());
+        }
+    }
 
     public Path getCurrentDir() { return currentDir; }
     public void setCurrentDir(Path currentDir) { this.currentDir = currentDir; }

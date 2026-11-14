@@ -18,6 +18,7 @@ import ftpserver.core.CommandRegistrations;
 import ftpserver.core.CommandRegistry;
 import ftpserver.core.FtpServer;
 import ftpserver.core.Services;
+import ftpserver.core.SessionRegistry;
 import ftpserver.db.Database;
 import ftpserver.db.Migrator;
 import ftpserver.fs.FileStore;
@@ -77,7 +78,8 @@ public final class Main {
         ScanService scan = scanService(config, database);
         scan.setAuditLog(audit); // ket qua quet nen (INFECTED -> cach ly) cung vao audit
         FtpServer server = new FtpServer(config, userManager, pathResolver, registry, tls, audit,
-                new Services(new AclService(database), new RbacService(database), scan, store));
+                new Services(new AclService(database), new RbacService(database), scan, store,
+                        new SessionRegistry(database)));
         Runtime.getRuntime().addShutdownHook(new Thread(server::stop));
         scheduleRescan(config, scan, store, pathResolver);
 
