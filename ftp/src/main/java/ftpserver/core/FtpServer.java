@@ -57,6 +57,9 @@ public class FtpServer {
         System.out.println("FTP server listening on port " + config.controlPort()
                 + ", storage=" + (config.s3Enabled() ? "s3://" + config.s3().bucket() : config.rootDir())
                 + ", tls=" + (tls == null ? "off" : config.tlsRequired() ? "required" : "optional"));
+        if (services.sessions() != null) {
+            services.sessions().start();
+        }
 
         while (running) {
             try {
@@ -91,6 +94,9 @@ public class FtpServer {
                 pool.shutdownNow();
                 Thread.currentThread().interrupt();
             }
+        }
+        if (services.sessions() != null) {
+            services.sessions().stop();
         }
         System.out.println("FTP server stopped");
     }
