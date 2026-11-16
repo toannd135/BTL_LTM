@@ -147,7 +147,10 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF_NAME#v}"
             V="${V%%[-+]*}"
-            [[ "$V" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || V="1.0.0"
+            [[ "$V" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || {
+              echo "Invalid release tag: $GITHUB_REF_NAME (expected vX, vX.Y, or vX.Y.Z)" >&2
+              exit 1
+            }
           else
             V="1.0.0"
           fi
