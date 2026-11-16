@@ -439,7 +439,14 @@ BTL_LTM/
 │   ├── scripts/                 smoke, concurrency, pasv_leak, ftps, bench_throughput, gen-keystore.sh
 │   ├── ftproot/                 Thư mục gốc mẫu (docs/sample.txt)
 │   └── admin-web/               ── TRANG QUẢN TRỊ ──
-│       ├── main.py (965 dòng), storage.py (215 dòng), test_admin.py
+│       ├── main.py              Tạo app, gắn middleware và các nhóm trang (~60 dòng)
+│       ├── config.py, db.py     Biến môi trường/hằng số; kết nối SQLite/PostgreSQL
+│       ├── security.py, rbac.py Mật khẩu, CSRF, kiểm tra quyền; vai trò và quyền
+│       ├── auditlog.py, stats.py, health.py   Nhật ký; số liệu dashboard; tình trạng máy chủ
+│       ├── scanner.py, file_service.py        Quét ClamAV; nghiệp vụ tệp (đồng bộ, cách ly, khôi phục...)
+│       ├── web.py, storage.py   Template/render/phân trang; kho tệp đĩa hoặc S3
+│       ├── routes/              auth, dashboard, users, files, audit, breakglass (mỗi tệp một APIRouter)
+│       ├── test_admin.py
 │       ├── scripts/             migrate_personal_homes.py (chuyển tệp nhân viên từ gốc vào /home/<chủ>)
 │       ├── templates/           base, login, dashboard, users, files, audit, breakglass + partial
 │       ├── static/              favicon, logo
@@ -1328,7 +1335,9 @@ CI dùng `jpackage` tạo bản cài đặt theo hệ điều hành (Windows MSI
 - Phiên đăng nhập ký bằng `FTPADMIN_SECRET`; mặc định bind `127.0.0.1`; `FTPADMIN_TRUST_PROXY=1` để ghi IP thật khi sau proxy.
 - Có hộp xác nhận cho mọi thao tác nguy hiểm; thông báo tiếng Việt.
 
-### 13.2 Các trang và route (đếm từ `main.py`)
+### 13.2 Các trang và route (thư mục `routes/`)
+
+Mã nguồn chia thành nhiều tệp nhỏ: `main.py` chỉ tạo ứng dụng và gắn các nhóm trang; mỗi nhóm trang là một `APIRouter` trong `routes/` (chỉ nhận form, gọi nghiệp vụ, hiện thông báo); phần nghiệp vụ và truy vấn nằm ở các module riêng (`rbac.py`, `auditlog.py`, `stats.py`, `file_service.py`, `scanner.py`...).
 
 | Trang | Route | Chức năng |
 |---|---|---|
@@ -1347,7 +1356,7 @@ Lớp trừu tượng kho dùng cho web: `from_env(root, quarantine)` chọn bac
 
 ### 13.4 Kiểm thử
 
-`test_admin.py` (258 dòng) chạy trên SQLite và trên PostgreSQL (CI), kiểm tra đăng nhập, quyền theo vai trò, quản lý user, thao tác tệp, audit.
+`test_admin.py` (547 dòng, 147 kiểm tra) chạy trên SQLite và trên PostgreSQL (CI), kiểm tra đăng nhập, quyền theo vai trò, quản lý user, thao tác tệp, audit, break-glass và script chuyển thư mục cá nhân.
 
 ---
 
@@ -1666,8 +1675,8 @@ Ký hiệu: **●** chủ trì (chịu trách nhiệm hoàn thành và giải th
 | 15 | Client: truyền dữ liệu | `FtpSession` (PASV, list, upload, download, REST), tiến độ, hủy, kéo-thả, `FileOpener` | | ● | ○ | |
 | 16 | Client: bảng và thao tác tệp | Hai bảng, sắp xếp, cột, tạo/đổi tên/xóa, `FileIcons`, `Formats`, `Icons`, `AppIcon`, `ErrorText`, `app.css` | | | ● | |
 | 17 | Client: bảo mật | `TlsClient` (TOFU), hộp thoại Chia sẻ, cột chủ sở hữu, bật/tắt nút theo vai trò | | | ○ | ● |
-| 18 | Admin web: khung, đăng nhập, người dùng, vai trò, nhật ký, break-glass | `main.py` (các route `/login`, `/users`, `/audit`, `/breakglass`), template tương ứng | | | | ● |
-| 19 | Admin web: dashboard, tệp và quét | `main.py` (`/`, `/files*`), `storage.py`, cảnh báo mã độc, cách ly | | ● | | ○ |
+| 18 | Admin web: khung, đăng nhập, người dùng, vai trò, nhật ký, break-glass | `routes/auth.py`, `routes/users.py`, `routes/audit.py`, `routes/breakglass.py`, `security.py`, `rbac.py`, `auditlog.py`, template tương ứng | | | | ● |
+| 19 | Admin web: dashboard, tệp và quét | `routes/dashboard.py`, `routes/files.py`, `stats.py`, `file_service.py`, `scanner.py`, `storage.py`, cảnh báo mã độc, cách ly | | ● | | ○ |
 | 20 | Hạ tầng Azure | `terraform/*.tf`, `ansible/` (roles `base`, `docker`, `storage`, `ftpserver`) | ● | | ○ | |
 | 21 | CI/CD | `.github/workflows/ci.yml`, SonarCloud | ● | ○ | | |
 | 22 | Đóng gói client | `jpackage`, `packaging/`, job `ui-package` | | | ● | ○ |
