@@ -56,6 +56,11 @@ public class RbacService {
             return false;
         }
 
+        /** Cac thu muc (scope) ma user co quyen nay, sap xep tang dan; vd file:list -> ["/home/dung/homnaylamgi"]. */
+        public List<String> scopesOf(String permission) {
+            return scopes.getOrDefault(permission, List.of()).stream().sorted().distinct().toList();
+        }
+
         /** Vai tro (kem scope) cua user, dung de hien thi. */
         public List<String> roles() {
             return roles;
