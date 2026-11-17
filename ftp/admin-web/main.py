@@ -16,7 +16,8 @@ Cau truc ma nguon:
   file_service.py  nghiep vu tep: dong bo, quet, cach ly, khoi phuc, xoa
   web.py           template, render, thong bao, phan trang
   storage.py       kho tep: dia cuc bo hoac S3
-  routes/          cac trang: auth, dashboard, users, files, audit, breakglass
+  live_sessions.py doc / ngat phien FTP dang ket noi (bang ftp_sessions)
+  routes/          cac trang: auth, dashboard, users, files, audit, breakglass, sessions (co WebSocket)
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
@@ -26,7 +27,8 @@ from starlette.middleware.sessions import SessionMiddleware
 import config
 import storage
 from auditlog import CLIENT_IP
-from routes import audit, auth, breakglass, dashboard, files, users
+from routes import audit, auth, breakglass, dashboard, files, sessions, users
+from web import client_ip
 
 app = FastAPI(title="FTP Admin")
 
@@ -34,13 +36,7 @@ app = FastAPI(title="FTP Admin")
 @app.middleware("http")
 async def remember_client_ip(request: Request, call_next):
     """Ghi nho IP nguoi gui request de audit() biet ma khong can truyen `request` di khap noi."""
-    ip = request.client.host if request.client else "-"
-    if config.TRUST_PROXY:
-        # Sau Cloudflare/nginx, IP ket noi la cua proxy; IP that nam trong header. Chi bat khi admin-web
-        # CHI nhan ket noi tu proxy, neu khong ai cung gia mao duoc header nay.
-        forwarded = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-        ip = forwarded or ip
-    CLIENT_IP.set(ip)
+    CLIENT_IP.set(client_ip(request))
     return await call_next(request)
 
 
@@ -55,5 +51,5 @@ async def storage_error(request: Request, exc: storage.StorageError):
     return PlainTextResponse(str(exc), status_code=400)
 
 
-for module in (auth, dashboard, users, files, audit, breakglass):
+for module in (auth, dashboard, users, files, audit, breakglass, sessions):
     app.include_router(module.router)

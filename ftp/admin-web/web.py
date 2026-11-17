@@ -201,6 +201,17 @@ def paginate(request: Request, total: int, page, per_page) -> dict:
             "sizes": [(s, url(1, s)) for s in config.PER_PAGE_CHOICES]}
 
 
+def client_ip(conn) -> str:
+    """IP nguoi gui cua mot request HTTP hoac ket noi WebSocket.
+    Sau Cloudflare/nginx (FTPADMIN_TRUST_PROXY=1), IP ket noi la cua proxy; IP that nam trong header. Chi bat khi
+    admin-web CHI nhan ket noi tu proxy, neu khong ai cung gia mao duoc header nay."""
+    ip = conn.client.host if conn.client else "-"
+    if config.TRUST_PROXY:
+        forwarded = conn.headers.get("cf-connecting-ip") or conn.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        ip = forwarded or ip
+    return ip
+
+
 def sql_like(text: str) -> str:
     """Chuan bi chuoi tim kiem cho LIKE ... ESCAPE '\\': chu thuong, va coi % _ \\ la ky tu binh thuong."""
     return re.sub(r"([\\%_])", r"\\\1", text.lower())
