@@ -15,14 +15,17 @@
       <input id="nu-name" name="username" class="form-control" required pattern="[a-z0-9_.\-]{3,32}" aria-describedby="nu-name-help" autocomplete="off">
       <div id="nu-name-help" class="form-text">3–32 ký tự: a-z, 0-9, _ . -</div></div>
     <div class="span-2"><label for="nu-pw" class="form-label">Mật khẩu</label>
-      <input id="nu-pw" name="password" type="password" class="form-control" autocomplete="new-password" required></div>
+      <input id="nu-pw" name="password" type="password" class="form-control" autocomplete="new-password"
+             minlength="4" maxlength="128" title="Mật khẩu dài 4-128 ký tự" required></div>
     <div><label for="nu-role" class="form-label">Vai trò</label>
       <select id="nu-role" name="role" class="form-select">{% for r in roles %}<option value="{{ r }}" {{ 'selected' if r == 'employee' }}>{{ r }}</option>{% endfor %}</select></div>
     <div><label for="nu-scope" class="form-label">Phạm vi vai trò</label>
-      <input id="nu-scope" name="scope" class="form-control" value="/" aria-describedby="nu-scope-help">
+      <input id="nu-scope" name="scope" class="form-control" value="/" pattern="/[A-Za-z0-9_.-]*(/[A-Za-z0-9_.-]+)*"
+             title="Đường dẫn bắt đầu bằng / và không chứa . hoặc .." aria-describedby="nu-scope-help">
       <div id="nu-scope-help" class="form-text">"/" = toàn bộ</div></div>
     <div class="span-2"><label for="nu-home" class="form-label">Thư mục home</label>
-      <input id="nu-home" name="home" class="form-control" value="/" aria-describedby="nu-home-help">
+      <input id="nu-home" name="home" class="form-control" value="/" pattern="/[A-Za-z0-9_.-]*(/[A-Za-z0-9_.-]+)*"
+             title="Đường dẫn bắt đầu bằng / và không chứa . hoặc .." aria-describedby="nu-home-help">
       <div id="nu-home-help" class="form-text">Ví dụ /sv2 — người dùng chỉ thấy thư mục này</div></div>
     <div class="span-2 d-flex justify-content-end gap-2 pt-2 border-top">
       <button type="button" class="btn btn-light" onclick="this.closest('dialog').close()">Hủy</button>
@@ -73,7 +76,8 @@
               <input type="hidden" name="csrf" value="{{ csrf }}">
               <label class="menu-label" for="pw-{{ loop.index }}">Đặt lại mật khẩu</label>
               <div class="d-flex gap-1">
-                <input id="pw-{{ loop.index }}" name="password" type="password" class="form-control form-control-sm" autocomplete="new-password" required>
+                <input id="pw-{{ loop.index }}" name="password" type="password" class="form-control form-control-sm"
+                       autocomplete="new-password" minlength="4" maxlength="128" title="Mật khẩu dài 4-128 ký tự" required>
                 <button class="btn btn-sm btn-outline-secondary">Đặt</button></div></form>
             {% endif %}
             <form method="post" action="/users/{{ u.username }}/toggle" onsubmit="return confirm('{{ 'Khóa' if u.enabled else 'Mở khóa' }} tài khoản {{ u.username }}?{{ ' Người dùng sẽ không đăng nhập FTP được nữa.' if u.enabled }}')">
