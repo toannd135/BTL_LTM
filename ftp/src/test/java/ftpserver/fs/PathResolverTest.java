@@ -35,8 +35,18 @@ class PathResolverTest {
         assertThrows(SecurityException.class, () -> resolver.resolve(root, "../../etc"));
     }
 
-    @Test void absolutePathOutsideRoot_throws() {
-        assertThrows(SecurityException.class, () -> resolver.resolve(root, "/etc/passwd"));
+    @Test void absolutePath_isRelativeToRoot_notOsRoot() throws Exception {
+        // "/etc/passwd" cua FTP la <root>/etc/passwd, khong bao gio la /etc/passwd that cua he dieu hanh
+        assertEquals(root.toRealPath().resolve("etc/passwd"), resolver.resolve(root.resolve("docs"), "/etc/passwd"));
+    }
+
+    @Test void slashAlone_resolvesToRoot() throws Exception {
+        assertEquals(root.toRealPath(), resolver.resolve(root.resolve("docs"), "/"));
+    }
+
+    @Test void absoluteWithDotDot_cannotEscapeRoot() {
+        assertThrows(SecurityException.class, () -> resolver.resolve(root, "/../etc"));
+        assertThrows(SecurityException.class, () -> resolver.resolve(root, "/docs/../../etc"));
     }
 
     @Test void nestedTraversal_fromSubfolder_throws() {
