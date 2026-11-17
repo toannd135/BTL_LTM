@@ -429,6 +429,10 @@ public class ClientSession implements Runnable {
                 && (grants.has(RbacService.FILE_MANAGE, key) || acl.allows(user, key, need))) {
             return true;
         }
+        // Cho phep di qua cac thu muc cha toi scope duoc cap; noi dung van duoc loc o tung muc con.
+        if (need == Perm.READ && grants != null && grants.hasDescendant(rbacPerm, key)) {
+            return true;
+        }
         return breakglass(key); // neu vai tro/ACL khong cho, cap quyen dac biet con han van co the cho phep
     }
 
