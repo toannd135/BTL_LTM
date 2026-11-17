@@ -37,10 +37,12 @@ def breakglass_grant(request: Request, admin: str = Depends(require("breakglass:
         flash(request, "Khong duoc tu cap break-glass cho chinh minh", "danger")
         return back("/breakglass")
 
-    valid = (1 <= minutes <= config.BREAKGLASS_MAX_MINUTES and len(reason) >= config.BREAKGLASS_MIN_REASON
+    valid = (1 <= minutes <= config.BREAKGLASS_MAX_MINUTES
+             and config.BREAKGLASS_MIN_REASON <= len(reason) <= config.MAX_REASON_LENGTH
              and scope is not None)
     if not valid:
-        flash(request, f"Du lieu khong hop le (1..{config.BREAKGLASS_MAX_MINUTES} phut, ly do >= 5 ky tu, khong '..')",
+        flash(request, f"Du lieu khong hop le (1..{config.BREAKGLASS_MAX_MINUTES} phut, ly do "
+                      f"{config.BREAKGLASS_MIN_REASON}..{config.MAX_REASON_LENGTH} ky tu, khong '..')",
               "danger")
         return back("/breakglass")
 

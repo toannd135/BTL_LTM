@@ -111,6 +111,8 @@ public class MainWindow {
     private static final String PARENT_DIR = "..";
     private static final String NOT_CONNECTED_TEXT = "(chưa kết nối)";
     private static final int DOUBLE_CLICK = 2;
+    private static final int MIN_USERNAME_LENGTH = 3;
+    private static final int MAX_USERNAME_LENGTH = 32;
 
     /** Một thread riêng cho toàn bộ giao tiếp với server — control connection là tuần tự,
      *  hai thread cùng gọi lệnh sẽ làm đáp ứng trả về lẫn lộn. */
@@ -638,15 +640,15 @@ public class MainWindow {
      */
     private void connect() {
         String host = hostField.getText().trim();
-        int port;
-        try {
-            port = Integer.parseInt(portField.getText().trim());
-        } catch (NumberFormatException e) {
-            appendLog("Cổng không hợp lệ: " + portField.getText());
-            return;
-        }
+        String portText = portField.getText().trim();
         String user = userField.getText().trim();
         String pass = passField.getText();
+        String validationError = validateConnectionInput(host, portText, user, pass);
+        if (validationError != null) {
+            showInputError(validationError);
+            return;
+        }
+        int port = Integer.parseInt(portText);
         PREFS.put(PREF_HOST, host);
         PREFS.put(PREF_PORT, String.valueOf(port));
         PREFS.put(PREF_USER, user);
@@ -675,10 +677,52 @@ public class MainWindow {
             } catch (Exception ex) {
                 s.close();
                 Platform.runLater(() -> {
+                    passField.clear();
                     appendLog("LỖI KẾT NỐI: " + ex.getMessage());
                     showError(ex);
                     connectButton.setDisable(false);
                 });
+            }
+
+            /** Kiểm tra dữ liệu kết nối trước khi mở socket hoặc gửi mật khẩu. */
+            private static String validateConnectionInput(String host, String portText, String user, String pass) {
+                if (host.isEmpty() || host.chars().anyMatch(Character::isWhitespace)) {
+                    return "Máy chủ không được để trống và không được chứa khoảng trắng.";
+                }
+                int port;
+                try {
+                    port = Integer.parseInt(portText);
+                } catch (NumberFormatException e) {
+                    return "Cổng phải là số nguyên từ 1 đến 65535.";
+                }
+                if (port < 1 || port > 65535) {
+                    return "Cổng phải nằm trong khoảng 1 đến 65535.";
+                }
+                if (user.isEmpty()) {
+                    return "Vui lòng nhập tên tài khoản.";
+                }
+                if (!user.equals("anonymous")
+                        && (user.length() < MIN_USERNAME_LENGTH || user.length() > MAX_USERNAME_LENGTH
+                        || !user.matches("[A-Za-z0-9][A-Za-z0-9._-]*"))) {
+                    return "Tên tài khoản dài 3-32 ký tự, bắt đầu bằng chữ/số và chỉ dùng chữ, số, '.', '_' hoặc '-'.";
+                }
+                if (pass.isEmpty()) {
+                    return "Vui lòng nhập mật khẩu.";
+                }
+                return null;
+            }
+
+            /** Hiện lỗi nhập liệu và đưa con trỏ về trường cần sửa. */
+            private void showInputError(String message) {
+                appendLog("DỮ LIỆU KẾT NỐI: " + message);
+                Alert a = new Alert(Alert.AlertType.WARNING, message, ButtonType.CLOSE);
+                a.setHeaderText("Kiểm tra thông tin đăng nhập");
+                a.setResizable(true);
+                if (remoteTable.getScene() != null) {
+                    a.initOwner(remoteTable.getScene().getWindow());
+                }
+                AppIcon.apply(a);
+                a.show();
             }
         });
     }
@@ -729,7 +773,9 @@ public class MainWindow {
         cancelBtn.setDisable(true);
         if (isConnected) {
             RemoteSession s = session;
-            progressLabel.setText("Đã đăng nhập — " + (s.isSecure() ? "🔒 Mã hóa TLS" : "⚠ Chưa mã hóa"));
+            String roleText = role == null || role.isBlank() ? "chưa xác định quyền" : "vai trò: " + role;
+            progressLabel.setText("Đã đăng nhập — " + roleText + " — "
+                    + (s.isSecure() ? "🔒 Mã hóa TLS" : "⚠ Chưa mã hóa"));
             mkdBtn.setDisable(!s.canWrite());
             uploadBtn.setDisable(!s.canWrite());
             deleteBtn.setDisable(!s.canDelete());

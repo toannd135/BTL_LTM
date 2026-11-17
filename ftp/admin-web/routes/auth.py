@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Form, Request
 
 from auditlog import audit
+import config
 from db import db
 from rbac import web_perms
 from security import DUMMY_HASH, check_csrf, verify_password
@@ -18,6 +19,11 @@ def login_form(request: Request):
 @router.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...), csrf: str = Form(...)):
     check_csrf(request, csrf)
+    username = username.strip().lower()
+    if not config.USERNAME_RE.fullmatch(username) or not password:
+        audit(username or "-", "ADMIN_LOGIN", "web admin login invalid input", ok=False)
+        flash(request, "Tên tài khoản hoặc mật khẩu không hợp lệ", "danger")
+        return back("/login")
     with db() as c:
         user = c.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
 

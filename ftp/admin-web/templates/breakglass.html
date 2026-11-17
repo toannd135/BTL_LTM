@@ -6,9 +6,11 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="col-md-2"><input name="username" class="form-control" placeholder="Tài khoản" list="bgUsers" required>
       <datalist id="bgUsers">{% for u in users if u != admin %}<option value="{{ u }}">{% endfor %}</datalist></div>
-    <div class="col-md-2"><input name="scope" class="form-control" placeholder="Thư mục (vd /hr)" value="/" required></div>
+    <div class="col-md-2"><input name="scope" class="form-control" placeholder="Thư mục (vd /hr)" value="/"
+      pattern="/[A-Za-z0-9_.-]*(/[A-Za-z0-9_.-]+)*" title="Đường dẫn bắt đầu bằng / và không chứa . hoặc .." required></div>
     <div class="col-md-1"><input name="minutes" type="number" min="1" max="{{ max_minutes }}" value="30" class="form-control" title="Số phút (1..{{ max_minutes }})" required></div>
-    <div class="col-md-5"><input name="reason" class="form-control" placeholder="Lý do (>= 5 ký tự, vd mã sự cố)" minlength="5" required></div>
+    <div class="col-md-5"><input name="reason" class="form-control" placeholder="Lý do (5-500 ký tự, vd mã sự cố)"
+      minlength="5" maxlength="500" required></div>
     <div class="col-md-2"><button class="btn btn-danger w-100">Cấp quyền</button></div>
   </form>
   <p class="text-muted small mb-0 mt-2">Không thể tự cấp cho chính mình. Mọi lần cấp/thu hồi được ghi nhật ký (BREAKGLASS_GRANT / BREAKGLASS_REVOKE).</p>
