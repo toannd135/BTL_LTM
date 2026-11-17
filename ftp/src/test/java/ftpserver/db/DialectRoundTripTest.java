@@ -94,7 +94,7 @@ class DialectRoundTripTest {
     @MethodSource("dialects")
     void migrateIsIdempotent_andTimestampsMatchJavaFormat(String dialect, @TempDir Path tmp) throws Exception {
         Database db = fresh(dialect, tmp);
-        assertEquals(7, new Migrator(db).migrate());
+        assertEquals(9, new Migrator(db).migrate());
         assertEquals(0, new Migrator(db).migrate());
         try (Connection c = db.open(); var st = c.createStatement();
              ResultSet rs = st.executeQuery("SELECT created_at FROM users WHERE username = 'admin'")) {

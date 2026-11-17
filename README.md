@@ -550,7 +550,7 @@ Mật khẩu không bao giờ ghi log (`dispatch` in `****` thay cho tham số c
 
 | Lệnh | Cú pháp | Chức năng | Đăng nhập | Ghi | Quyền RBAC/ACL | Mã trả lời | RFC |
 |---|---|---|---|---|---|---|---|
-| `PWD` | `PWD` | Trả đường dẫn **ảo** của thư mục hiện tại (không lộ đường dẫn thật của OS) | có | không | — | `257 "/sv" is current directory` | 959 |
+| `PWD` | `PWD` | Trả đường dẫn **ảo** của thư mục hiện tại (không lộ đường dẫn thật của OS) | có | không | — | `257 "/home/sv" is current directory` | 959 |
 | `CWD` | `CWD <thư mục>` | Đổi thư mục làm việc | có | không | `can(đích, READ)` | `250 Directory changed to …`; thiếu tham số `501`; không tồn tại hoặc không đủ quyền `550 Directory not found`; vượt ra ngoài home `550 Permission denied` | 959 |
 | `CDUP` | `CDUP` | Lên thư mục cha, gọi lại `CWD ..` | có | không | như `CWD` | như `CWD` (`250`/`550`) | 959 |
 | `MKD` | `MKD <thư mục>` | Tạo thư mục; người tạo được ghi là chủ sở hữu (ACL) | có | **có** | `can(thư mục cha, WRITE)` | `257 "<đường dẫn>" created`; thiếu tham số `501`; đã tồn tại hoặc không đủ quyền `550`; lỗi I/O `451` | 959 |
@@ -839,7 +839,7 @@ Nhờ cơ chế tạm + commit: hai client cùng `STOR` một tên không làm h
 
 ### 8.7 Chống thoát thư mục (path traversal)
 
-`PathResolver` tính `rootDir.toRealPath()` **một lần** lúc khởi động, mỗi lệnh có đường dẫn đều qua `resolve(currentDir, arg)`: `normalize()` rồi kiểm tra `startsWith(rootDir)`, vi phạm → `SecurityException` → `550`. Mỗi user bị nhốt trong `home` riêng (ví dụ `sv` ở `/sv`); nhân viên có home `/` vẫn bị nhốt ở `/` (để chia sẻ chéo hoạt động) nhưng bắt đầu ở `/home/<user>` (mục 9.3), `CWD ..` từ đó cũng không ra ngoài `/`. `PWD` trả đường dẫn ảo để không lộ đường dẫn thật của OS. Có test riêng `PathResolverTest`.
+`PathResolver` tính `rootDir.toRealPath()` **một lần** lúc khởi động, mỗi lệnh có đường dẫn đều qua `resolve(currentDir, arg)`: `normalize()` rồi kiểm tra `startsWith(rootDir)`, vi phạm → `SecurityException` → `550`. Mỗi user bị nhốt trong `home` của mình; nhân viên và người quản lý tệp có home `/` (để chia sẻ chéo hoạt động) nhưng bắt đầu phiên ở thư mục cá nhân `/home/<user>` (mục 9.3), `CWD ..` từ đó cũng không ra ngoài `/`. Đường dẫn tuyệt đối của FTP (`CWD /home/sv`) tính từ thư mục gốc của user, không phải gốc ổ đĩa của hệ điều hành. Tài khoản kiểu cũ bị nhốt ở `/<tên>` được migration `V009` chuyển về home `/`, và lần đăng nhập đầu tiên server tự chuyển tệp từ `/<tên>` sang `/home/<tên>` (kèm chủ sở hữu, ACL, trạng thái quét). `PWD` trả đường dẫn ảo để không lộ đường dẫn thật của OS. Có test riêng `PathResolverTest`.
 
 ### 8.8 Cấu hình `ftpserver.conf`
 
@@ -1606,12 +1606,12 @@ cd admin-web && python test_admin.py
 | Tài khoản | Mật khẩu | Vai trò | Thư mục gốc | Dùng để thử |
 |---|---|---|---|---|
 | `admin` | `admin` | `system_admin` | `/` | Đăng nhập **trang quản trị**; qua FTP chỉ quản trị, **không đọc nội dung tệp** |
-| `sv` | `sv` | `employee` | `/sv` | Người dùng thường: tải lên/tải về/đổi tên/chia sẻ theo ACL; xóa được tệp **của mình** |
-| `fm` | `fm` | `file_manager` | `/` | Quản lý tệp toàn bộ: xóa, bỏ qua ACL; không vào trang quản trị |
+| `sv` | `sv` | `employee` | `/` (bắt đầu ở `/home/sv`) | Người dùng thường: tải lên/tải về/đổi tên/chia sẻ theo ACL; xóa được tệp **của mình** |
+| `fm` | `fm` | `file_manager` | `/` (bắt đầu ở `/home/fm`) | Quản lý tệp toàn bộ, kể cả `/home/<nhân viên>`: xóa, bỏ qua ACL; không vào trang quản trị |
 | `auditor` | `auditor` | `security_auditor` | `/` | Chỉ xem nhật ký/kết quả quét (`SITE AUDIT`, `SITE SCAN`, trang Nhật ký) |
 
 Kịch bản demo gợi ý:
-1. `sv` tải một tệp lên `/sv`, bấm **Chia sẻ** cấp `READ/DOWNLOAD` cho người khác → cột chủ sở hữu hiển thị `sv`.
+1. `sv` tải một tệp lên `/home/sv`, bấm **Chia sẻ** cấp `READ/DOWNLOAD` cho người khác → cột chủ sở hữu hiển thị `sv`.
 2. `sv` thử xóa tệp **của người khác** → `550 Permission denied`; `fm` xóa được.
 3. Tải tệp EICAR lên → `550 WARNING: malware detected`, tệp không vào kho, audit ghi `MALWARE`, dashboard hiện cảnh báo.
 4. `admin` vào web: tạo tài khoản, gán vai trò, khóa/mở khóa, cấp break-glass.

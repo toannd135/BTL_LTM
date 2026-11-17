@@ -51,3 +51,6 @@ terraform/tfplan
 terraform/.terraform.lock.hcl.bak
 ansible/inventory/hosts.ini
 ansible/group_vars/*/vault.yml
+
+# Thu muc lam viec tam cua Claude Code
+.claude/worktrees/
