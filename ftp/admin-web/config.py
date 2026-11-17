@@ -98,4 +98,5 @@ EVENT_LABELS = {
     "ADMIN_GRANT_ROLE": "Gán vai trò", "ADMIN_REVOKE_ROLE": "Gỡ vai trò", "ADMIN_FILE_SYNC": "Đồng bộ kho tệp",
     "ADMIN_FILE_SCAN": "Quét lại tệp", "ADMIN_FILE_APPROVE": "Duyệt tệp", "ADMIN_FILE_QUARANTINE": "Cách ly tệp",
     "ADMIN_FILE_RESTORE": "Khôi phục tệp", "ADMIN_FILE_DELETE": "Xóa hẳn tệp",
+    "ADMIN_SESSION_KILL": "Yêu cầu ngắt phiên FTP",
 }

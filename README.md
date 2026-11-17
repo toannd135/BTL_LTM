@@ -445,7 +445,8 @@ BTL_LTM/
 │       ├── auditlog.py, stats.py, health.py   Nhật ký; số liệu dashboard; tình trạng máy chủ
 │       ├── scanner.py, file_service.py        Quét ClamAV; nghiệp vụ tệp (đồng bộ, cách ly, khôi phục...)
 │       ├── web.py, storage.py   Template/render/phân trang; kho tệp đĩa hoặc S3
-│       ├── routes/              auth, dashboard, users, files, audit, breakglass (mỗi tệp một APIRouter)
+│       ├── live_sessions.py     Đọc / ngắt phiên FTP đang kết nối (bảng ftp_sessions)
+│       ├── routes/              auth, dashboard, users, files, audit, breakglass, sessions (mỗi tệp một APIRouter)
 │       ├── test_admin.py
 │       ├── scripts/             migrate_personal_homes.py (chuyển tệp nhân viên từ gốc vào /home/<chủ>)
 │       ├── templates/           base, login, dashboard, users, files, audit, breakglass + partial
@@ -1347,16 +1348,25 @@ Mã nguồn chia thành nhiều tệp nhỏ: `main.py` chỉ tạo ứng dụng 
 | Tệp & quét | `GET /files`, `POST /files/sync`, `/{id}/scan`, `/approve`, `/quarantine`, `/restore`, `/delete` | Đồng bộ kho S3 vào bảng `files`, quét lại, duyệt sạch, cách ly, khôi phục, xóa hẳn |
 | Nhật ký | `GET /audit` | Xem/lọc/phân trang audit |
 | Break-glass | `GET/POST /breakglass`, `POST /breakglass/{id}/revoke` | Cấp và thu hồi quyền khẩn cấp |
+| Phiên FTP (thời gian thực) | `GET /sessions`, WebSocket `/ws/sessions` | Danh sách phiên FTP đang kết nối (tài khoản, IP, TLS, thời lượng) tự cập nhật khi có người kết nối/ngắt; `user:manage` bấm **Ngắt** để server cắt phiên (≤ 5 giây, audit `ADMIN_SESSION_KILL` + `SESSION_KILL`), `audit:view` chỉ xem |
 
-Tổng cộng 21 route. Template Jinja2: `base`, `login`, `dashboard`, `users`, `files`, `audit`, `breakglass`, và các phần dùng chung `_audit_table`, `_icon`, `_pager`.
+Template Jinja2: `base`, `login`, `dashboard`, `users`, `files`, `audit`, `breakglass`, `sessions`, và các phần dùng chung `_audit_table`, `_icon`, `_pager`.
 
-### 13.3 `storage.py`
+### 13.3 Phiên FTP thời gian thực (WebSocket)
+
+FTP server ghi mỗi kết nối vào bảng `ftp_sessions` (`SessionRegistry`), cập nhật `last_seen` mỗi 5 giây và tự ngắt phiên có `kill_requested = 1`. Trang `/sessions` mở một WebSocket tới `/ws/sessions`:
+
+- **Bắt tay:** trình duyệt gửi HTTP `Upgrade: websocket`; server kiểm tra cookie phiên đăng nhập, quyền (`user:manage` hoặc `audit:view`) và header `Origin` (chống Cross-Site WebSocket Hijacking), hợp lệ thì trả `101 Switching Protocols`, sai thì từ chối ngay ở bước bắt tay.
+- **Server → trình duyệt:** một *hub* duy nhất đọc `ftp_sessions` mỗi giây và chỉ gửi khi danh sách thay đổi (dù nhiều admin cùng xem, CSDL chỉ bị hỏi một lần mỗi giây); định kỳ kiểm tra lại quyền của người đang xem, mất quyền thì đóng kết nối (mã 1008).
+- **Trình duyệt → server:** `{"type":"kill"}` khi bấm Ngắt; server đọc lại quyền ngay lúc đó, đặt `kill_requested`, ghi audit. Trình duyệt tự kết nối lại (1, 2, 4… tối đa 15 giây) khi mất mạng.
+
+### 13.4 `storage.py`
 
 Lớp trừu tượng kho dùng cho web: `from_env(root, quarantine)` chọn backend đĩa hoặc S3 (boto3), băm SHA-256 theo luồng, bọc lỗi S3 thành thông báo rõ. Tệp cách ly chuyển sang bucket `<bucket>-quarantine` (trên Azure là `ftp-files-quarantine`) — cùng bucket mà FTP server dùng khi tự cách ly tệp nhiễm (mục 10), nên admin khôi phục/xóa hẳn được cả hai loại.
 
-### 13.4 Kiểm thử
+### 13.5 Kiểm thử
 
-`test_admin.py` (547 dòng, 147 kiểm tra) chạy trên SQLite và trên PostgreSQL (CI), kiểm tra đăng nhập, quyền theo vai trò, quản lý user, thao tác tệp, audit, break-glass và script chuyển thư mục cá nhân.
+`test_admin.py` (159 kiểm tra) chạy trên SQLite và trên PostgreSQL (CI), kiểm tra đăng nhập, quyền theo vai trò, quản lý user, thao tác tệp, audit, break-glass và script chuyển thư mục cá nhân.
 
 ---
 
