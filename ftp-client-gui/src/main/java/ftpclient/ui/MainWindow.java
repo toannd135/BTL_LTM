@@ -683,48 +683,48 @@ public class MainWindow {
                     connectButton.setDisable(false);
                 });
             }
-
-            /** Kiểm tra dữ liệu kết nối trước khi mở socket hoặc gửi mật khẩu. */
-            private static String validateConnectionInput(String host, String portText, String user, String pass) {
-                if (host.isEmpty() || host.chars().anyMatch(Character::isWhitespace)) {
-                    return "Máy chủ không được để trống và không được chứa khoảng trắng.";
-                }
-                int port;
-                try {
-                    port = Integer.parseInt(portText);
-                } catch (NumberFormatException e) {
-                    return "Cổng phải là số nguyên từ 1 đến 65535.";
-                }
-                if (port < 1 || port > 65535) {
-                    return "Cổng phải nằm trong khoảng 1 đến 65535.";
-                }
-                if (user.isEmpty()) {
-                    return "Vui lòng nhập tên tài khoản.";
-                }
-                if (!user.equals("anonymous")
-                        && (user.length() < MIN_USERNAME_LENGTH || user.length() > MAX_USERNAME_LENGTH
-                        || !user.matches("[A-Za-z0-9][A-Za-z0-9._-]*"))) {
-                    return "Tên tài khoản dài 3-32 ký tự, bắt đầu bằng chữ/số và chỉ dùng chữ, số, '.', '_' hoặc '-'.";
-                }
-                if (pass.isEmpty()) {
-                    return "Vui lòng nhập mật khẩu.";
-                }
-                return null;
-            }
-
-            /** Hiện lỗi nhập liệu và đưa con trỏ về trường cần sửa. */
-            private void showInputError(String message) {
-                appendLog("DỮ LIỆU KẾT NỐI: " + message);
-                Alert a = new Alert(Alert.AlertType.WARNING, message, ButtonType.CLOSE);
-                a.setHeaderText("Kiểm tra thông tin đăng nhập");
-                a.setResizable(true);
-                if (remoteTable.getScene() != null) {
-                    a.initOwner(remoteTable.getScene().getWindow());
-                }
-                AppIcon.apply(a);
-                a.show();
-            }
         });
+    }
+
+    /** Kiểm tra dữ liệu kết nối trước khi mở socket hoặc gửi mật khẩu. */
+    private static String validateConnectionInput(String host, String portText, String user, String pass) {
+        if (host.isEmpty() || host.chars().anyMatch(Character::isWhitespace)) {
+            return "Máy chủ không được để trống và không được chứa khoảng trắng.";
+        }
+        int port;
+        try {
+            port = Integer.parseInt(portText);
+        } catch (NumberFormatException e) {
+            return "Cổng phải là số nguyên từ 1 đến 65535.";
+        }
+        if (port < 1 || port > 65535) {
+            return "Cổng phải nằm trong khoảng 1 đến 65535.";
+        }
+        if (user.isEmpty()) {
+            return "Vui lòng nhập tên tài khoản.";
+        }
+        if (!user.equals("anonymous")
+                && (user.length() < MIN_USERNAME_LENGTH || user.length() > MAX_USERNAME_LENGTH
+                || !user.matches("[A-Za-z0-9][A-Za-z0-9._-]*"))) {
+            return "Tên tài khoản dài 3-32 ký tự, bắt đầu bằng chữ/số và chỉ dùng chữ, số, '.', '_' hoặc '-'.";
+        }
+        if (pass.isEmpty()) {
+            return "Vui lòng nhập mật khẩu.";
+        }
+        return null;
+    }
+
+    /** Hiện lỗi nhập liệu và đưa con trỏ về trường cần sửa. */
+    private void showInputError(String message) {
+        appendLog("DỮ LIỆU KẾT NỐI: " + message);
+        Alert a = new Alert(Alert.AlertType.WARNING, message, ButtonType.CLOSE);
+        a.setHeaderText("Kiểm tra thông tin đăng nhập");
+        a.setResizable(true);
+        if (remoteTable.getScene() != null) {
+            a.initOwner(remoteTable.getScene().getWindow());
+        }
+        AppIcon.apply(a);
+        a.show();
     }
 
     /** QUIT + đóng socket trên luồng nền, sau đó đưa giao diện về trạng thái chưa kết nối. */
