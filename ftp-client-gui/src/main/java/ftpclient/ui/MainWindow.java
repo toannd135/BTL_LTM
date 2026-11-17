@@ -683,9 +683,11 @@ public class MainWindow {
                     connectButton.setDisable(false);
                 });
             }
+        });
+    }
 
-            /** Kiểm tra dữ liệu kết nối trước khi mở socket hoặc gửi mật khẩu. */
-            private static String validateConnectionInput(String host, String portText, String user, String pass) {
+    /** Kiểm tra dữ liệu kết nối trước khi mở socket hoặc gửi mật khẩu. */
+    private static String validateConnectionInput(String host, String portText, String user, String pass) {
                 if (host.isEmpty() || host.chars().anyMatch(Character::isWhitespace)) {
                     return "Máy chủ không được để trống và không được chứa khoảng trắng.";
                 }
@@ -712,20 +714,18 @@ public class MainWindow {
                 return null;
             }
 
-            /** Hiện lỗi nhập liệu và đưa con trỏ về trường cần sửa. */
-            private void showInputError(String message) {
-                appendLog("DỮ LIỆU KẾT NỐI: " + message);
-                Alert a = new Alert(Alert.AlertType.WARNING, message, ButtonType.CLOSE);
-                a.setHeaderText("Kiểm tra thông tin đăng nhập");
-                a.setResizable(true);
-                if (remoteTable.getScene() != null) {
-                    a.initOwner(remoteTable.getScene().getWindow());
-                }
-                AppIcon.apply(a);
-                a.show();
+        /** Hiện lỗi nhập liệu và đưa con trỏ về trường cần sửa. */
+        private void showInputError(String message) {
+            appendLog("DỮ LIỆU KẾT NỐI: " + message);
+            Alert a = new Alert(Alert.AlertType.WARNING, message, ButtonType.CLOSE);
+            a.setHeaderText("Kiểm tra thông tin đăng nhập");
+            a.setResizable(true);
+            if (remoteTable.getScene() != null) {
+                a.initOwner(remoteTable.getScene().getWindow());
             }
-        });
-    }
+            AppIcon.apply(a);
+            a.show();
+        }
 
     /** QUIT + đóng socket trên luồng nền, sau đó đưa giao diện về trạng thái chưa kết nối. */
     private void disconnect() {
