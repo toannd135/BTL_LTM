@@ -683,6 +683,8 @@ public class MainWindow {
                     connectButton.setDisable(false);
                 });
             }
+        });
+    }
 
             /** Kiểm tra dữ liệu kết nối trước khi mở socket hoặc gửi mật khẩu. */
             private static String validateConnectionInput(String host, String portText, String user, String pass) {
@@ -724,8 +726,6 @@ public class MainWindow {
                 AppIcon.apply(a);
                 a.show();
             }
-        });
-    }
 
     /** QUIT + đóng socket trên luồng nền, sau đó đưa giao diện về trạng thái chưa kết nối. */
     private void disconnect() {
