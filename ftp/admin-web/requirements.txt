@@ -5,3 +5,4 @@ python-multipart==0.0.30
 itsdangerous==2.2.0
 psycopg[binary]==3.2.13
 boto3==1.36.26
+websockets==12.0
