@@ -25,7 +25,11 @@ class MigrationAndAuthTest {
     void migrate_createsSchemaAndIsIdempotent(@TempDir Path tmp) throws Exception {
         Database db = new Database(tmp.resolve("t.db"));
         Migrator m = new Migrator(db);
+<<<<<<< HEAD
         assertEquals(8, m.migrate());
+=======
+        assertEquals(9, m.migrate());
+>>>>>>> vinh
         assertEquals(0, m.migrate());
         try (Connection c = db.open(); var rs = c.createStatement().executeQuery("SELECT COUNT(*) FROM users")) {
             rs.next();
@@ -68,7 +72,7 @@ class MigrationAndAuthTest {
         User sv = um.authenticate("sv", "sv");
         assertNotNull(sv);
         assertEquals("user", sv.role());
-        assertEquals("/sv", sv.home());
+        assertEquals("/", sv.home()); // V009: thoi nhot trong "/sv", dung thu muc ca nhan /home/sv
         assertTrue(sv.canWrite());
         assertEquals(false, sv.canDelete());
     }

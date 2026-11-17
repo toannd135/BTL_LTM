@@ -506,8 +506,9 @@ with db.db() as d:
     d.execute("INSERT INTO files(path, size, mtime, sha256, status, quarantine_path) VALUES "
               "('/test/useruid.ini', 3, 0, 'h', 'CLEAN', NULL), ('/test/bad.exe', 3, 0, 'h2', 'QUARANTINED', 's3://q/9_bad.exe')")
     elig = mph.eligible_owners(d)
-check("migrate: chi nhan vien home '/' (khong fm/admin/auditor/sv)", "toan" in elig and "dung" in elig
-      and not {"fm", "admin", "auditor", "sv"} & elig)
+# sv: tu V009 co home '/' (thu muc ca nhan /home/sv) nen cung la nhan vien hop le
+check("migrate: chi nhan vien home '/' (khong fm/admin/auditor)", {"toan", "dung", "sv"} <= elig
+      and not {"fm", "admin", "auditor"} & elig)
 
 s3 = FakeS3()
 fstore = storage.S3Storage("http://x", "a", "b", "ftp-files", client=s3)

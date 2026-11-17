@@ -3,13 +3,13 @@ package ftpserver.command;
 import java.io.IOException;
 import java.nio.file.Path;
 
+import ftpserver.acl.Perm;
 import ftpserver.auth.User;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
 import ftpserver.core.SessionState;
 import ftpserver.fs.PathResolver;
-import ftpserver.rbac.RbacService;
 
 /**
  * PASS &lt;mat-khau&gt;: xac thuc user da khai bao bang USER.
@@ -18,7 +18,7 @@ import ftpserver.rbac.RbacService;
  * nap quyen RBAC va nhot user trong thu muc home. Sai mat khau: 530; sai lien tiep {@value #MAX_FAILED_LOGINS}
  * lan thi tra 421 va dong ket noi. Thu muc home khong dung duoc: 530.
  *
- * <p>Nhan vien (co file:upload, khong co file:manage, khong chi doc) co home "/" duoc cap thu muc ca nhan
+ * <p>User co home "/" va co file:upload (nhan vien, nguoi quan ly tep; khong chi doc) duoc cap thu muc ca nhan
  * /home/&lt;user&gt; (tu tao, ghi chu so huu) va bat dau phien o do; home van la "/" de chia se cheo giua cac user
  * van hoat dong. Xem {@link ClientSession#getPersonalHome()}.
  */
@@ -48,6 +48,7 @@ public final class PassCommandHandler implements CommandHandler {
 
     /** Gan user vao phien, nap quyen va chuyen vao thu muc home; tra 530 neu home khong dung duoc. */
     private static void loginSucceeded(ClientSession session, User user) {
+        Path storageRoot = session.pathResolver().rootDir(); // goc chung (truoc khi nhot vao home cua user)
         PathResolver home;
         try {
             home = homeResolver(session, user);
@@ -62,7 +63,7 @@ public final class PassCommandHandler implements CommandHandler {
         session.setPathResolver(home);
         Path personal = personalHome(session, user, home);
         session.setPersonalHome(personal);
-        session.setCurrentDir(personal != null ? personal : home.rootDir());
+        session.setCurrentDir(personal != null ? personal : startDir(session, home, storageRoot));
         session.audit("LOGIN", "roles=" + session.grants().roles() + " home=" + user.home()
                 + (session.isTlsActive() ? " tls=on" : " tls=off"), true);
         session.setState(SessionState.AUTHENTICATED);
@@ -87,25 +88,73 @@ public final class PassCommandHandler implements CommandHandler {
     }
 
     /**
-     * Tao (neu chua co) /home/&lt;user&gt; cho nhan vien co home "/" va ghi chu so huu; null neu khong ap dung hoac
-     * khong tao duoc (khi do user van dang nhap binh thuong o "/").
+     * Tao (neu chua co) /home/&lt;user&gt; cho user co home "/" duoc tai len (nhan vien, nguoi quan ly tep) va ghi chu
+     * so huu; null neu khong ap dung hoac khong tao duoc (khi do user van dang nhap binh thuong o "/").
+     * Tai khoan chi doc, admin, kiem toan vien (khong co file:upload) khong co thu muc ca nhan.
      */
     private static Path personalHome(ClientSession session, User user, PathResolver home) {
         if (!user.home().replaceFirst("^/+", "").isEmpty() || user.readOnly() || !SAFE_NAME.matcher(user.name()).matches()) {
             return null;
         }
         String key = ClientSession.PERSONAL_HOMES + "/" + user.name();
-        if (!session.grants().has("file:upload", key) || session.grants().has(RbacService.FILE_MANAGE, key)) {
+        if (!session.grants().has("file:upload", key)) {
             return null;
         }
         try {
             Path dir = home.resolve(home.rootDir(), key.substring(1));
+            moveLegacyHome(session, user, home, dir);
             session.store().mkdirs(dir);
             session.acl().recordOwner(session.aclPath(dir), user.name());
             return dir;
         } catch (IOException | RuntimeException e) {
             System.err.println("Personal home " + key + " unavailable: " + e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Thu muc bat dau phien cho user khong co thu muc ca nhan: goc cua home neu duoc xem; neu khong (vd file_manager
+     * chi duoc giao "/home/dung/homnaylamgi") thi thu muc dau tien user co file:list va dang ton tai, de lenh LIST
+     * dau tien cua client khong bi tu choi. Khong tim duoc thi van la goc (hanh vi cu).
+     */
+    private static Path startDir(ClientSession session, PathResolver home, Path storageRoot) {
+        Path root = home.rootDir();
+        if (session.can(root, Perm.READ)) {
+            return root;
+        }
+        for (String scope : session.grants().scopesOf("file:list")) {
+            Path dir = storageRoot.resolve(scope.replaceFirst("^/+", "")).normalize();
+            if (dir.startsWith(root) && session.store().isDirectory(dir) && session.can(dir, Perm.READ)) {
+                return dir;
+            }
+        }
+        return root;
+    }
+
+    private static final Object LEGACY_MOVE_LOCK = new Object();
+
+    /**
+     * Tai khoan kieu cu bi nhot trong "/&lt;user&gt;" (vd sv voi home "/sv"). Migration V009 doi home cua ho ve "/";
+     * lan dang nhap dau tien sau do chuyen ca cay "/&lt;user&gt;" sang "/home/&lt;user&gt;" (chu so huu, ACL chia se va
+     * trang thai quet di theo tep, giong lenh RNTO). Chi chuyen khi dich chua ton tai, nen chay lai khong anh huong.
+     */
+    private static void moveLegacyHome(ClientSession session, User user, PathResolver home, Path personalDir)
+            throws IOException {
+        if (user.name().equals(ClientSession.PERSONAL_HOMES.substring(1))) {
+            return; // user ten "home": "/home" chinh la thu muc chung, khong phai thu muc cu cua user
+        }
+        Path legacy = home.resolve(home.rootDir(), user.name());
+        synchronized (LEGACY_MOVE_LOCK) { // hai phien cung user dang nhap cung luc khong chuyen hai lan
+            if (!session.store().isDirectory(legacy) || session.store().exists(personalDir)) {
+                return;
+            }
+            session.store().mkdirs(personalDir.getParent());
+            String from = session.aclPath(legacy);
+            String to = session.aclPath(personalDir);
+            session.store().move(legacy, personalDir);
+            session.acl().moveTree(from, to);
+            session.scan().moved(from, to);
+            session.auditAs(user.name(), "RENAME", from + " -> " + to + " (legacy home moved)", true);
         }
     }
 
