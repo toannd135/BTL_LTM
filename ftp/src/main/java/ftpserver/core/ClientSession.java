@@ -429,16 +429,21 @@ public class ClientSession implements Runnable {
                 && (grants.has(RbacService.FILE_MANAGE, key) || acl.allows(user, key, need))) {
             return true;
         }
+        // Cho phep di qua cac thu muc cha toi scope duoc cap; noi dung van duoc loc o tung muc con.
+        if (need == Perm.READ && grants != null && grants.hasDescendant(rbacPerm, key)) {
+            return true;
+        }
         return breakglass(key); // neu vai tro/ACL khong cho, cap quyen dac biet con han van co the cho phep
     }
 
     /**
-     * "/" va "/home" la vung chung: voi user co thu muc ca nhan (xem PassCommandHandler), quyen WRITE tren chinh hai
-     * thu muc nay (tao tep/thu muc moi, doi ten vao, xoa chung) bi tu choi; ben trong /home/&lt;user&gt; va noi da duoc
-     * cap ACL WRITE van ghi binh thuong.
+     * "/" va "/home" la vung chung: voi nhan vien co thu muc ca nhan (xem PassCommandHandler), quyen WRITE tren chinh
+     * hai thu muc nay (tao tep/thu muc moi, doi ten vao, xoa chung) bi tu choi; ben trong /home/&lt;user&gt; va noi da
+     * duoc cap ACL WRITE van ghi binh thuong. Nguoi quan ly tep (file:manage) khong bi gioi han nay.
      */
     private boolean isSharedTopLevel(String key) {
-        return personalHome != null && (key.equals("/") || key.equals(PERSONAL_HOMES));
+        boolean manager = grants != null && grants.has(RbacService.FILE_MANAGE, key);
+        return personalHome != null && !manager && (key.equals("/") || key.equals(PERSONAL_HOMES));
     }
 
     /**

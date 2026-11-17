@@ -43,8 +43,17 @@ public class PathResolver {
 
     /** Nem SecurityException neu ket qua nam ngoai rootDir (chong path traversal). */
     public Path resolve(Path currentDir, String userInput) {
-        String input = (userInput == null || userInput.isBlank()) ? "." : userInput;
-        Path candidate = currentDir.resolve(input).normalize();
+        String input = (userInput == null || userInput.isBlank()) ? "." : userInput.replace('\\', '/');
+        // Duong dan tuyet doi cua FTP ("/home/sv") tinh tu thu muc goc cua user, KHONG phai goc o dia cua he dieu hanh
+        Path base = currentDir;
+        if (input.startsWith("/")) {
+            base = rootDir;
+            input = input.replaceFirst("^/+", "");
+            if (input.isEmpty()) {
+                input = ".";
+            }
+        }
+        Path candidate = base.resolve(input).normalize();
         if (!candidate.startsWith(rootDir)) {
             throw new SecurityException("Path traversal attempt: " + userInput);
         }
