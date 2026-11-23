@@ -97,15 +97,13 @@ public final class Main {
         }
     }
 
-    /** Mo CSDL (SQLite theo db.path, hoac JDBC theo db.url) va ap cac migration con thieu. */
+    /** Mo CSDL PostgreSQL theo db.url va ap cac migration con thieu. */
     private static Database openDatabase(Config config) throws SQLException, IOException {
-        Database database = config.dbUrl() == null
-                ? new Database(config.dbPath())
-                : new Database(config.dbUrl(), config.dbUser(), config.dbPassword());
+        Database database = new Database(config.dbUrl(), config.dbUser(), config.dbPassword());
         int applied = new Migrator(database).migrate();
         // Bo phan query string/tham so cua URL de khong in mat khau ra log.
-        String dbName = config.dbUrl() == null ? config.dbPath().toString() : config.dbUrl().replaceAll("[?;].*$", "");
-        System.out.println("Database " + database.dialect() + " " + dbName + " ready (" + applied + " migration(s) applied)");
+        String dbName = config.dbUrl().replaceAll("[?;].*$", "");
+        System.out.println("Database PostgreSQL " + dbName + " ready (" + applied + " migration(s) applied)");
         return database;
     }
 

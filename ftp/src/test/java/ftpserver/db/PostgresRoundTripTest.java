@@ -4,25 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.testcontainers.DockerClientFactory;
-import org.testcontainers.containers.PostgreSQLContainer;
 
 import ftpserver.acl.AclService;
 import ftpserver.acl.Perm;
@@ -32,68 +24,19 @@ import ftpserver.auth.UserManager;
 import ftpserver.rbac.RbacService;
 import ftpserver.scan.ScanService;
 
-/**
- * Cung mot vong nghiep vu chay tren SQLite va PostgreSQL that (Testcontainers, postgres:16-alpine).
- * Ban PostgreSQL bi bo qua (skip) neu may khong co Docker.
- */
-class DialectRoundTripTest {
-
-    private static PostgreSQLContainer<?> pg;
-    private static final AtomicInteger SEQ = new AtomicInteger();
-
-    static Stream<String> dialects() {
-        return Stream.of("sqlite", "postgres");
-    }
-
-    private static synchronized PostgreSQLContainer<?> postgres() {
-        if (pg == null) {
-            boolean docker;
-            try {
-                docker = DockerClientFactory.instance().isDockerAvailable();
-            } catch (Throwable t) {
-                docker = false;
-            }
-            Assumptions.assumeTrue(docker, "Docker not available: skip PostgreSQL");
-            pg = new PostgreSQLContainer<>("postgres:16-alpine");
-            pg.start();
-        }
-        return pg;
-    }
-
-    @AfterAll
-    static void stop() {
-        if (pg != null) {
-            pg.stop();
-        }
-    }
-
-    /** CSDL moi, rong cho moi test. */
-    private static Database fresh(String dialect, Path tmp) throws Exception {
-        if (dialect.equals("sqlite")) {
-            return new Database(tmp.resolve("t.db"));
-        }
-        PostgreSQLContainer<?> c = postgres();
-        String name = "t" + SEQ.incrementAndGet();
-        try (Connection admin = DriverManager.getConnection(c.getJdbcUrl(), c.getUsername(), c.getPassword());
-             var st = admin.createStatement()) {
-            st.execute("CREATE DATABASE " + name);
-        }
-        String url = c.getJdbcUrl().replaceFirst("/[^/?]+(\\?|$)", "/" + name + "$1");
-        return new Database(url, c.getUsername(), c.getPassword());
-    }
+/** Vong nghiep vu tren PostgreSQL that (Testcontainers, postgres:16-alpine, xem {@link TestDb}). */
+class PostgresRoundTripTest {
 
     @Test
-    void dialectFromUrl() {
-        assertEquals(Database.Dialect.SQLITE, new Database("jdbc:sqlite:x.db", null, null).dialect());
-        assertEquals(Database.Dialect.POSTGRES, new Database("jdbc:postgresql://h/db", "u", "p").dialect());
+    void rejectsNonPostgresUrl_andTimestampFormat() {
+        assertThrows(IllegalArgumentException.class, () -> new Database("jdbc:sqlite:x.db", null, null));
         assertTrue(Database.now().matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"));
         assertTrue(Database.nowPlusMinutes(5).compareTo(Database.now()) > 0);
     }
 
-    @ParameterizedTest
-    @MethodSource("dialects")
-    void migrateIsIdempotent_andTimestampsMatchJavaFormat(String dialect, @TempDir Path tmp) throws Exception {
-        Database db = fresh(dialect, tmp);
+    @Test
+    void migrateIsIdempotent_andTimestampsMatchJavaFormat(@TempDir Path tmp) throws Exception {
+        Database db = TestDb.fresh();
         assertEquals(9, new Migrator(db).migrate());
         assertEquals(0, new Migrator(db).migrate());
         try (Connection c = db.open(); var st = c.createStatement();
@@ -114,10 +57,9 @@ class DialectRoundTripTest {
         }
     }
 
-    @ParameterizedTest
-    @MethodSource("dialects")
-    void businessRoundTrip(String dialect, @TempDir Path tmp) throws Exception {
-        Database db = fresh(dialect, tmp);
+    @Test
+    void businessRoundTrip(@TempDir Path tmp) throws Exception {
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
 
         // dang nhap + RBAC

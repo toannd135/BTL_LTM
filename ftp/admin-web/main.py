@@ -6,7 +6,7 @@ Danh sach bien moi truong: xem config.py.
 Cau truc ma nguon:
   main.py          tao app, gan middleware va cac nhom trang (tep nay)
   config.py        bien moi truong va hang so
-  db.py            ket noi SQLite / PostgreSQL
+  db.py            ket noi PostgreSQL
   security.py      mat khau, CSRF, kiem tra dang nhap/quyen tung trang
   rbac.py          vai tro va quyen cua tai khoan
   auditlog.py      ghi / doc nhat ky kiem toan

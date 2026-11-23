@@ -17,7 +17,7 @@ Mỗi package Java có `package-info.java` mô tả vai trò của package đó.
 
 ```
 Main ──> config.Config (ftpserver.conf + biến FTP_*)
-  │──> db.Database + db.Migrator (SQLite hoặc PostgreSQL, migration trong src/main/resources/db/migration)
+  │──> db.Database + db.Migrator (PostgreSQL, migration trong src/main/resources/db/migration)
   │──> fs.FileStore (LocalFileStore | S3FileStore) + fs.PathResolver (đường dẫn ảo <-> thật, chặn thoát thư mục)
   │──> tls.TlsSupport, audit.AuditLog, core.Services(acl, rbac, scan, store)
   └──> core.FtpServer ── mỗi kết nối ──> core.ClientSession (1 luồng / phiên)
