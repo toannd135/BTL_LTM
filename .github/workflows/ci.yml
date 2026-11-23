@@ -86,9 +86,7 @@ jobs:
           cache-dependency-path: ftp/admin-web/requirements.txt
       - name: Cài dependency
         run: pip install -r requirements.txt httpx
-      # test tự dựng CSDL tạm từ ftp/src/main/resources/db/migration/{sqlite,postgres}
-      - name: Kiểm thử trang admin (SQLite)
-        run: python test_admin.py
+      # test tự dựng CSDL tạm từ ftp/src/main/resources/db/migration
       - name: Kiểm thử trang admin (PostgreSQL)
         env:
           ADMIN_TEST_PG_URL: postgresql://t:t@localhost:5432/t

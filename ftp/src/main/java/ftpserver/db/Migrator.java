@@ -15,7 +15,7 @@ import java.util.HexFormat;
 import java.util.List;
 
 /**
- * Chay cac tep SQL trong classpath db/migration/{sqlite|postgres}/ theo thu tu khai bao o db/migration/index.txt.
+ * Chay cac tep SQL trong classpath db/migration/ theo thu tu khai bao o db/migration/index.txt.
  * Moi migration chay trong mot giao dich va chi chay mot lan (ghi vao schema_migrations).
  * Sua noi dung migration da chay se bi tu choi (so checksum).
  *
@@ -25,12 +25,11 @@ import java.util.List;
 public class Migrator {
 
     private final Database db;
-    /** Thu muc migration theo dialect: db/migration/sqlite/ hoac db/migration/postgres/. */
-    private final String dir;
+    /** Thu muc chua cac tep migration trong classpath. */
+    private static final String DIR = "db/migration/";
 
     public Migrator(Database db) {
         this.db = db;
-        this.dir = "db/migration/" + (db.dialect() == Database.Dialect.POSTGRES ? "postgres/" : "sqlite/");
     }
 
     /**
@@ -49,7 +48,7 @@ public class Migrator {
             }
             for (String file : files) {
                 String version = file.substring(0, file.indexOf("__"));
-                String sql = read(dir + file);
+                String sql = read(DIR + file);
                 String checksum = sha256(sql);
                 String existing = appliedChecksum(c, version);
                 if (existing != null) {
@@ -105,7 +104,7 @@ public class Migrator {
 
     private List<String> readIndex() throws IOException {
         List<String> files = new ArrayList<>();
-        for (String line : read(dir + "index.txt").split("\\R")) {
+        for (String line : read(DIR + "index.txt").split("\\R")) {
             String entry = line.trim();
             if (!entry.isEmpty() && !entry.startsWith("#")) {
                 files.add(entry);

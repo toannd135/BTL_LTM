@@ -15,6 +15,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import ftpserver.auth.User;
 import ftpserver.db.Database;
+import ftpserver.db.TestDb;
 import ftpserver.db.Migrator;
 
 class RbacServiceTest {
@@ -24,7 +25,7 @@ class RbacServiceTest {
 
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
-        db = new Database(tmp.resolve("t.db"));
+        db = TestDb.fresh();
         new Migrator(db).migrate();
         rbac = new RbacService(db);
     }
@@ -124,7 +125,7 @@ class RbacServiceTest {
 
         try (Connection c = db.open(); var st = c.createStatement()) {
             st.execute("INSERT INTO breakglass_grants(username, scope, reason, granted_by, expires_at) "
-                    + "VALUES ('inc', '/old', 'expired', 'sa', datetime('now', '-1 minutes'))");
+                    + "VALUES ('inc', '/old', 'expired', 'sa', '" + Database.nowPlusMinutes(-1) + "')");
         }
         assertNull(rbac.activeBreakglass("inc", "/old/a"));
         assertEquals(0, rbac.activeBreakglassReport().size());

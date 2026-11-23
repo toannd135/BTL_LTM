@@ -244,7 +244,7 @@ public class AclService {
         }
     }
 
-    /** Cap (hoac doi) quyen cho user tren path (upsert, chay duoc tren ca SQLite va PostgreSQL). */
+    /** Cap (hoac doi) quyen cho user tren path (upsert ON CONFLICT). */
     public void grant(String path, String username, Perm perm, String grantedBy) throws SQLException {
         try (Connection c = db.open(); PreparedStatement ps = c.prepareStatement(
                 "INSERT INTO file_acl(path, username, perm, granted_by) VALUES (?, ?, ?, ?) "

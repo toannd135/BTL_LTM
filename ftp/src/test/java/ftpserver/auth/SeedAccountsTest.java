@@ -15,12 +15,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import ftpserver.db.Database;
+import ftpserver.db.TestDb;
 import ftpserver.db.Migrator;
 
 class SeedAccountsTest {
 
     private static Database db(Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         return db;
     }
