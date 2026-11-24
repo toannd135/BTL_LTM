@@ -23,7 +23,7 @@ class MigrationAndAuthTest {
 
     @Test
     void migrate_createsSchemaAndIsIdempotent(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         Migrator m = new Migrator(db);
         assertEquals(9, m.migrate());
         assertEquals(0, m.migrate());
@@ -35,7 +35,7 @@ class MigrationAndAuthTest {
 
     @Test
     void seededRoles_separateDuties(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         UserManager um = new UserManager(db);
         RbacService rbac = new RbacService(db);
@@ -56,7 +56,7 @@ class MigrationAndAuthTest {
 
     @Test
     void seededAccounts_canLogin(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         UserManager um = new UserManager(db);
 
@@ -75,7 +75,7 @@ class MigrationAndAuthTest {
 
     @Test
     void wrongPasswordUnknownUserAndDisabled_areRejected(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         UserManager um = new UserManager(db);
         assertNull(um.authenticate("admin", "sai"));
@@ -89,7 +89,7 @@ class MigrationAndAuthTest {
 
     @Test
     void passwordsAreStoredHashed(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         try (Connection c = db.open(); ResultSet rs = c.createStatement().executeQuery("SELECT password_hash FROM users")) {
             while (rs.next()) {
@@ -100,7 +100,7 @@ class MigrationAndAuthTest {
 
     @Test
     void modifiedAppliedMigration_isRejected(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         try (Connection c = db.open()) {
             c.createStatement().executeUpdate("UPDATE schema_migrations SET checksum = 'x' WHERE version = 'V001'");

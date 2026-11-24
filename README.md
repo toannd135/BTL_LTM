@@ -58,7 +58,7 @@ Mục tiêu kỹ thuật:
 | Phân quyền nhiều tầng | RBAC (vai trò + scope thư mục) kết hợp ACL từng tệp, thư mục cá nhân `/home/<user>` cho nhân viên, kiểm tra ngay trên server |
 | Kiểm toán | Audit song song ra file `audit.log` và bảng `audit_events` |
 | An toàn dữ liệu | Quét clamd **trước** khi commit vào kho, tệp nhiễm đã biết không bao giờ được lưu; tự cách ly tệp phát hiện nhiễm sau, quét lại định kỳ; snapshot đĩa dữ liệu hằng đêm |
-| Mở rộng | Kho tệp trừu tượng (`FileStore`): đĩa cục bộ hoặc SeaweedFS (S3); CSDL SQLite hoặc PostgreSQL |
+| Mở rộng | Kho tệp trừu tượng (`FileStore`): đĩa cục bộ hoặc SeaweedFS (S3); CSDL PostgreSQL |
 | Vận hành | Docker, Terraform, Ansible, GitHub Actions |
 
 ---
@@ -213,7 +213,7 @@ flowchart LR
 | Độ tin cậy | Không rò rỉ tài nguyên khi client ngắt đột ngột | `cleanup()` trong `finally`; `pasv_leak_test.py` |
 | An toàn dữ liệu | Ưu tiên an toàn hơn sẵn sàng khi máy quét lỗi | Tệp `PENDING` bị chặn tải khi `scan.enforce=true` |
 | Truy vết | Mọi thao tác nhạy cảm có dấu vết không thể bỏ qua | Audit kép: file `audit.log` + bảng `audit_events` |
-| Khả chuyển, mở rộng | Đổi kho tệp và CSDL không sửa nghiệp vụ | Interface `FileStore`, hai bộ migration SQLite/PostgreSQL |
+| Khả chuyển, mở rộng | Đổi kho tệp và CSDL không sửa nghiệp vụ | Interface `FileStore`, migration SQL có phiên bản |
 | Tương thích | Dùng được với client FTP phổ thông | Tuân RFC 959/4217, thử với `ftp`, `curl` |
 | Dễ dùng | Giao diện tiếng Việt, xác nhận thao tác nguy hiểm, lỗi dễ hiểu | `ErrorText`, hộp xác nhận mặc định "Không" |
 | Vận hành | Bật/tắt theo giờ, sao lưu, cập nhật không gián đoạn lâu | Auto-shutdown 23:00, cron snapshot đĩa hằng đêm (giữ 7 bản), chạy lại Ansible |
@@ -376,7 +376,7 @@ Hệ thống gồm **ba ứng dụng** chia sẻ chung dữ liệu và một l�
       │ S3 API (hoặc đĩa cục bộ)         JDBC/psycopg
       ▼                                        ▼
  ┌────────────┐                       ┌─────────────────────┐
- │ SeaweedFS  │                       │ PostgreSQL / SQLite │
+ │ SeaweedFS  │                       │ PostgreSQL          │
  │ (kho tệp + │                       │ users, roles, ACL,  │
  │ cách ly)   │                       │ audit, files        │
  └────────────┘                       │                     │
@@ -393,7 +393,7 @@ Server và trang quản trị **dùng chung** CSDL, kho tệp và `audit.log`, n
 |---|---|---|
 | Ngôn ngữ server, client | Java 21 | Dùng `switch` biểu thức, `record`, virtual-friendly I/O |
 | Build | Maven 3.8+, `maven-shade-plugin` 3.5.3 | Đóng gói `ftpserver.jar` chạy độc lập |
-| CSDL | SQLite (`sqlite-jdbc` 3.46.1.3), PostgreSQL 16 (`postgresql` 42.7.12) | Hai bộ migration riêng theo dialect |
+| CSDL | PostgreSQL 16 (`postgresql` 42.7.12) | Migration SQL chạy khi khởi động |
 | Kho đối tượng | SeaweedFS 4.50 qua AWS SDK v2 S3 (2.30.31, dùng `url-connection-client`) | Loại bỏ apache/netty client để jar gọn |
 | Quét mã độc | ClamAV (`clamd`, giao thức `INSTREAM`) | Tự cài `ClamdClient`, không dùng thư viện ngoài |
 | GUI | JavaFX 21 (`javafx-controls`), `javafx-maven-plugin` 0.0.8 | Đóng gói bằng `jpackage` (MSI/DMG/deb) |
@@ -434,18 +434,19 @@ BTL_LTM/
 │   │   ├── tls/                 TlsSupport
 │   │   ├── scan/                ScanService, ClamdClient
 │   │   └── db/                  Database, Migrator
-│   ├── src/main/resources/db/migration/{sqlite,postgres}/V001..V007 + index.txt
+│   ├── src/main/resources/db/migration/V001..V009 + index.txt
 │   ├── src/test/java/ftpserver/ 12 lớp test
 │   ├── scripts/                 smoke, concurrency, pasv_leak, ftps, bench_throughput, gen-keystore.sh
 │   ├── ftproot/                 Thư mục gốc mẫu (docs/sample.txt)
 │   └── admin-web/               ── TRANG QUẢN TRỊ ──
 │       ├── main.py              Tạo app, gắn middleware và các nhóm trang (~60 dòng)
-│       ├── config.py, db.py     Biến môi trường/hằng số; kết nối SQLite/PostgreSQL
+│       ├── config.py, db.py     Biến môi trường/hằng số; kết nối PostgreSQL
 │       ├── security.py, rbac.py Mật khẩu, CSRF, kiểm tra quyền; vai trò và quyền
 │       ├── auditlog.py, stats.py, health.py   Nhật ký; số liệu dashboard; tình trạng máy chủ
 │       ├── scanner.py, file_service.py        Quét ClamAV; nghiệp vụ tệp (đồng bộ, cách ly, khôi phục...)
 │       ├── web.py, storage.py   Template/render/phân trang; kho tệp đĩa hoặc S3
-│       ├── routes/              auth, dashboard, users, files, audit, breakglass (mỗi tệp một APIRouter)
+│       ├── live_sessions.py     Đọc / ngắt phiên FTP đang kết nối (bảng ftp_sessions)
+│       ├── routes/              auth, dashboard, users, files, audit, breakglass, sessions (mỗi tệp một APIRouter)
 │       ├── test_admin.py
 │       ├── scripts/             migrate_personal_homes.py (chuyển tệp nhân viên từ gốc vào /home/<chủ>)
 │       ├── templates/           base, login, dashboard, users, files, audit, breakglass + partial
@@ -489,7 +490,7 @@ BTL_LTM/
 | `fs/S3FileStore` | Cài đặt trên SeaweedFS qua S3: mỗi tệp là một object, thư mục là tiền tố, upload đệm tạm rồi `PutObject` |
 | `scan/` | `ClamdClient` (INSTREAM), `ScanService` (prescan, quét nền, chặn tải) |
 | `tls/TlsSupport` | Nạp keystore PKCS12, bọc socket điều khiển/dữ liệu bằng `SSLSocket` |
-| `db/` | `Database` (kết nối SQLite/PostgreSQL), `Migrator` (chạy `V00x` theo `index.txt`) |
+| `db/` | `Database` (kết nối PostgreSQL), `Migrator` (chạy `V00x` theo `index.txt`) |
 
 ### 8.2 Danh sách lệnh FTP hỗ trợ
 
@@ -851,7 +852,7 @@ Nhờ cơ chế tạm + commit: hai client cùng `STOR` một tên không làm h
 | `idle.timeout.seconds` | 300 | Ngắt phiên im lặng |
 | `storage.type` | `local` | `local` (đĩa) hoặc `s3` (SeaweedFS) |
 | `root.dir` | `./ftproot` | Thư mục gốc khi dùng kho local |
-| `db.path` / `db.url`, `db.user`, `db.password` | `./data/ftpserver.db` | SQLite hoặc PostgreSQL |
+| `db.url`, `db.user`, `db.password` | `jdbc:postgresql://localhost:5432/ftpserver` | CSDL PostgreSQL |
 | `tls.keystore`, `tls.keystore.password`, `tls.required` | tắt | FTPS; `tls.required=true` bắt buộc mã hóa |
 | `scan.clamd` / `scan.command` | tắt | Quét qua clamd (TCP) hoặc lệnh ngoài |
 | `scan.enforce` | false | Chặn tải tệp chưa quét xong (`PENDING`) |
@@ -1179,7 +1180,7 @@ Tệp vẫn được commit nhưng ở `PENDING` và bị chặn tải (khi `enf
 
 ## 11. Cơ sở dữ liệu
 
-Schema tạo bằng **migration** khi server khởi động (`db/Migrator`, danh sách trong `index.txt`), có hai bộ riêng cho `sqlite/` và `postgres/`. Test `DialectRoundTripTest` kiểm tra trên PostgreSQL thật qua Testcontainers (tự bỏ qua nếu máy không có Docker).
+Schema tạo bằng **migration** khi server khởi động (`db/Migrator`, danh sách trong `index.txt`), Toàn bộ test Java chạy trên PostgreSQL thật qua Testcontainers (`TestDb`, cần Docker).
 
 | Migration | Nội dung |
 |---|---|
@@ -1347,16 +1348,25 @@ Mã nguồn chia thành nhiều tệp nhỏ: `main.py` chỉ tạo ứng dụng 
 | Tệp & quét | `GET /files`, `POST /files/sync`, `/{id}/scan`, `/approve`, `/quarantine`, `/restore`, `/delete` | Đồng bộ kho S3 vào bảng `files`, quét lại, duyệt sạch, cách ly, khôi phục, xóa hẳn |
 | Nhật ký | `GET /audit` | Xem/lọc/phân trang audit |
 | Break-glass | `GET/POST /breakglass`, `POST /breakglass/{id}/revoke` | Cấp và thu hồi quyền khẩn cấp |
+| Phiên FTP (thời gian thực) | `GET /sessions`, WebSocket `/ws/sessions` | Danh sách phiên FTP đang kết nối (tài khoản, IP, TLS, thời lượng) tự cập nhật khi có người kết nối/ngắt; `user:manage` bấm **Ngắt** để server cắt phiên (≤ 5 giây, audit `ADMIN_SESSION_KILL` + `SESSION_KILL`), `audit:view` chỉ xem |
 
-Tổng cộng 21 route. Template Jinja2: `base`, `login`, `dashboard`, `users`, `files`, `audit`, `breakglass`, và các phần dùng chung `_audit_table`, `_icon`, `_pager`.
+Template Jinja2: `base`, `login`, `dashboard`, `users`, `files`, `audit`, `breakglass`, `sessions`, và các phần dùng chung `_audit_table`, `_icon`, `_pager`.
 
-### 13.3 `storage.py`
+### 13.3 Phiên FTP thời gian thực (WebSocket)
+
+FTP server ghi mỗi kết nối vào bảng `ftp_sessions` (`SessionRegistry`), cập nhật `last_seen` mỗi 5 giây và tự ngắt phiên có `kill_requested = 1`. Trang `/sessions` mở một WebSocket tới `/ws/sessions`:
+
+- **Bắt tay:** trình duyệt gửi HTTP `Upgrade: websocket`; server kiểm tra cookie phiên đăng nhập, quyền (`user:manage` hoặc `audit:view`) và header `Origin` (chống Cross-Site WebSocket Hijacking), hợp lệ thì trả `101 Switching Protocols`, sai thì từ chối ngay ở bước bắt tay.
+- **Server → trình duyệt:** một *hub* duy nhất đọc `ftp_sessions` mỗi giây và chỉ gửi khi danh sách thay đổi (dù nhiều admin cùng xem, CSDL chỉ bị hỏi một lần mỗi giây); định kỳ kiểm tra lại quyền của người đang xem, mất quyền thì đóng kết nối (mã 1008).
+- **Trình duyệt → server:** `{"type":"kill"}` khi bấm Ngắt; server đọc lại quyền ngay lúc đó, đặt `kill_requested`, ghi audit. Trình duyệt tự kết nối lại (1, 2, 4… tối đa 15 giây) khi mất mạng.
+
+### 13.4 `storage.py`
 
 Lớp trừu tượng kho dùng cho web: `from_env(root, quarantine)` chọn backend đĩa hoặc S3 (boto3), băm SHA-256 theo luồng, bọc lỗi S3 thành thông báo rõ. Tệp cách ly chuyển sang bucket `<bucket>-quarantine` (trên Azure là `ftp-files-quarantine`) — cùng bucket mà FTP server dùng khi tự cách ly tệp nhiễm (mục 10), nên admin khôi phục/xóa hẳn được cả hai loại.
 
-### 13.4 Kiểm thử
+### 13.5 Kiểm thử
 
-`test_admin.py` (547 dòng, 147 kiểm tra) chạy trên SQLite và trên PostgreSQL (CI), kiểm tra đăng nhập, quyền theo vai trò, quản lý user, thao tác tệp, audit, break-glass và script chuyển thư mục cá nhân.
+`test_admin.py` (159 kiểm tra) chạy trên PostgreSQL, kiểm tra đăng nhập, quyền theo vai trò, quản lý user, thao tác tệp, audit, break-glass và script chuyển thư mục cá nhân.
 
 ---
 
@@ -1442,7 +1452,7 @@ Pipeline `.github/workflows/ci.yml` (GitHub Actions) theo nguyên tắc *build o
 |---|---|
 | `server-test` | `mvn verify` build + test server, giữ `ftpserver.jar` đã test cho job `image` |
 | `infra-check` | `terraform fmt` + `validate`, `ansible --syntax-check` (tạo tệp `~/.ansible-vault-pass` giả vì `ansible.cfg` trỏ tới tệp mật khẩu vault) |
-| `admin-web-test` | Test trang quản trị trên SQLite **và** PostgreSQL |
+| `admin-web-test` | Test trang quản trị trên PostgreSQL |
 | `ui-package` | Ma trận hệ điều hành: build jar + gom dependency JavaFX theo OS, tính version, `jpackage` ra `.msi` / `.dmg` / `.deb`; ký MSI, notarize DMG (tùy chọn). Build đủ 3 OS ở mọi lần chạy |
 | `image` | Chỉ khi push `main`/tag và test đạt: build `ftpserver`, `ftpadmin` → đẩy GHCR với tag `sha-<commit>`, `latest` (main), `X.Y.Z` (tag) |
 | `release` | Chỉ khi push tag `v*`: đính kèm 3 bản cài client vào GitHub Release |
@@ -1460,7 +1470,7 @@ Ngoài ra có `.sonarcloud.properties` cho phân tích chất lượng mã.
 | Loại | Nội dung | Số lượng |
 |---|---|---|
 | Unit/Integration Java | `AclServiceTest`, `AuditLogDbTest`, `PasswordHasherTest`, `SeedAccountsTest`, `ConfigTest`, `DialectRoundTripTest` (Postgres Testcontainers), `MigrationAndAuthTest`, `FileStoreTest`, `PathResolverTest`, `RbacServiceTest`, `ClamdClientTest`, `ScanServiceTest` | 12 lớp, **65 test** (chạy thực tế, xem 16.3) |
-| Web | `ftp/admin-web/test_admin.py` | 97/97 kiểm tra PASS (SQLite; CI thêm PostgreSQL) |
+| Web | `ftp/admin-web/test_admin.py` | 159/159 kiểm tra PASS (PostgreSQL) |
 | Kịch bản đầu cuối (server đang chạy) | `smoke_test.py` (chức năng cơ bản), `concurrency_test.py` (nhiều client), `pasv_leak_test.py` (rò rỉ cổng PASV), `ftps_test.py` (FTPS, cần keystore) | 4 script |
 | Hiệu năng | `bench_throughput.py` | xem dưới |
 
@@ -1507,7 +1517,7 @@ Các lệnh dưới đây được chạy trực tiếp trên máy phát triển
 | `ScanServiceTest` | 9 | Quét trước commit, chặn tải, trạng thái, cách ly tệp nhiễm (sau upload, quét nền), quét lại định kỳ tệp `CLEAN` cũ |
 | **Tổng** | **65** | |
 
-**Kiểm thử trang quản trị (`test_admin.py`)**: **97/97 kiểm tra `PASS`, kết thúc `ALL ADMIN TESTS PASSED`** (chạy với SQLite; CI chạy thêm bản PostgreSQL). Các nhóm gồm đăng nhập/đăng xuất, quyền theo vai trò, quản lý người dùng, thao tác tệp, break-glass (cấp, thu hồi, biến mất khỏi danh sách), dashboard cảnh báo mã độc 24 giờ, thống kê dung lượng/lưu lượng/top người dùng/top IP lỗi theo khoảng 24h–7d–30d, tìm tệp và cột chủ sở hữu, đăng nhập lần cuối.
+**Kiểm thử trang quản trị (`test_admin.py`)**: **159/159 kiểm tra `PASS`, kết thúc `ALL ADMIN TESTS PASSED`** (chạy trên PostgreSQL). Các nhóm gồm đăng nhập/đăng xuất, quyền theo vai trò, quản lý người dùng, thao tác tệp, break-glass (cấp, thu hồi, biến mất khỏi danh sách), dashboard cảnh báo mã độc 24 giờ, thống kê dung lượng/lưu lượng/top người dùng/top IP lỗi theo khoảng 24h–7d–30d, tìm tệp và cột chủ sở hữu, đăng nhập lần cuối.
 
 **Kiểm thử đầu cuối trên Azure** (bản `sha-89ca994`, qua FTPS, dùng hai tài khoản nhân viên tạm rồi xóa):
 
@@ -1665,7 +1675,7 @@ Ký hiệu: **●** chủ trì (chịu trách nhiệm hoàn thành và giải th
 | 5 | Kho tệp và đường dẫn an toàn | `FileStore`, `LocalFileStore`, `PathResolver` | | | ● | ○ |
 | 6 | Lệnh thư mục và tệp | `CWD`, `CDUP`, `PWD`, `MKD`, `RMD`, `DELE`, `RNFR`, `RNTO` | | | ● | ○ |
 | 7 | Kho đối tượng S3 | `S3FileStore`, cấu hình SeaweedFS, `docker-compose.yml` | | ○ | ● | |
-| 8 | CSDL và migration | `Database`, `Migrator`, `V001`–`V007` (SQLite + PostgreSQL) | ○ | | | ● |
+| 8 | CSDL và migration | `Database`, `Migrator`, `V001`–`V009` (PostgreSQL) | ○ | | | ● |
 | 9 | Xác thực, tài khoản mẫu | `PasswordHasher`, `UserManager`, `SeedAccounts` | | | | ● |
 | 10 | Mã hóa FTPS phía server | `TlsSupport`, `AUTH`, `PBSZ`, `PROT`, `gen-keystore.sh` | ○ | | | ● |
 | 11 | Phân quyền | `RbacService`, `AclService` (gồm `READ` thư mục cha khi có quyền bên dưới), `Perm`, `ClientSession.canDelete`, thư mục cá nhân `/home/<user>` (`PassCommandHandler`, `isSharedTopLevel`), `migrate_personal_homes.py` | | | ○ | ● |
@@ -1783,7 +1793,7 @@ Hệ thống hoàn thành ba ứng dụng gắn kết (FTP server tự cài đ�
 1. **Giao thức tự cài đặt hoàn chỉnh**: 31 handler, PASV/PORT, FTPS explicit, REST/APPE, đa luồng ổn định (200 client đồng thời, 0 lỗi, SHA-256 khớp).
 2. **Bảo mật nhiều lớp, kiểm tra trên server**: RBAC có scope + ACL từng tệp + chủ sở hữu, tách biệt nhiệm vụ (quản trị/kiểm toán không đọc được dữ liệu), break-glass có thời hạn, audit cả lần bị từ chối.
 3. **An toàn dữ liệu**: tệp được quét clamd **trước khi commit**, tệp nhiễm đã biết không bao giờ vào kho; tệp chỉ bị phát hiện sau (quét lại định kỳ) được tự động cách ly; tệp nén có mật khẩu bị từ chối; lỗi máy quét thì chọn phương án an toàn (`PENDING` và chặn tải); đĩa dữ liệu được snapshot hằng đêm.
-4. **Kiến trúc mở rộng**: `FileStore` (đĩa/S3) và hai dialect CSDL (SQLite/PostgreSQL) qua migration, nhờ vậy chạy được từ máy cá nhân tới Azure.
+4. **Kiến trúc mở rộng**: `FileStore` (đĩa/S3) và CSDL PostgreSQL quản lý bằng migration, nhờ vậy chạy được từ máy cá nhân tới Azure.
 5. **Hạ tầng như mã**: Terraform + Ansible dựng toàn bộ môi trường Azure có phân tách mạng; CI/CD kiểm tra test, cấu hình hạ tầng, build image lên GHCR và đóng gói bản cài đặt đa nền tảng; bí mật triển khai mã hóa bằng Ansible Vault.
 
 Các hạn chế (mục 21) chủ yếu là việc hoàn thiện vận hành và đo lường mở rộng, không ảnh hưởng đến kiến trúc cốt lõi.
@@ -1813,7 +1823,7 @@ Các hạn chế (mục 21) chủ yếu là việc hoàn thiện vận hành và
 12. OpenJFX, *JavaFX Documentation*. https://openjfx.io
 13. Oracle, *Java SE 21 Documentation*, các gói `java.net`, `javax.net.ssl`, `java.nio.file`. https://docs.oracle.com/en/java/javase/21/
 14. S. Ramírez, *FastAPI documentation*. https://fastapi.tiangolo.com
-15. PostgreSQL Global Development Group, *PostgreSQL 16 Documentation*; SQLite Consortium, *SQLite Documentation*. https://www.postgresql.org/docs/16/ , https://www.sqlite.org/docs.html
+15. PostgreSQL Global Development Group, *PostgreSQL 16 Documentation*. https://www.postgresql.org/docs/16/
 16. HashiCorp, *Terraform Registry: azurerm provider*. https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs
 17. Red Hat, *Ansible Documentation*, *Ansible Vault*. https://docs.ansible.com
 18. Docker Inc., *Docker Compose documentation*. https://docs.docker.com/compose/

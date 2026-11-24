@@ -13,6 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import ftpserver.auth.User;
 import ftpserver.db.Database;
+import ftpserver.db.TestDb;
 import ftpserver.db.Migrator;
 
 class AclServiceTest {
@@ -25,7 +26,7 @@ class AclServiceTest {
 
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         acl = new AclService(db);
     }

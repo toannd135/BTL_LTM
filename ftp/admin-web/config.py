@@ -2,8 +2,7 @@
 
 Bien moi truong chinh:
   FTP_HOME        thu muc ftp/ cua server (mac dinh tu do tim)
-  FTP_DB          tep SQLite (khi khong dat FTP_DB_URL)
-  FTP_DB_URL      jdbc:sqlite:<tep> | jdbc:postgresql://host:port/db | postgresql://...
+  FTP_DB_URL      jdbc:postgresql://host:port/db | postgresql://... (mac dinh postgresql://localhost:5432/ftpserver)
   FTP_DB_USER, FTP_DB_PASSWORD
   FTP_ROOT        thu muc goc kho tep (kho dia cuc bo)
   FTP_AUDIT_LOG   tep audit.log dung chung voi server
@@ -32,7 +31,6 @@ def _find_ftp_home() -> Path:
 
 
 FTP_HOME = _find_ftp_home()
-DB_PATH = Path(os.environ.get("FTP_DB", FTP_HOME / "data" / "ftpserver.db"))
 ROOT = Path(os.environ.get("FTP_ROOT", FTP_HOME / "ftproot")).resolve()
 AUDIT_LOG = Path(os.environ.get("FTP_AUDIT_LOG", FTP_HOME / "logs" / "audit.log"))
 QUARANTINE = Path(os.environ.get("FTP_QUARANTINE", FTP_HOME / "quarantine")).resolve()
@@ -96,4 +94,5 @@ EVENT_LABELS = {
     "ADMIN_GRANT_ROLE": "Gán vai trò", "ADMIN_REVOKE_ROLE": "Gỡ vai trò", "ADMIN_FILE_SYNC": "Đồng bộ kho tệp",
     "ADMIN_FILE_SCAN": "Quét lại tệp", "ADMIN_FILE_APPROVE": "Duyệt tệp", "ADMIN_FILE_QUARANTINE": "Cách ly tệp",
     "ADMIN_FILE_RESTORE": "Khôi phục tệp", "ADMIN_FILE_DELETE": "Xóa hẳn tệp",
+    "ADMIN_SESSION_KILL": "Yêu cầu ngắt phiên FTP",
 }

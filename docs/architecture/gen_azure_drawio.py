@@ -220,7 +220,7 @@ def page_cicd():
 
     dev = p.icon("Lập trình viên", 100, 150, 64, 64, AZ + "identity/Users.svg")
     repo = p.icon("GitHub repo<br>push main / tag v*", 250, 152, 60, 60, logo("github"))
-    gha = p.box(B("GitHub Actions") + "<br>• mvn verify (server)<br>• test admin-web (SQLite + PG)"
+    gha = p.box(B("GitHub Actions") + "<br>• mvn verify (server)<br>• test admin-web (PostgreSQL)"
                 "<br>• terraform validate · ansible syntax-check<br>• build installer .msi / .dmg / .deb",
                 400, 110, 280, 140, extra="align=left;spacingLeft=10;")
     ghcr = p.box(B("GHCR") + "<br>ftpserver, ftpadmin<br>:sha-xxxxxxx · :latest", 780, 100, 200, 80, "#DAE8FC", "#6C8EBF")

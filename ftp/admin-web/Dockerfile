@@ -18,10 +18,8 @@ COPY templates templates
 COPY static static
 
 # Dữ liệu dùng chung với ftpserver: mount volume vào các đường dẫn dưới đây.
-# PostgreSQL: đặt FTP_DB_URL=jdbc:postgresql://host:5432/db (hoặc postgresql://...), FTP_DB_USER, FTP_DB_PASSWORD;
-# không đặt FTP_DB_URL thì dùng SQLite tại FTP_DB.
-ENV FTP_DB=/data/ftpserver.db \
-    FTP_ROOT=/ftproot \
+# CSDL PostgreSQL: đặt FTP_DB_URL=jdbc:postgresql://host:5432/db (hoặc postgresql://...), FTP_DB_USER, FTP_DB_PASSWORD.
+ENV FTP_ROOT=/ftproot \
     FTP_AUDIT_LOG=/logs/audit.log \
     FTP_QUARANTINE=/quarantine
 

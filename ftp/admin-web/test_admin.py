@@ -1,12 +1,14 @@
 """Kiem thu trang admin: python test_admin.py (can fastapi, httpx). Tu dung CSDL tam tu cac tep migration SQL.
-Mac dinh SQLite tam. Dat ADMIN_TEST_PG_URL=postgresql://u:p@host:port/db de chay tren PostgreSQL
-(CANH BAO: test XOA SACH schema public cua DB do roi ap migration postgres/)."""
-import os, re, sqlite3, sys, tempfile
+Can PostgreSQL: dat ADMIN_TEST_PG_URL=postgresql://u:p@host:port/db
+(CANH BAO: test XOA SACH schema public cua DB do roi ap lai migration)."""
+import os, re, sys, tempfile
 from pathlib import Path
 
 tmp = Path(tempfile.mkdtemp())
 PG_URL = os.environ.get("ADMIN_TEST_PG_URL", "").strip()
-os.environ.update(FTP_DB=str(tmp / "t.db"), FTP_ROOT=str(tmp / "ftproot"), FTP_AUDIT_LOG=str(tmp / "audit.log"),
+if not PG_URL:
+    sys.exit("Can dat ADMIN_TEST_PG_URL=postgresql://u:p@host:port/db")
+os.environ.update(FTP_ROOT=str(tmp / "ftproot"), FTP_AUDIT_LOG=str(tmp / "audit.log"),
                   FTP_QUARANTINE=str(tmp / "quarantine"), FTPADMIN_SECRET="test-secret", FTP_DB_URL=PG_URL)
 for k in ("FTP_DB_USER", "FTP_DB_PASSWORD"):
     os.environ.pop(k, None)
@@ -14,22 +16,15 @@ for k in ("FTP_DB_USER", "FTP_DB_PASSWORD"):
 
 here = Path(__file__).parent
 mig = (here.parent / "ftp" if (here.parent / "ftp").is_dir() else here.parent) / "src/main/resources/db/migration"
-mig = mig / ("postgres" if PG_URL else "sqlite")
 scripts = [(mig / l.strip()).read_text() for l in (mig / "index.txt").read_text().splitlines()
            if l.strip() and not l.startswith("#")]
-if PG_URL:
-    import psycopg
-    with psycopg.connect(PG_URL, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
-        for sql in scripts:
-            conn.execute(sql)
-else:
-    conn = sqlite3.connect(tmp / "t.db")
+import psycopg
+with psycopg.connect(PG_URL, autocommit=True) as conn:
+    conn.execute("DROP SCHEMA public CASCADE")
+    conn.execute("CREATE SCHEMA public")
     for sql in scripts:
-        conn.executescript(sql)
-    conn.commit(); conn.close()
-print("CSDL:", "PostgreSQL " + PG_URL.rsplit("@", 1)[-1] if PG_URL else "SQLite " + str(tmp / "t.db"))
+        conn.execute(sql)
+print("CSDL: PostgreSQL " + PG_URL.rsplit("@", 1)[-1])
 
 from fastapi.testclient import TestClient
 import main
@@ -545,4 +540,75 @@ rc = mph.run(apply=True, out=lines.append)
 check("migrate local: chuyen thu muc that, dich da co ban ghi -> CONFLICT bo qua", rc == 1
       and (config.ROOT / "home" / "dung" / "d2" / "sub" / "f.txt").read_text() == "x" and not (config.ROOT / "d2").exists()
       and any(l.startswith("CONFLICT /dung-dir") for l in lines))
+# ---------- phien FTP dang ket noi (trang /sessions + WebSocket /ws/sessions) ----------
+from datetime import datetime as _sdt, timedelta as _std, timezone as _stz
+import live_sessions
+
+def _sess_ts(seconds_ago=0):
+    t = _sdt.now(_stz.utc) - _std(seconds=seconds_ago)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+with db.db() as d:
+    d.execute("DELETE FROM ftp_sessions")
+    for sid, user, tls, ago in (("S1", "sv", 1, 0), ("S2", None, 0, 0), ("S9", "ghost", 0, 300)):  # S9: server da chet
+        d.execute("INSERT INTO ftp_sessions(id, server_id, ip, username, tls, started_at, last_seen, kill_requested) "
+                  "VALUES (?, 'srv-a', '10.0.0.5', ?, ?, ?, ?, 0)", (sid, user, tls, _sess_ts(ago + 60), _sess_ts(ago)))
+check("live_sessions: bo dong co nhip tim qua cu", sorted(s["id"] for s in live_sessions.live_sessions()) == ["S1", "S2"])
+
+adm = login_as("admin", "admin")
+page = adm.get("/sessions")
+check("/sessions: admin xem duoc, co nut ngat va menu", page.status_code == 200 and "S1" in page.text and "S9" not in page.text
+      and 'href="/sessions"' in page.text and "var canKill = true" in page.text)
+aud = login_as("auditor", "auditor")
+check("/sessions: auditor chi xem", aud.get("/sessions").status_code == 200 and "var canKill = false" in aud.get("/sessions").text)
+check("/sessions: chua dang nhap -> /login", TestClient(main.app, follow_redirects=False).get("/sessions").status_code == 303)
+
+def ws_rejected(client, **kw):
+    try:
+        with client.websocket_connect("/ws/sessions", **kw) as w:
+            w.receive_json()
+        return False
+    except Exception:
+        return True
+
+check("ws: chua dang nhap bi tu choi o buoc bat tay", ws_rejected(TestClient(main.app)))
+check("ws: Origin cua trang khac bi tu choi (chong CSWSH)", ws_rejected(adm, headers={"origin": "http://evil.example"}))
+
+with adm.websocket_connect("/ws/sessions") as w:
+    first = w.receive_json()
+    check("ws: vao la nhan ngay danh sach, admin duoc ngat", first["type"] == "sessions" and first["can_kill"] is True
+          and sorted(s["id"] for s in first["sessions"]) == ["S1", "S2"])
+    with db.db() as d:  # mot phien moi ket noi trong luc dang xem
+        d.execute("INSERT INTO ftp_sessions(id, server_id, ip, username, tls, started_at, last_seen, kill_requested) "
+                  "VALUES ('S3', 'srv-a', '10.0.0.7', 'dung', 1, ?, ?, 0)", (_sess_ts(), _sess_ts()))
+    pushed = w.receive_json()  # hub chi gui khi danh sach doi, nen tin tiep theo phai co S3
+    check("ws: phien moi duoc day xuong ma khong can tai lai", pushed["type"] == "sessions"
+          and "S3" in [s["id"] for s in pushed["sessions"]])
+    w.send_json({"type": "kill", "id": "S1", "server_id": "srv-a"})
+    res = w.receive_json()
+    while res["type"] != "result":
+        res = w.receive_json()
+    with db.db() as d:
+        flag = d.execute("SELECT kill_requested FROM ftp_sessions WHERE id='S1'").fetchone()[0]
+    check("ws: ngat phien -> dat kill_requested=1 va bao thanh cong", res["ok"] and flag == 1)
+    w.send_json({"type": "kill", "id": "S404", "server_id": "srv-a"})
+    res = w.receive_json()
+    while res["type"] != "result":
+        res = w.receive_json()
+    check("ws: ngat phien khong ton tai -> bao loi", res["ok"] is False)
+check("ws: ngat phien ghi audit ADMIN_SESSION_KILL", any(r["event"] == "ADMIN_SESSION_KILL" and "S1" in r["detail"]
+                                                         and r["user"] == "admin" for r in auditlog.read_audit(limit=20)))
+
+with aud.websocket_connect("/ws/sessions") as w:
+    first = w.receive_json()
+    w.send_json({"type": "kill", "id": "S2", "server_id": "srv-a"})
+    res = w.receive_json()
+    while res["type"] != "result":
+        res = w.receive_json()
+    with db.db() as d:
+        flag = d.execute("SELECT kill_requested FROM ftp_sessions WHERE id='S2'").fetchone()[0]
+check("ws: auditor xem duoc nhung KHONG ngat duoc", first["can_kill"] is False and res["ok"] is False and flag == 0)
+with db.db() as d:
+    d.execute("DELETE FROM ftp_sessions")
+
 print("\nALL ADMIN TESTS PASSED")

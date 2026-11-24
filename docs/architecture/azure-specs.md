@@ -64,7 +64,7 @@ Muốn sửa sơ đồ thì sửa `gen_azure_drawio.py` rồi chạy `python3 do
 
 | Bước | Công cụ | Kết quả |
 |---|---|---|
-| Push `main` | GitHub Actions | Test server (`mvn verify`), test admin-web (SQLite + PG), `terraform validate`, `ansible syntax-check`; image `ghcr.io/<repo>/{ftpserver,ftpadmin}:sha-<commit>` và `:latest` |
+| Push `main` | GitHub Actions | Test server (`mvn verify`), test admin-web (PostgreSQL), `terraform validate`, `ansible syntax-check`; image `ghcr.io/<repo>/{ftpserver,ftpadmin}:sha-<commit>` và `:latest` |
 | Tag `v*` | GitHub Actions | Thêm image `:<version>` và GitHub Release kèm installer `.msi`, `.dmg`, `.deb` |
 | Cấp phát | `terraform apply` | Toàn bộ tài nguyên ở bảng 1–3, sinh `ansible/inventory/hosts.ini` |
 | Cấu hình | `ansible-playbook site.yml -e app_version=sha-<7>` | Roles `base`, `docker`, `ftpserver` (VM-A), `storage` (VM-B); bí mật từ ansible-vault ghi ra `.env` quyền 0600 |

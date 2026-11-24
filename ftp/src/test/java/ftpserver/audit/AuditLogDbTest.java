@@ -10,13 +10,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import ftpserver.db.Database;
+import ftpserver.db.TestDb;
 import ftpserver.db.Migrator;
 
 class AuditLogDbTest {
 
     @Test
     void eventsAreStoredAndFilterable(@TempDir Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         AuditLog log = new AuditLog(tmp.resolve("audit.log"), db);
         log.log("S1", "1.2.3.4", "alice", "UPLOAD", "/a.txt", true);
