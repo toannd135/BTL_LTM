@@ -9,13 +9,32 @@
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.2</javafx.version>
+        <test.excludedGroups>benchmark</test.excludedGroups>
+        <test.groups></test.groups>
     </properties>
+
+    <profiles>
+        <!-- mvn test -Pbench: chi chay cac benchmark trong src/test/java/ftpclient/benchmark -->
+        <profile>
+            <id>bench</id>
+            <properties>
+                <test.excludedGroups></test.excludedGroups>
+                <test.groups>benchmark</test.groups>
+            </properties>
+        </profile>
+    </profiles>
 
     <dependencies>
         <dependency>
             <groupId>org.openjfx</groupId>
             <artifactId>javafx-controls</artifactId>
             <version>${javafx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -24,6 +43,20 @@
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
+            </plugin>
+            <!-- mvn test: chi chay test chuc nang; benchmark (@Tag("benchmark")) chay rieng bang: mvn test -Pbench -->
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <excludedGroups>${test.excludedGroups}</excludedGroups>
+                    <groups>${test.groups}</groups>
+                    <trimStackTrace>false</trimStackTrace>
+                    <includes>
+                        <include>**/*Test.java</include>
+                        <include>**/*Benchmark.java</include>
+                    </includes>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.openjfx</groupId>
