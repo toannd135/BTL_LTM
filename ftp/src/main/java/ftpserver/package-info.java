@@ -6,7 +6,7 @@
  * <ul>
  *   <li>{@code core} - vong doi ket noi va phien, dieu phoi lenh; {@code command} - handler tung lenh FTP/SITE.</li>
  *   <li>{@code data} - kenh du lieu PASV/PORT; {@code tls} - FTPS (AUTH TLS, PROT P).</li>
- *   <li>{@code db} - ket noi CSDL SQLite/PostgreSQL va migration; cac service con lai deu dung no.</li>
+ *   <li>{@code db} - ket noi CSDL PostgreSQL va migration; cac service con lai deu dung no.</li>
  *   <li>{@code fs} - luu tru tep (dia cuc bo hoac S3) va phan giai duong dan ao.</li>
  *   <li>{@code auth}, {@code rbac}, {@code acl} - xac thuc, vai tro theo scope, quyen theo tep.</li>
  *   <li>{@code scan} - quet ma doc; {@code audit} - nhat ky kiem toan.</li>
