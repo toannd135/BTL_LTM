@@ -39,8 +39,6 @@ public class Config {
     private final int scanRescanDays;
 
     /** Gioi han mac dinh cua scan.max_bytes (500 MiB). */
-    /** CSDL mac dinh khi khong dat db.url / FTP_DB_URL. */
-    public static final String DEFAULT_DB_URL = "jdbc:postgresql://localhost:5432/ftpserver";
     public static final long DEFAULT_SCAN_MAX_BYTES = 524_288_000L;
 
     /** Mac dinh scan.rescan_days: tep CLEAN quet lan cuoi qua 7 ngay thi quet lai (chu ky moi). */
@@ -161,7 +159,10 @@ public class Config {
                 ? Integer.parseInt(props.getProperty("idle.timeout.seconds").trim())
                 : 300;
 
-        String dbUrl = envOr("FTP_DB_URL", props.getProperty("db.url", DEFAULT_DB_URL)).trim();
+        String dbUrl = envOr("FTP_DB_URL", optional(props, "db.url"));
+        if (dbUrl == null) {
+            throw new IllegalArgumentException("Missing required config: db.url (or env FTP_DB_URL)");
+        }
         if (!dbUrl.startsWith("jdbc:postgresql:")) {
             throw new IllegalArgumentException("db.url must be a PostgreSQL JDBC URL (jdbc:postgresql://host:port/db): " + dbUrl);
         }
