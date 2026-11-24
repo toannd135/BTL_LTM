@@ -15,12 +15,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import ftpserver.db.Database;
+import ftpserver.db.TestDb;
 import ftpserver.db.Migrator;
 
 class ScanServiceTest {
 
     private static Database db(Path tmp) throws Exception {
-        Database db = new Database(tmp.resolve("t.db"));
+        Database db = TestDb.fresh();
         new Migrator(db).migrate();
         return db;
     }
@@ -28,11 +29,12 @@ class ScanServiceTest {
     @Test
     void newUploadIsPending_blockedOnlyWhenEnforced(@TempDir Path tmp) throws Exception {
         Path f = Files.writeString(tmp.resolve("a.txt"), "hello");
-        ScanService lax = new ScanService(db(tmp), List.of(), false);
+        Database db = db(tmp);
+        ScanService lax = new ScanService(db, List.of(), false);
         lax.onUpload("/a.txt", f);
         assertNull(lax.blockReason("/a.txt"));
 
-        ScanService strict = new ScanService(db(tmp), List.of(), true);
+        ScanService strict = new ScanService(db, List.of(), true);
         assertEquals("file is pending malware scan", strict.blockReason("/a.txt"));
         assertNull(strict.blockReason("/never-seen.txt"));
     }
