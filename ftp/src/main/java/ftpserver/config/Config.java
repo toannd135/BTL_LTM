@@ -21,7 +21,6 @@ public class Config {
     private final int dataPortMin;
     private final int dataPortMax;
     private final int idleTimeoutSeconds;
-    private final Path dbPath;
     private final String dbUrl;
     private final String dbUser;
     private final String dbPassword;
@@ -40,6 +39,8 @@ public class Config {
     private final int scanRescanDays;
 
     /** Gioi han mac dinh cua scan.max_bytes (500 MiB). */
+    /** CSDL mac dinh khi khong dat db.url / FTP_DB_URL. */
+    public static final String DEFAULT_DB_URL = "jdbc:postgresql://localhost:5432/ftpserver";
     public static final long DEFAULT_SCAN_MAX_BYTES = 524_288_000L;
 
     /** Mac dinh scan.rescan_days: tep CLEAN quet lan cuoi qua 7 ngay thi quet lai (chu ky moi). */
@@ -49,7 +50,7 @@ public class Config {
     public record S3Settings(String endpoint, String region, String accessKey, String secretKey, String bucket, String prefix) {}
 
     private Config(int controlPort, Path rootDir, int dataPortMin, int dataPortMax,
-                   int idleTimeoutSeconds, Path dbPath, String dbUrl, String dbUser, String dbPassword, String pasvAddress,
+                   int idleTimeoutSeconds, String dbUrl, String dbUser, String dbPassword, String pasvAddress,
                    Path tlsKeystore, String tlsKeystorePassword, boolean tlsRequired, Path auditLog,
                    List<String> scanCommand, boolean scanEnforce, S3Settings s3, String scanClamd,
                    long scanMaxBytes, Path quarantineDir, String s3QuarantineBucket, int scanRescanDays) {
@@ -58,7 +59,6 @@ public class Config {
         this.dataPortMin = dataPortMin;
         this.dataPortMax = dataPortMax;
         this.idleTimeoutSeconds = idleTimeoutSeconds;
-        this.dbPath = dbPath;
         this.dbUrl = dbUrl;
         this.dbUser = dbUser;
         this.dbPassword = dbPassword;
@@ -85,9 +85,7 @@ public class Config {
     public int dataPortMin() { return dataPortMin; }
     public int dataPortMax() { return dataPortMax; }
     public int idleTimeoutSeconds() { return idleTimeoutSeconds; }
-    /** Tep SQLite chua tai khoan; migration chay khi server khoi dong. */
-    public Path dbPath() { return dbPath; }
-    /** JDBC URL (jdbc:postgresql://... hoac jdbc:sqlite:...); null = dung SQLite tai db.path. */
+    /** JDBC URL PostgreSQL (jdbc:postgresql://host:port/db); migration chay khi server khoi dong. */
     public String dbUrl() { return dbUrl; }
     public String dbUser() { return dbUser; }
     public String dbPassword() { return dbPassword; }
@@ -163,8 +161,10 @@ public class Config {
                 ? Integer.parseInt(props.getProperty("idle.timeout.seconds").trim())
                 : 300;
 
-        Path dbPath = Path.of(props.getProperty("db.path", "./data/ftpserver.db").trim());
-        String dbUrl = envOr("FTP_DB_URL", optional(props, "db.url"));
+        String dbUrl = envOr("FTP_DB_URL", props.getProperty("db.url", DEFAULT_DB_URL)).trim();
+        if (!dbUrl.startsWith("jdbc:postgresql:")) {
+            throw new IllegalArgumentException("db.url must be a PostgreSQL JDBC URL (jdbc:postgresql://host:port/db): " + dbUrl);
+        }
         String dbUser = envOr("FTP_DB_USER", optional(props, "db.user"));
         String dbPassword = envOr("FTP_DB_PASSWORD", optional(props, "db.password"));
         String pasvAddress = optional(props, "pasv.address");
@@ -192,7 +192,7 @@ public class Config {
                 props.getProperty("scan.rescan_days", String.valueOf(DEFAULT_SCAN_RESCAN_DAYS))));
 
         return new Config(controlPort, rootDir, dataPortMin, dataPortMax, idleTimeoutSeconds,
-                dbPath, dbUrl, dbUser, dbPassword, pasvAddress, tlsKeystore, keystorePassword, tlsRequired, auditLog,
+                dbUrl, dbUser, dbPassword, pasvAddress, tlsKeystore, keystorePassword, tlsRequired, auditLog,
                 scanCommand, scanEnforce, s3, scanClamd, scanMaxBytes, quarantineDir, s3QuarantineBucket, scanRescanDays);
     }
 

@@ -1,12 +1,14 @@
 """Kiem thu trang admin: python test_admin.py (can fastapi, httpx). Tu dung CSDL tam tu cac tep migration SQL.
-Mac dinh SQLite tam. Dat ADMIN_TEST_PG_URL=postgresql://u:p@host:port/db de chay tren PostgreSQL
-(CANH BAO: test XOA SACH schema public cua DB do roi ap migration postgres/)."""
-import os, re, sqlite3, sys, tempfile
+Can PostgreSQL: dat ADMIN_TEST_PG_URL=postgresql://u:p@host:port/db
+(CANH BAO: test XOA SACH schema public cua DB do roi ap lai migration)."""
+import os, re, sys, tempfile
 from pathlib import Path
 
 tmp = Path(tempfile.mkdtemp())
 PG_URL = os.environ.get("ADMIN_TEST_PG_URL", "").strip()
-os.environ.update(FTP_DB=str(tmp / "t.db"), FTP_ROOT=str(tmp / "ftproot"), FTP_AUDIT_LOG=str(tmp / "audit.log"),
+if not PG_URL:
+    sys.exit("Can dat ADMIN_TEST_PG_URL=postgresql://u:p@host:port/db")
+os.environ.update(FTP_ROOT=str(tmp / "ftproot"), FTP_AUDIT_LOG=str(tmp / "audit.log"),
                   FTP_QUARANTINE=str(tmp / "quarantine"), FTPADMIN_SECRET="test-secret", FTP_DB_URL=PG_URL)
 for k in ("FTP_DB_USER", "FTP_DB_PASSWORD"):
     os.environ.pop(k, None)
@@ -14,22 +16,15 @@ for k in ("FTP_DB_USER", "FTP_DB_PASSWORD"):
 
 here = Path(__file__).parent
 mig = (here.parent / "ftp" if (here.parent / "ftp").is_dir() else here.parent) / "src/main/resources/db/migration"
-mig = mig / ("postgres" if PG_URL else "sqlite")
 scripts = [(mig / l.strip()).read_text() for l in (mig / "index.txt").read_text().splitlines()
            if l.strip() and not l.startswith("#")]
-if PG_URL:
-    import psycopg
-    with psycopg.connect(PG_URL, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
-        conn.execute("CREATE SCHEMA public")
-        for sql in scripts:
-            conn.execute(sql)
-else:
-    conn = sqlite3.connect(tmp / "t.db")
+import psycopg
+with psycopg.connect(PG_URL, autocommit=True) as conn:
+    conn.execute("DROP SCHEMA public CASCADE")
+    conn.execute("CREATE SCHEMA public")
     for sql in scripts:
-        conn.executescript(sql)
-    conn.commit(); conn.close()
-print("CSDL:", "PostgreSQL " + PG_URL.rsplit("@", 1)[-1] if PG_URL else "SQLite " + str(tmp / "t.db"))
+        conn.execute(sql)
+print("CSDL: PostgreSQL " + PG_URL.rsplit("@", 1)[-1])
 
 from fastapi.testclient import TestClient
 import main
