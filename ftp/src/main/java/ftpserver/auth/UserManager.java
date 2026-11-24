@@ -8,7 +8,7 @@ import java.sql.SQLException;
 import ftpserver.db.Database;
 
 /**
- * Xac thuc nguoi dung dua tren bang {@code users} (SQLite hoac PostgreSQL qua {@link Database}).
+ * Xac thuc nguoi dung dua tren bang {@code users} (PostgreSQL qua {@link Database}).
  * Goi boi lenh PASS trong package {@code command}. Tai khoan {@code enabled = 0} coi nhu khong ton tai.
  */
 public class UserManager {

@@ -21,13 +21,13 @@ class ConfigTest {
                 data.port.min=50000
                 data.port.max=50100
                 idle.timeout.seconds=300
-                db.path=%s
-                """.formatted(tmp.resolve("root"), tmp.resolve("x.db")));
+                db.url=jdbc:postgresql://db.example:5432/ftp
+                """.formatted(tmp.resolve("root")));
 
         Config config = Config.load(conf);
 
         assertEquals(2121, config.controlPort());
-        assertEquals(tmp.resolve("x.db"), config.dbPath());
+        assertEquals("jdbc:postgresql://db.example:5432/ftp", config.dbUrl());
     }
 
     @Test
@@ -58,7 +58,7 @@ class ConfigTest {
     void scanMaxBytes_onlyWhenEnforced_defaultAndValidation(@TempDir Path tmp) throws Exception {
         Path conf = tmp.resolve("ftpserver.conf");
         String base = "control.port=2121\nroot.dir=" + tmp.resolve("root") + "\ndata.port.min=50000\ndata.port.max=50100\n"
-                + "db.path=" + tmp.resolve("x.db") + "\nscan.command=true\n";
+                + "scan.command=true\n";
         Files.writeString(conf, base + "scan.enforce=true\n");
         assertEquals(Config.DEFAULT_SCAN_MAX_BYTES, Config.load(conf).scanMaxBytes());
         Files.writeString(conf, base + "scan.enforce=true\nscan.max_bytes=100\n");

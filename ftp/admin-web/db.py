@@ -1,7 +1,7 @@
-"""Ket noi CSDL dung chung voi FTP server: SQLite hoac PostgreSQL.
+"""Ket noi CSDL PostgreSQL dung chung voi FTP server.
 
-Moi cau SQL trong trang quan tri viet voi dau '?' lam cho giu tham so (kieu sqlite3). Khi chay tren PostgreSQL,
-lop DbConn tu doi '?' thanh '%s' cho psycopg, nen code nghiep vu khong phai biet dang dung CSDL nao.
+Moi cau SQL trong trang quan tri viet voi dau '?' lam cho giu tham so cho gon; lop DbConn tu doi '?' thanh '%s'
+cho psycopg.
 
 Cach dung:
     with db() as c:
@@ -10,43 +10,34 @@ Cach dung:
 Ra khoi khoi `with` khong loi thi tu commit; co loi thi khong commit.
 """
 import os
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-import config
+import psycopg
 
 
-def _db_target() -> tuple[str, str]:
-    """Doc FTP_DB_URL theo cung quy uoc voi server. Tra ve ("sqlite", duong dan tep) hoac ("postgres", URI)."""
-    url = os.environ.get("FTP_DB_URL", "").strip()
-    url = url.removeprefix("jdbc:")
-    if url.startswith(("postgresql://", "postgres://")):
-        return "postgres", url
-    if url.startswith("sqlite:"):
-        return "sqlite", url.removeprefix("sqlite:")
-    if url:
-        raise RuntimeError(f"FTP_DB_URL khong ho tro: {url!r} (chi sqlite / postgresql)")
-    return "sqlite", str(config.DB_PATH)
+DEFAULT_DB_URL = "postgresql://localhost:5432/ftpserver"
 
 
-DB_KIND, DB_TARGET = _db_target()
-IS_POSTGRES = DB_KIND == "postgres"
+def _db_url() -> str:
+    """Doc FTP_DB_URL theo cung quy uoc voi server (chap nhan ca tien to jdbc:)."""
+    url = (os.environ.get("FTP_DB_URL", "").strip() or DEFAULT_DB_URL).removeprefix("jdbc:")
+    if not url.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError(f"FTP_DB_URL khong ho tro: {url!r} (chi postgresql://)")
+    return url
+
+
+DB_URL = _db_url()
 DB_USER = os.environ.get("FTP_DB_USER") or None
 DB_PASSWORD = os.environ.get("FTP_DB_PASSWORD") or None
 
-# Loai loi CSDL de bat trong `except`: luon co loi cua sqlite3, them loi cua psycopg neu dung PostgreSQL
-DB_ERRORS: tuple = (sqlite3.Error,)
-DB_INTEGRITY_ERRORS: tuple = (sqlite3.IntegrityError,)  # vi pham UNIQUE, khoa ngoai...
-if IS_POSTGRES:
-    import psycopg  # chi can cai khi dung PostgreSQL
-
-    DB_ERRORS += (psycopg.Error,)
-    DB_INTEGRITY_ERRORS += (psycopg.IntegrityError,)
+# Loai loi CSDL de bat trong `except`
+DB_ERRORS: tuple = (psycopg.Error,)
+DB_INTEGRITY_ERRORS: tuple = (psycopg.IntegrityError,)  # vi pham UNIQUE, khoa ngoai...
 
 
 class PgRow(tuple):
-    """Dong ket qua psycopg doc duoc ca theo so thu tu (row[0]) lan theo ten cot (row["name"]), giong sqlite3.Row."""
+    """Dong ket qua psycopg doc duoc ca theo so thu tu (row[0]) lan theo ten cot (row["name"]), de code doc row["col"] cho gon."""
 
     def __new__(cls, values, column_index):
         row = super().__new__(cls, values)
@@ -68,42 +59,34 @@ def _pg_row_factory(cursor):
 
 
 class DbConn:
-    """Lop bao mong quanh ket noi sqlite3/psycopg: chi doi dau giu cho '?' -> '%s' khi can."""
+    """Lop bao mong quanh ket noi psycopg: doi dau giu cho '?' thanh '%s'."""
 
-    def __init__(self, raw, is_postgres: bool):
+    def __init__(self, raw):
         self.raw = raw
-        self.is_postgres = is_postgres
 
-    def _to_pg(self, sql: str) -> str:
+    @staticmethod
+    def _to_pg(sql: str) -> str:
         # '%' co san trong SQL (vd LIKE '%x') phai viet thanh '%%' de psycopg khong hieu nham la cho giu tham so
         return sql.replace("%", "%%").replace("?", "%s")
 
     def execute(self, sql: str, params=None):
-        params = tuple(params) if params else None
-        if not self.is_postgres:
-            return self.raw.execute(sql, params or ())
-        if params is None:
+        if not params:
             return self.raw.execute(sql)  # khong co tham so: psycopg khong dien gi, giu nguyen SQL
-        return self.raw.execute(self._to_pg(sql), params)
+        return self.raw.execute(self._to_pg(sql), tuple(params))
 
     def executemany(self, sql: str, rows):
         cur = self.raw.cursor()
-        cur.executemany(self._to_pg(sql) if self.is_postgres else sql, rows)
+        cur.executemany(self._to_pg(sql), rows)
         return cur
 
 
 @contextmanager
 def db():
     """Mo mot ket noi CSDL, commit khi xong, luon dong ket noi."""
-    if IS_POSTGRES:
-        raw = psycopg.connect(DB_TARGET, user=DB_USER, password=DB_PASSWORD, connect_timeout=5,
-                              row_factory=_pg_row_factory)
-    else:
-        raw = sqlite3.connect(DB_TARGET, timeout=5)
-        raw.row_factory = sqlite3.Row
-        raw.execute("PRAGMA foreign_keys = ON")
+    raw = psycopg.connect(DB_URL, user=DB_USER, password=DB_PASSWORD, connect_timeout=5,
+                          row_factory=_pg_row_factory)
     try:
-        yield DbConn(raw, IS_POSTGRES)
+        yield DbConn(raw)
         raw.commit()
     finally:
         raw.close()
