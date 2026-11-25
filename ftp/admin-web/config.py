@@ -7,6 +7,7 @@ Bien moi truong chinh:
   FTP_ROOT        thu muc goc kho tep (kho dia cuc bo)
   FTP_AUDIT_LOG   tep audit.log dung chung voi server
   FTP_QUARANTINE  noi chua tep bi cach ly (kho dia cuc bo)
+  FTP_QUARANTINE_RETENTION_DAYS  so ngay giu tep cach ly truoc khi tu xoa vinh vien (mac dinh 30, 0 = tat)
   FTP_CLAMD       "host[:port]" cua clamd (bo trong thi dung clamdscan/clamscan neu co)
   FTPADMIN_SECRET khoa ky cookie phien dang nhap
   FTPADMIN_TRUST_PROXY=1  lay IP that tu header cua proxy (Cloudflare/nginx)
@@ -34,6 +35,9 @@ FTP_HOME = _find_ftp_home()
 ROOT = Path(os.environ.get("FTP_ROOT", FTP_HOME / "ftproot")).resolve()
 AUDIT_LOG = Path(os.environ.get("FTP_AUDIT_LOG", FTP_HOME / "logs" / "audit.log"))
 QUARANTINE = Path(os.environ.get("FTP_QUARANTINE", FTP_HOME / "quarantine")).resolve()
+
+# Tep cach ly qua so ngay nay thi tu xoa vinh vien (thay cho quyen scan:purge khong gan cho ai); 0 = khong tu xoa
+QUARANTINE_RETENTION_DAYS = max(0, int(os.environ.get("FTP_QUARANTINE_RETENTION_DAYS", "30") or 0))
 
 # Kho tep: dia cuc bo (FTP_ROOT) hoac SeaweedFS/S3 (khi dat FTP_S3_ENDPOINT)
 STORE = storage.from_env(ROOT, QUARANTINE)
@@ -98,5 +102,5 @@ EVENT_LABELS = {
     "ADMIN_GRANT_ROLE": "Gán vai trò", "ADMIN_REVOKE_ROLE": "Gỡ vai trò", "ADMIN_FILE_SYNC": "Đồng bộ kho tệp",
     "ADMIN_FILE_SCAN": "Quét lại tệp", "ADMIN_FILE_APPROVE": "Duyệt tệp", "ADMIN_FILE_QUARANTINE": "Cách ly tệp",
     "ADMIN_FILE_RESTORE": "Khôi phục tệp", "ADMIN_FILE_DELETE": "Xóa hẳn tệp",
-    "ADMIN_SESSION_KILL": "Yêu cầu ngắt phiên FTP",
+    "ADMIN_SESSION_KILL": "Yêu cầu ngắt phiên FTP", "QUARANTINE_EXPIRED": "Tự xóa tệp cách ly hết hạn",
 }

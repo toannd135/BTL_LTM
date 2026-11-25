@@ -53,3 +53,30 @@ async def storage_error(request: Request, exc: storage.StorageError):
 
 for module in (auth, dashboard, users, files, audit, breakglass, sessions):
     app.include_router(module.router)
+
+
+PURGE_EVERY_SECONDS = 24 * 3600
+PURGE_FIRST_DELAY_SECONDS = 600  # cho 10 phut sau khi khoi dong roi moi don lan dau
+
+
+@app.on_event("startup")
+async def start_quarantine_retention():
+    """Moi ngay mot lan: xoa vinh vien tep cach ly qua FTP_QUARANTINE_RETENTION_DAYS ngay (0 = tat)."""
+    import asyncio
+    from file_service import purge_expired_quarantine
+
+    if config.QUARANTINE_RETENTION_DAYS <= 0:
+        return
+
+    async def loop():
+        await asyncio.sleep(PURGE_FIRST_DELAY_SECONDS)
+        while True:
+            try:
+                purged = await asyncio.to_thread(purge_expired_quarantine)
+                if purged:
+                    print(f"quarantine retention: da xoa {len(purged)} tep qua {config.QUARANTINE_RETENTION_DAYS} ngay")
+            except Exception as e:  # CSDL/kho tam loi: thu lai ngay mai
+                print(f"quarantine retention failed: {e}")
+            await asyncio.sleep(PURGE_EVERY_SECONDS)
+
+    app.state.retention_task = asyncio.create_task(loop())
