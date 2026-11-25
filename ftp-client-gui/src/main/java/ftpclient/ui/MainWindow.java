@@ -1,6 +1,5 @@
 package ftpclient.ui;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -174,8 +173,10 @@ public class MainWindow {
     /** Thư mục hiện tại trên máy chủ (ô đường dẫn có thể đang được gõ dở). */
     private String remotePwd = "";
     /** Mục đang kéo giữa hai bảng (cùng tiến trình nên giữ ở đây, không cần serialize). */
-    private LocalFile draggedLocal;
-    private RemoteFile draggedRemote;
+    /** Các mục đang kéo từ bảng cục bộ (có thể chọn nhiều); rỗng khi không kéo. */
+    private List<LocalFile> draggedLocal = List.of();
+    /** Các tệp đang kéo từ bảng máy chủ (có thể chọn nhiều); rỗng khi không kéo. */
+    private List<RemoteFile> draggedRemote = List.of();
     /** Thư mục tạm chứa file máy chủ tải về để mở (tạo khi cần, xóa khi thoát JVM). */
     private Path openCacheDir;
     private Path localDir = Paths.get(System.getProperty("user.home"));
@@ -395,6 +396,7 @@ public class MainWindow {
         });
         createRemoteButtons();
         remoteTable.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> updateShareButton());
+        remoteTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);  // Ctrl/Shift+click để tải về nhiều tệp
         remoteTable.setContextMenu(buildRemoteContextMenu());
         HBox remoteButtons = new HBox(downloadBtn, openBtn, deleteBtn, shareBtn);
         remoteButtons.getStyleClass().add("action-bar");
@@ -627,6 +629,12 @@ public class MainWindow {
     private RemoteFile selectedRemote() {
         RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
         return sel == null || sel.name().equals(PARENT_DIR) ? null : sel;
+    }
+
+    /** Mọi TỆP đang chọn ở bảng server (bỏ dòng ".." và thư mục), theo thứ tự trong bảng. */
+    private List<RemoteFile> selectedRemoteFiles() {
+        return remoteTable.getSelectionModel().getSelectedItems().stream()
+                .filter(f -> f != null && !f.directory() && !f.name().equals(PARENT_DIR)).toList();
     }
 
     /** Ghi lỗi gốc vào nhật ký và hiện hộp thoại với câu dễ hiểu (không chặn). */
@@ -1079,12 +1087,16 @@ public class MainWindow {
         });
     }
 
+    /** Tải về mọi tệp đang chọn (mỗi tệp một mục hàng đợi); thư mục được bỏ qua vì chưa hỗ trợ tải đệ quy. */
     private void onDownloadClicked() {
-        RemoteFile sel = selectedRemote();
-        if (sel == null || sel.directory()) {
+        List<RemoteFile> files = selectedRemoteFiles();
+        if (files.isEmpty()) {
+            if (selectedRemote() != null) {
+                appendLog("Chưa hỗ trợ tải về cả thư mục: hãy mở thư mục và chọn các tệp bên trong.");
+            }
             return;
         }
-        downloadFile(sel);
+        files.forEach(this::downloadFile);
     }
 
     private void downloadFile(RemoteFile sel) {
@@ -1130,24 +1142,34 @@ public class MainWindow {
 
     /** Tải lên các mục đang chọn ở bảng cục bộ: có thư mục thì chỉ tải thư mục, không thì tải lần lượt các tệp. */
     private void onUploadClicked() {
-        List<Path> files = localTable.getSelectionModel().getSelectedItems().stream()
-                .filter(f -> !f.directory()).map(f -> localDir.resolve(f.name())).toList();
-        List<Path> dirs = localTable.getSelectionModel().getSelectedItems().stream()
-                .filter(f -> f.directory() && !f.name().equals(PARENT_DIR)).map(f -> localDir.resolve(f.name())).toList();
+        uploadPaths(localTable.getSelectionModel().getSelectedItems().stream()
+                .filter(f -> !f.name().equals(PARENT_DIR)).map(f -> localDir.resolve(f.name())).toList());
+    }
+
+    /**
+     * Xếp hàng tải lên mọi mục (từ nút Tải lên hoặc kéo thả, chọn nhiều): mỗi tệp một mục, mỗi thư mục một mục
+     * tải đệ quy. Thứ tự giữ nguyên như lúc chọn.
+     */
+    private void uploadPaths(List<Path> paths) {
+        List<Path> files = paths.stream().filter(Files::isRegularFile).toList();
+        List<Path> dirs = paths.stream().filter(Files::isDirectory).toList();
         if (!dirs.isEmpty() && !session.canMkdir()) {
             Alert a = new Alert(Alert.AlertType.INFORMATION,
                     "Tài khoản của bạn tải tệp lên được nhưng không có quyền tạo thư mục trên máy chủ, "
-                            + "nên không tải được cả thư mục. Hãy chọn các tệp bên trong để tải lên, hoặc nhờ "
-                            + "người quản lý tệp tạo thư mục trước.");
+                            + "nên các thư mục sẽ bị bỏ qua. Hãy chọn các tệp bên trong để tải lên.");
             a.setHeaderText("Không tải được thư mục");
             AppIcon.apply(a);
             a.showAndWait();
-        } else if (!dirs.isEmpty()) {
-            uploadDirectories(dirs);   // file lẻ được chọn cùng lúc: tải riêng sau bằng lần bấm tiếp theo
-        } else if (!files.isEmpty()) {
+            dirs = List.of();
+        }
+        if (!files.isEmpty()) {
             uploadQueue(files);
         }
+        if (!dirs.isEmpty()) {
+            uploadDirectories(dirs);
+        }
     }
+
 
     /** Xếp hàng tải lên từng tệp vào thư mục máy chủ đang xem; mỗi tệp là một mục riêng trong hàng đợi. */
     private void uploadQueue(List<Path> files) {
@@ -1492,70 +1514,65 @@ public class MainWindow {
     /** Kéo file từ bảng cục bộ sang bảng máy chủ = tải lên. */
     private void setupLocalDrag() {
         localTable.setOnDragDetected(e -> {
-            LocalFile sel = localTable.getSelectionModel().getSelectedItem();
-            if (sel == null || sel.directory() || !connected || !session.canWrite()) {
+            List<LocalFile> sel = localTable.getSelectionModel().getSelectedItems().stream()
+                    .filter(f -> f != null && !f.name().equals(PARENT_DIR)).toList();
+            if (sel.isEmpty() || !connected || !session.canWrite()) {
                 return;
             }
-            draggedLocal = sel;
+            draggedLocal = List.copyOf(sel);
             ClipboardContent content = new ClipboardContent();
-            content.putString(sel.name());
+            content.putString(sel.size() == 1 ? sel.get(0).name() : sel.size() + " mục");
             localTable.startDragAndDrop(TransferMode.COPY).setContent(content);
             e.consume();
         });
-        localTable.setOnDragDone(e -> draggedLocal = null);
+        localTable.setOnDragDone(e -> draggedLocal = List.of());
         // kéo file từ bảng máy chủ thả vào đây = tải về
         localTable.setOnDragOver(e -> {
-            if (draggedRemote != null) {
+            if (!draggedRemote.isEmpty()) {
                 e.acceptTransferModes(TransferMode.COPY);
             }
             e.consume();
         });
         localTable.setOnDragDropped(e -> {
-            RemoteFile f = draggedRemote;
-            e.setDropCompleted(f != null);
+            List<RemoteFile> files = draggedRemote;
+            e.setDropCompleted(!files.isEmpty());
             e.consume();
-            if (f != null) {
-                downloadFile(f);
-            }
+            files.forEach(this::downloadFile);
         });
     }
 
     /** Bảng máy chủ nhận file kéo từ bảng cục bộ hoặc từ trình quản lý file của hệ điều hành. */
     private void setupRemoteDrop() {
         remoteTable.setOnDragDetected(e -> {
-            RemoteFile sel = selectedRemote();
-            if (sel == null || sel.directory() || !connected) {
+            List<RemoteFile> sel = selectedRemoteFiles();
+            if (sel.isEmpty() || !connected) {
                 return;
             }
-            draggedRemote = sel;
+            draggedRemote = List.copyOf(sel);
             ClipboardContent content = new ClipboardContent();
-            content.putString(sel.name());
+            content.putString(sel.size() == 1 ? sel.get(0).name() : sel.size() + " tệp");
             remoteTable.startDragAndDrop(TransferMode.COPY).setContent(content);
             e.consume();
         });
-        remoteTable.setOnDragDone(e -> draggedRemote = null);
+        remoteTable.setOnDragDone(e -> draggedRemote = List.of());
         remoteTable.setOnDragOver(e -> {
             boolean canUpload = connected && session.canWrite();
-            if (canUpload && (draggedLocal != null || e.getDragboard().hasFiles())) {
+            if (canUpload && (!draggedLocal.isEmpty() || e.getDragboard().hasFiles())) {
                 e.acceptTransferModes(TransferMode.COPY);
             }
             e.consume();
         });
         remoteTable.setOnDragDropped(e -> {
-            List<Path> files = new ArrayList<>();
-            if (draggedLocal != null) {
-                files.add(localDir.resolve(draggedLocal.name()));
+            List<Path> paths = new ArrayList<>();
+            if (!draggedLocal.isEmpty()) {
+                draggedLocal.forEach(f -> paths.add(localDir.resolve(f.name())));
             } else if (e.getDragboard().hasFiles()) {
-                for (File f : e.getDragboard().getFiles()) {
-                    if (f.isFile()) {
-                        files.add(f.toPath());
-                    }
-                }
+                e.getDragboard().getFiles().forEach(f -> paths.add(f.toPath()));
             }
-            e.setDropCompleted(!files.isEmpty());
+            e.setDropCompleted(!paths.isEmpty());
             e.consume();
-            if (!files.isEmpty()) {
-                uploadQueue(files);
+            if (!paths.isEmpty()) {
+                uploadPaths(paths);
             }
         });
     }
