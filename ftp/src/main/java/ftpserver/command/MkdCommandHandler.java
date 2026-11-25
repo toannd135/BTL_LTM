@@ -3,6 +3,7 @@ package ftpserver.command;
 import java.io.IOException;
 import java.nio.file.Path;
 
+import ftpserver.acl.Perm;
 import ftpserver.core.ClientSession;
 import ftpserver.core.CommandHandler;
 import ftpserver.core.FtpReply;
@@ -10,7 +11,7 @@ import ftpserver.core.FtpReply;
 /**
  * MKD &lt;thu-muc&gt;: tao thu muc moi, user tao la chu so huu.
  *
- * <p>Can dang nhap, quyen file:mkdir (vai tro file_manager) va quyen WRITE tren thu muc cha. Tra loi: 257 kem duong dan moi;
+ * <p>Can dang nhap, tai khoan co quyen ghi va quyen WRITE tren thu muc cha. Tra loi: 257 kem duong dan moi;
  * 501 neu thieu tham so; 550 neu da ton tai hoac khong du quyen; 451 neu loi I/O.
  */
 public final class MkdCommandHandler implements CommandHandler {
@@ -30,9 +31,8 @@ public final class MkdCommandHandler implements CommandHandler {
                 session.reply(FtpReply.FILE_UNAVAILABLE, "Directory already exists");
                 return;
             }
-            if (target.getParent() == null || !session.canMkdir(target.getParent())) {
-                session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied: creating folders needs file:mkdir");
-                session.audit("MKDIR", session.pathResolver().toVirtualPath(target) + " (denied: no mkdir permission)", false);
+            if (target.getParent() == null || !session.can(target.getParent(), Perm.WRITE)) {
+                session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
                 return;
             }
             session.store().mkdir(target);

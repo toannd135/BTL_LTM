@@ -49,15 +49,13 @@ FTP_HEALTH = (os.environ.get("FTP_HEALTH_HOST", "127.0.0.1"), int(os.environ.get
 
 # ---------- quyen ----------
 # Cac quyen cho phep vao trang web (chi tinh vai tro co scope '/')
-WEB_PERMS = {"user:manage", "role:manage", "audit:view", "scan:view", "scan:manage", "scan:restore", "scan:purge",
-             "breakglass:grant"}
+WEB_PERMS = {"user:manage", "role:manage", "audit:view", "scan:view", "scan:manage", "breakglass:grant"}
 # Chi co scan:view (file_manager) thi KHONG du de dang nhap: file_manager lam viec qua FTP, khong qua trang quan tri
 LOGIN_PERMS = WEB_PERMS - {"scan:view"}
 # Duoc thao tac quet thi cung duoc xem danh sach tep
 SCAN_VIEW = ("scan:view", "scan:manage")
 # Quyen "nguy hiem": to mau do trong nhat ky
-PERM_HIGH = {"breakglass:grant", "user:manage", "role:manage", "scan:manage", "scan:restore", "scan:purge", "config:manage",
-             "file:manage", "file:delete", "file:overwrite"}
+PERM_HIGH = {"breakglass:grant", "user:manage", "role:manage", "scan:manage", "config:manage", "file:manage", "file:delete"}
 
 # ---------- vai tro ----------
 # Vai tro RBAC -> gia tri cot cu (users.role, users.read_only) de server doc tai khoan kieu cu van dung
