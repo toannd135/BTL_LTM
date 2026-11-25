@@ -584,6 +584,25 @@ check("live_sessions: bo dong co nhip tim qua cu", sorted(s["id"] for s in live_
 
 adm = login_as("admin", "admin")
 page = adm.get("/sessions")
+
+def js_syntax_errors(html: str) -> str:
+    """Kiem tra cu phap JavaScript cua cac the <script> noi tuyen bang `node --check` ("" = on).
+    Bat loi template Jinja dich duoc nhung JS sinh ra hong (vd formatter tach "}};" thanh hai dong).
+    May khong co node thi bo qua."""
+    import shutil as _sh, subprocess as _sp, tempfile as _tf
+    if not _sh.which("node"):
+        return ""
+    errors = []
+    for js in re.findall(r"<script>(.*?)</script>", html, re.S):
+        with _tf.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(js)
+        r = _sp.run(["node", "--check", f.name], capture_output=True, text=True)
+        if r.returncode:
+            errors.append(next((l for l in r.stderr.splitlines() if "Error" in l), r.stderr.strip()[:200]))
+    return "; ".join(errors)
+
+_js_err = js_syntax_errors(page.text)
+check("/sessions: JavaScript tren trang dung cu phap" + (": " + _js_err if _js_err else ""), not _js_err)
 check("/sessions: admin xem duoc, co nut ngat va menu", page.status_code == 200 and "S1" in page.text and "S9" not in page.text
       and 'href="/sessions"' in page.text and "var canKill = true" in page.text)
 aud = login_as("auditor", "auditor")
@@ -637,5 +656,26 @@ with aud.websocket_connect("/ws/sessions") as w:
 check("ws: auditor xem duoc nhung KHONG ngat duoc", first["can_kill"] is False and res["ok"] is False and flag == 0)
 with db.db() as d:
     d.execute("DELETE FROM ftp_sessions")
+
+# ---------- tu xoa tep cach ly qua han (thay cho scan:purge) ----------
+import file_service
+from datetime import timedelta as _rtd
+config.QUARANTINE.mkdir(parents=True, exist_ok=True)
+_old_q, _new_q = config.QUARANTINE / "9001_old.bin", config.QUARANTINE / "9002_new.bin"
+_old_q.write_text("x"); _new_q.write_text("y")
+with db.db() as d:
+    for path, q, age in (("/ret/old.bin", _old_q, 31), ("/ret/new.bin", _new_q, 5)):
+        d.execute("INSERT INTO files(path,size,mtime,sha256,status,quarantine_path,updated_at) VALUES (?,?,?,?,?,?,?)",
+                  (path, 1, 1, "0" * 64, "QUARANTINED", str(q), db.utc_now(-_rtd(days=age))))
+check("retention=0 thi khong xoa gi", file_service.purge_expired_quarantine(0) == [])
+purged = file_service.purge_expired_quarantine(30)
+with db.db() as d:
+    left = {r[0] for r in d.execute("SELECT path FROM files WHERE path LIKE '/ret/%'")}
+check("retention 30 ngay: chi xoa tep cach ly qua 31 ngay, ca ban ghi lan tep", purged == ["/ret/old.bin"]
+      and left == {"/ret/new.bin"} and not _old_q.exists() and _new_q.exists())
+check("retention ghi audit QUARANTINE_EXPIRED boi system", any(r["event"] == "QUARANTINE_EXPIRED" and r["user"] == "system"
+      and "/ret/old.bin" in r["detail"] for r in auditlog.read_audit(limit=10)))
+with db.db() as d:
+    d.execute("DELETE FROM files WHERE path LIKE '/ret/%'")
 
 print("\nALL ADMIN TESTS PASSED")
