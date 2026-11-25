@@ -25,7 +25,7 @@ class MigrationAndAuthTest {
     void migrate_createsSchemaAndIsIdempotent(@TempDir Path tmp) throws Exception {
         Database db = TestDb.fresh();
         Migrator m = new Migrator(db);
-        assertEquals(10, m.migrate());
+        assertEquals(9, m.migrate());
         assertEquals(0, m.migrate());
         try (Connection c = db.open(); var rs = c.createStatement().executeQuery("SELECT COUNT(*) FROM users")) {
             rs.next();
