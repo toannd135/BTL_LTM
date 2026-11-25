@@ -31,7 +31,6 @@ public class UserManager {
             return new User("anonymous", null, true);
         }
         User user = find(name);
-        // luon tinh hash de thoi gian phan hoi khong lo viec user co ton tai hay khong
         boolean ok = PasswordHasher.verify(password, user == null ? DUMMY_HASH : user.passwordHash());
         return (user != null && ok) ? user : null;
     }
@@ -49,7 +48,6 @@ public class UserManager {
                 return new User(rs.getString("username"), rs.getString("password_hash"), readOnly, role, rs.getString("home"));
             }
         } catch (SQLException e) {
-            // loi DB khi dang nhap: coi nhu that bai (khong lo chi tiet cho client)
             System.err.println("User lookup failed: " + e.getMessage());
             return null;
         }
