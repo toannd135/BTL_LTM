@@ -584,6 +584,25 @@ check("live_sessions: bo dong co nhip tim qua cu", sorted(s["id"] for s in live_
 
 adm = login_as("admin", "admin")
 page = adm.get("/sessions")
+
+def js_syntax_errors(html: str) -> str:
+    """Kiem tra cu phap JavaScript cua cac the <script> noi tuyen bang `node --check` ("" = on).
+    Bat loi template Jinja dich duoc nhung JS sinh ra hong (vd formatter tach "}};" thanh hai dong).
+    May khong co node thi bo qua."""
+    import shutil as _sh, subprocess as _sp, tempfile as _tf
+    if not _sh.which("node"):
+        return ""
+    errors = []
+    for js in re.findall(r"<script>(.*?)</script>", html, re.S):
+        with _tf.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write(js)
+        r = _sp.run(["node", "--check", f.name], capture_output=True, text=True)
+        if r.returncode:
+            errors.append(next((l for l in r.stderr.splitlines() if "Error" in l), r.stderr.strip()[:200]))
+    return "; ".join(errors)
+
+_js_err = js_syntax_errors(page.text)
+check("/sessions: JavaScript tren trang dung cu phap" + (": " + _js_err if _js_err else ""), not _js_err)
 check("/sessions: admin xem duoc, co nut ngat va menu", page.status_code == 200 and "S1" in page.text and "S9" not in page.text
       and 'href="/sessions"' in page.text and "var canKill = true" in page.text)
 aud = login_as("auditor", "auditor")
