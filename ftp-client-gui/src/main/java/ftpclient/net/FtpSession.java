@@ -415,6 +415,12 @@ public class FtpSession implements RemoteSession {
         return roles.isEmpty() || hasRole("file_manager") || hasRole("employee");
     }
 
+    // file:mkdir (và file:overwrite) chỉ có ở file_manager; employee tải tệp mới lên được nhưng không tạo thư mục.
+    @Override
+    public boolean canMkdir() {
+        return roles.isEmpty() || hasRole("file_manager");
+    }
+
     @Override
     public boolean canDelete() {
         // employee được bật nút để thu hồi tệp mình tải nhầm; server chỉ cho xóa tệp do chính họ tải lên (acl.isOwner).

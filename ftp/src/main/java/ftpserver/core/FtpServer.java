@@ -64,6 +64,9 @@ public class FtpServer {
         while (running) {
             try {
                 Socket client = listener.accept();
+                // Tat Nagle tren kenh dieu khien: tra loi "226" gui ngay sau "150" se khong phai cho ACK tre (~40 ms)
+                // cua client, moi lan truyen tep nhanh hon ~40 ms. Socket TLS boc ngoai van giu tuy chon nay.
+                client.setTcpNoDelay(true);
                 ClientSession session = new ClientSession(client, registry, userManager, pathResolver, config, tls, audit, services);
                 pool.submit(session);
             } catch (SocketException e) {

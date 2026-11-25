@@ -37,7 +37,7 @@ class PostgresRoundTripTest {
     @Test
     void migrateIsIdempotent_andTimestampsMatchJavaFormat(@TempDir Path tmp) throws Exception {
         Database db = TestDb.fresh();
-        assertEquals(9, new Migrator(db).migrate());
+        assertEquals(10, new Migrator(db).migrate());
         assertEquals(0, new Migrator(db).migrate());
         try (Connection c = db.open(); var st = c.createStatement();
              ResultSet rs = st.executeQuery("SELECT created_at FROM users WHERE username = 'admin'")) {
