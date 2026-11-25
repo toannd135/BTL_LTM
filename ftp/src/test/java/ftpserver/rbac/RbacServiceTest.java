@@ -101,6 +101,42 @@ class RbacServiceTest {
         assertFalse(g.has("file:manage", "/shared/x"));
     }
 
+    /** Ma tran quyen sau V010: dung bang de xuat (cot system_admin, security_auditor, file_manager, employee). */
+    @Test
+    void permissionMatrixMatchesV010() throws Exception {
+        String[] roles = {"system_admin", "security_auditor", "file_manager", "employee"};
+        // quyen -> co/khong theo thu tu roles; "/" de moi scope deu bao trum
+        Object[][] matrix = {
+            {"file:list",        false, false, true,  true},
+            {"file:upload",      false, false, true,  true},
+            {"file:overwrite",   false, false, true,  false},
+            {"file:mkdir",       false, false, true,  false},
+            {"file:download",    false, false, true,  true},
+            {"file:rename",      false, false, true,  true},
+            {"file:delete",      false, false, true,  false},
+            {"file:share",       false, false, true,  true},
+            {"file:manage",      false, false, true,  false},
+            {"user:manage",      true,  false, false, false},
+            {"role:manage",      true,  false, false, false},
+            {"config:manage",    true,  false, false, false},
+            {"audit:view",       false, true,  false, false},
+            {"scan:view",        true,  true,  true,  false},
+            {"scan:manage",      true,  false, false, false},
+            {"scan:restore",     true,  false, false, false},
+            {"scan:purge",       false, false, false, false},
+            {"breakglass:grant", true,  false, false, false},
+        };
+        for (int r = 0; r < roles.length; r++) {
+            String name = "m" + r;
+            addUser(name, "user");
+            assign(name, roles[r], "/");
+            var g = rbac.load(u(name));
+            for (Object[] row : matrix) {
+                assertEquals(row[r + 1], g.has((String) row[0], "/"), roles[r] + " / " + row[0]);
+            }
+        }
+    }
+
     @Test
     void seededAdminIsSystemAdminOnly() {
         var g = rbac.load(new User("admin", "x", false, "admin", "/"));
