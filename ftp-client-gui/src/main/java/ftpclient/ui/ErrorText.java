@@ -32,6 +32,12 @@ final class ErrorText {
                     ? "Phát hiện mã độc" + virus + ". Tệp đã bị xóa khỏi máy chủ."
                     : "Tệp bị từ chối vì phát hiện mã độc" + virus + ". Tệp không được lưu trên máy chủ.";
         }
+        if (lower.contains("file:overwrite")) {
+            return "Tệp này đã có trên máy chủ và bạn không có quyền ghi đè. Hãy đổi tên tệp rồi tải lên lại.";
+        }
+        if (lower.contains("file:mkdir")) {
+            return "Bạn không có quyền tạo thư mục trên máy chủ.";
+        }
         if (lower.contains("permission denied")) {
             return "Bạn không có quyền thực hiện thao tác này.";
         }

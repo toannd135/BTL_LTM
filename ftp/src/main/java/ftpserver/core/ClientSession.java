@@ -458,6 +458,16 @@ public class ClientSession implements Runnable {
         return grants != null && grants.has("file:upload", key) && acl.isOwner(user, key);
     }
 
+    /** Ghi de tep da ton tai (STOR trung ten, APPE, tai tiep REST): can file:overwrite va ACL WRITE tren chinh tep. */
+    public boolean canOverwrite(Path real) {
+        return canDo("file:overwrite", real, Perm.WRITE);
+    }
+
+    /** Tao thu muc con trong {@code parent}: can file:mkdir va ACL WRITE tren thu muc cha. */
+    public boolean canMkdir(Path parent) {
+        return canDo("file:mkdir", parent, Perm.WRITE);
+    }
+
     /** Chia se tep: chu so huu co file:share, hoac nguoi quan ly. */
     public boolean canShare(Path real) {
         String key = aclPath(real);

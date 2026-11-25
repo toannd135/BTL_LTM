@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 {% set can_manage = 'scan:manage' in perms %}
+{% set can_restore = 'scan:restore' in perms %}
+{% set can_purge = 'scan:purge' in perms %}
+{% set can_act = can_manage or can_restore or can_purge %}
+{% set can_bulk = can_manage or can_purge %}
 {% set keep = [('q', q), ('ext', ext), ('owner', owner)] | selectattr('1') | list %}
 <div class="page-head">
   <div><h3>Quản lý tệp tin</h3><div class="sub">Kết quả quét mã độc của các tệp trong kho FTP</div></div>
@@ -35,16 +39,16 @@
   </form>
 </div></div>
 
-{% if can_manage %}
+{% if can_bulk %}
 <form id="bulkForm" method="post" action="/files/bulk" class="bulk-bar" hidden>
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <span class="fw-semibold"><span id="bulkCount">0</span> tệp đã chọn</span>
   <span class="text-muted small">(tối đa {{ bulk_max }} tệp mỗi lần)</span>
   <span class="ms-auto d-flex flex-wrap gap-2">
-    <button name="action" value="scan" class="btn btn-xs btn-outline-secondary">Quét</button>
+    {% if can_manage %}<button name="action" value="scan" class="btn btn-xs btn-outline-secondary">Quét</button>
     <button name="action" value="approve" class="btn btn-xs btn-outline-secondary" data-ask="Xác nhận các tệp đã chọn an toàn và cho phép sử dụng?">Duyệt sạch</button>
-    <button name="action" value="quarantine" class="btn btn-xs btn-outline-danger" data-ask="Cách ly các tệp đã chọn? Người dùng sẽ không tải được nữa.">Cách ly</button>
-    <button name="action" value="delete" class="btn btn-xs btn-danger" data-ask="Xóa hẳn các tệp đã chọn (chỉ áp dụng cho tệp đang cách ly)? Thao tác không thể hoàn tác.">Xóa hẳn</button>
+    <button name="action" value="quarantine" class="btn btn-xs btn-outline-danger" data-ask="Cách ly các tệp đã chọn? Người dùng sẽ không tải được nữa.">Cách ly</button>{% endif %}
+    {% if can_purge %}<button name="action" value="delete" class="btn btn-xs btn-danger" data-ask="Xóa hẳn các tệp đã chọn (chỉ áp dụng cho tệp đang cách ly)? Thao tác không thể hoàn tác.">Xóa hẳn</button>{% endif %}
     <button type="button" class="btn btn-xs btn-link text-muted" id="bulkClear">Bỏ chọn</button>
   </span>
 </form>
@@ -52,13 +56,13 @@
 
 <div class="panel"><div class="table-responsive"><table class="table align-middle mb-0 files-table">
   <thead><tr>
-    {% if can_manage %}<th class="col-check"><input type="checkbox" class="form-check-input" id="checkAll" aria-label="Chọn tất cả tệp trên trang"></th>{% endif %}
-    <th>Tệp</th><th>Chủ sở hữu</th><th class="text-end">Kích thước</th><th>SHA-256</th><th>Trạng thái</th><th>Quét lúc</th><th>Chi tiết</th>{% if can_manage %}<th class="text-end">Thao tác</th>{% endif %}</tr></thead>
+    {% if can_bulk %}<th class="col-check"><input type="checkbox" class="form-check-input" id="checkAll" aria-label="Chọn tất cả tệp trên trang"></th>{% endif %}
+    <th>Tệp</th><th>Chủ sở hữu</th><th class="text-end">Kích thước</th><th>SHA-256</th><th>Trạng thái</th><th>Quét lúc</th><th>Chi tiết</th>{% if can_act %}<th class="text-end">Thao tác</th>{% endif %}</tr></thead>
   <tbody>
   {% for f in files %}
     {% set tagc = {'PENDING': 'warn', 'CLEAN': 'ok', 'INFECTED': 'danger', 'QUARANTINED': 'danger strong'}[f.status] %}
     <tr>
-      {% if can_manage %}<td class="col-check"><input type="checkbox" class="form-check-input row-check" form="bulkForm" name="ids" value="{{ f.id }}" aria-label="Chọn {{ f.path }}"></td>{% endif %}
+      {% if can_bulk %}<td class="col-check"><input type="checkbox" class="form-check-input row-check" form="bulkForm" name="ids" value="{{ f.id }}" aria-label="Chọn {{ f.path }}"></td>{% endif %}
       <td class="file-path">{{ f.path }}</td>
       <td>{{ f.owner or '—' }}</td>
       <td class="text-nowrap text-end" title="{{ '{:,}'.format(f.size) }} B">{{ fmt_bytes(f.size) }}</td>
@@ -71,19 +75,19 @@
         {% elif f.status == 'QUARANTINED' %}<div class="text-danger fw-medium">{{ f.detail or 'Cách ly thủ công' }}</div>{% if f.quarantine_path %}<div class="text-muted">Vị trí cách ly: <span class="font-monospace">{{ f.quarantine_path }}</span></div>{% endif %}
         {% elif f.detail %}{{ f.detail }}
         {% else %}<span class="text-muted">—</span>{% endif %}</td>
-      {% if can_manage %}<td class="text-end">
+      {% if can_act %}<td class="text-end">
         {% macro act(name, label, cls='', ask=none) %}<form method="post" action="/files/{{ f.id }}/{{ name }}"{% if ask %} onsubmit="return confirm('{{ ask }}')"{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"><button class="{{ cls }}">{{ label }}</button></form>{% endmacro %}
         <details class="menu row-menu d-inline-block text-start">
           <summary class="btn btn-xs btn-outline-secondary">Thao tác ▾</summary>
           <div class="menu-pop">
-          {% if f.status == 'QUARANTINED' %}{{ act('restore', 'Khôi phục về vị trí cũ') }}{{ act('delete', 'Xóa hẳn', 'danger', 'Xóa hẳn tệp này? Thao tác không thể hoàn tác.') }}
-          {% else %}{{ act('scan', 'Quét lại') }}
+          {% if f.status == 'QUARANTINED' %}{% if can_restore %}{{ act('restore', 'Khôi phục về vị trí cũ') }}{% endif %}{% if can_purge %}{{ act('delete', 'Xóa hẳn', 'danger', 'Xóa hẳn tệp này? Thao tác không thể hoàn tác.') }}{% endif %}{% if not can_restore and not can_purge %}<span class="text-muted small px-2">Cần quyền khôi phục/xóa vĩnh viễn</span>{% endif %}
+          {% elif can_manage %}{{ act('scan', 'Quét lại') }}
             {% if f.status in ('PENDING', 'INFECTED') %}{{ act('approve', 'Duyệt sạch', '', 'Xác nhận tệp này an toàn và cho phép sử dụng?') }}{% endif %}
             {{ act('quarantine', 'Cách ly', 'danger', 'Cách ly tệp này? Người dùng sẽ không tải được tệp nữa.') }}{% endif %}
           </div>
         </details></td>{% endif %}
     </tr>
-  {% else %}<tr><td colspan="{{ 9 if can_manage else 7 }}" class="text-center text-muted py-4">{% if q %}Không có tệp khớp "{{ q }}".{% elif filtered %}Không có tệp khớp bộ lọc.{% else %}Chưa có tệp. Bấm "Đồng bộ từ thư mục FTP".{% endif %}</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="{{ 7 + (1 if can_bulk else 0) + (1 if can_act else 0) }}" class="text-center text-muted py-4">{% if q %}Không có tệp khớp "{{ q }}".{% elif filtered %}Không có tệp khớp bộ lọc.{% else %}Chưa có tệp. Bấm "Đồng bộ từ thư mục FTP".{% endif %}</td></tr>{% endfor %}
   </tbody>
 </table></div>
 {% include "_pager.html" %}</div>
@@ -98,7 +102,7 @@
   });
 })();
 </script>
-{% if can_manage %}
+{% if can_bulk %}
 <script>
 (function () {
   var form = document.getElementById('bulkForm'); if (!form) return;
