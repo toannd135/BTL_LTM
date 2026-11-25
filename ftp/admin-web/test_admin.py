@@ -226,8 +226,18 @@ with db.db() as d:
     check("dong bo khong xoa ban ghi cach ly", d.execute("SELECT status FROM files WHERE id=?", (fid,)).fetchone()[0] == "QUARANTINED")
 c.post(f"/files/{fid}/restore", data={"csrf": t})
 check("khoi phuc ve vi tri cu", (config.ROOT / "sv" / "eicar.txt").exists())
-c.post(f"/files/{fid}/quarantine", data={"csrf": t}); c.post(f"/files/{fid}/delete", data={"csrf": t})
-check("xoa han tep cach ly", not any(config.QUARANTINE.iterdir()))
+c.post(f"/files/{fid}/quarantine", data={"csrf": t})
+fq_admin = c.get("/files?status=QUARANTINED").text
+check("V010: admin thay nut Khoi phuc (scan:restore) nhung khong thay Xoa han (scan:purge)",
+      f"/files/{fid}/restore" in fq_admin and f"/files/{fid}/delete" not in fq_admin)
+check("V010: admin khong co scan:purge -> POST xoa han 403, tep van con",
+      c.post(f"/files/{fid}/delete", data={"csrf": t}).status_code == 403 and any(config.QUARANTINE.iterdir()))
+with db.db() as d:  # quy trinh dac biet: cap tam scan:purge cho system_admin
+    d.execute("INSERT INTO role_permissions(role, permission) VALUES ('system_admin', 'scan:purge')")
+c.post(f"/files/{fid}/delete", data={"csrf": t})
+check("xoa han tep cach ly (khi duoc cap tam scan:purge)", not any(config.QUARANTINE.iterdir()))
+with db.db() as d:
+    d.execute("DELETE FROM role_permissions WHERE role='system_admin' AND permission='scan:purge'")
 (config.ROOT / "sv" / "ok.txt").write_text("doi noi dung!")
 c.post("/files/sync", data={"csrf": t})
 with db.db() as d:
@@ -367,9 +377,16 @@ with db.db() as d:
     n_appr2 = d.execute("SELECT COUNT(*) FROM audit_events WHERE event='ADMIN_FILE_APPROVE'").fetchone()[0]
 check("bulk approve: 2 tep CLEAN, tep thu 3 giu nguyen, audit tung tep", rb.status_code == 303 and st == ["CLEAN", "CLEAN", "PENDING"]
       and n_appr2 - n_appr == 2)
+check("V010: bulk delete khong co scan:purge -> 403",
+      c.post("/files/bulk", data={"csrf": tf, "action": "delete", "ids": [bids[2]]}).status_code == 403)
+with db.db() as d:
+    d.execute("INSERT INTO role_permissions(role, permission) VALUES ('system_admin', 'scan:purge')")
+c.get("/files")  # nap lai perms vao phien
 c.post("/files/bulk", data={"csrf": tf, "action": "delete", "ids": [bids[2]]})
 with db.db() as d:
     check("bulk delete: tep chua cach ly bi bo qua", d.execute("SELECT status FROM files WHERE id=?", (bids[2],)).fetchone()[0] == "PENDING")
+    d.execute("DELETE FROM role_permissions WHERE role='system_admin' AND permission='scan:purge'")
+c.get("/files")
 check("bulk: action la -> 400", c.post("/files/bulk", data={"csrf": tf, "action": "rm", "ids": bids}).status_code == 400)
 check("bulk: thieu CSRF -> 403", c.post("/files/bulk", data={"csrf": "x", "action": "approve", "ids": [bids[2]]}).status_code == 403)
 c.post("/files/bulk", data={"csrf": tf, "action": "approve", "ids": [bids[2]] + list(range(100000, 100000 + files_routes.BULK_MAX))})

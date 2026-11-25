@@ -24,6 +24,8 @@ SCAN_BATCH = 20     # moi lan bam "Quet ngay" quet toi da bay nhieu tep dang cho
 BULK_MAX = 50       # so tep toi da moi lan thao tac hang loat
 EXPORT_MAX = 50000  # so dong toi da moi lan xuat CSV
 BULK_LABELS = {"scan": "Quét", "approve": "Duyệt sạch", "quarantine": "Cách ly", "delete": "Xóa hẳn"}
+# Quyen can cho tung thao tac hang loat: xoa vinh vien tach rieng thanh scan:purge
+BULK_PERM = {"scan": "scan:manage", "approve": "scan:manage", "quarantine": "scan:manage", "delete": "scan:purge"}
 
 
 @router.get("/files")
@@ -159,7 +161,7 @@ def file_quarantine(file_id: int, request: Request, admin: str = Depends(require
 
 
 @router.post("/files/{file_id}/restore")
-def file_restore(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
+def file_restore(file_id: int, request: Request, admin: str = Depends(require("scan:restore")), csrf: str = Form(...)):
     check_csrf(request, csrf)
     state, text = do_restore(admin, file_id)
     _flash_result(request, state, text, f"Da khoi phuc {text} (chuyển về trạng thái chờ quét, cần quét lại)")
@@ -167,8 +169,8 @@ def file_restore(file_id: int, request: Request, admin: str = Depends(require("s
 
 
 @router.post("/files/{file_id}/delete")
-def file_delete(file_id: int, request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...)):
-    """Xoa han tep da cach ly."""
+def file_delete(file_id: int, request: Request, admin: str = Depends(require("scan:purge")), csrf: str = Form(...)):
+    """Xoa vinh vien tep da cach ly (quyen scan:purge, mac dinh khong vai tro nao co)."""
     check_csrf(request, csrf)
     state, text = do_delete(admin, file_id)
     _flash_result(request, state, text, f"Đã xóa hẳn {text}")
@@ -195,13 +197,16 @@ def _bulk_one(admin: str, action: str, file_id: int) -> str:
 
 
 @router.post("/files/bulk")
-def files_bulk(request: Request, admin: str = Depends(require("scan:manage")), csrf: str = Form(...),
+def files_bulk(request: Request, admin: str = Depends(require("scan:manage", "scan:purge")), csrf: str = Form(...),
                action: str = Form(...), ids: list[int] = Form(default=[])):
-    """Thao tac hang loat tren cac tep da chon. Moi tep van ghi audit rieng nhu khi thao tac tung tep."""
+    """Thao tac hang loat tren cac tep da chon. Moi tep van ghi audit rieng nhu khi thao tac tung tep.
+    "Xoa han" can scan:purge, cac thao tac con lai can scan:manage."""
     check_csrf(request, csrf)
     ids = list(dict.fromkeys(ids))  # bo id trung, giu nguyen thu tu
     if action not in BULK_LABELS:
         raise HTTPException(400, "action khong hop le")
+    if BULK_PERM[action] not in request.session.get("perms", []):
+        raise HTTPException(403, "Không đủ quyền cho thao tác này")
     if not ids:
         flash(request, "Chưa chọn tệp nào", "danger")
         return back(files_return(request))

@@ -463,7 +463,7 @@ public class MainWindow {
             RemoteFile sel = selectedRemote();
             downloadItem.setDisable(!connected || sel == null);
             openItem.setDisable(!connected || sel == null || sel.directory());
-            renameItem.setDisable(!connected || sel == null || mkdBtn.isDisable());
+            renameItem.setDisable(!connected || sel == null || uploadBtn.isDisable());
             deleteItem.setDisable(sel == null || deleteBtn.isDisable());
             shareItem.setDisable(shareBtn.isDisable());
             mkdItem.setDisable(!connected || mkdBtn.isDisable());
@@ -754,7 +754,7 @@ public class MainWindow {
         if (isConnected) {
             RemoteSession s = session;
             progressLabel.setText("Đã đăng nhập — " + (s.isSecure() ? "🔒 Mã hóa TLS" : "⚠ Chưa mã hóa"));
-            mkdBtn.setDisable(!s.canWrite());
+            mkdBtn.setDisable(!s.canMkdir());
             uploadBtn.setDisable(!s.canWrite());
             deleteBtn.setDisable(!s.canDelete());
         } else {
@@ -1088,7 +1088,15 @@ public class MainWindow {
                 .filter(f -> !f.directory()).map(f -> localDir.resolve(f.name())).toList();
         List<Path> dirs = localTable.getSelectionModel().getSelectedItems().stream()
                 .filter(f -> f.directory() && !f.name().equals(PARENT_DIR)).map(f -> localDir.resolve(f.name())).toList();
-        if (!dirs.isEmpty()) {
+        if (!dirs.isEmpty() && !session.canMkdir()) {
+            Alert a = new Alert(Alert.AlertType.INFORMATION,
+                    "Tài khoản của bạn tải tệp lên được nhưng không có quyền tạo thư mục trên máy chủ, "
+                            + "nên không tải được cả thư mục. Hãy chọn các tệp bên trong để tải lên, hoặc nhờ "
+                            + "người quản lý tệp tạo thư mục trước.");
+            a.setHeaderText("Không tải được thư mục");
+            AppIcon.apply(a);
+            a.showAndWait();
+        } else if (!dirs.isEmpty()) {
             uploadDirectories(dirs);   // file lẻ được chọn cùng lúc: tải riêng sau bằng lần bấm tiếp theo
         } else if (!files.isEmpty()) {
             uploadQueue(files);

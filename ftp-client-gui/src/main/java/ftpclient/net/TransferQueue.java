@@ -349,14 +349,18 @@ public final class TransferQueue implements Closeable {
     private void uploadTree(RemoteSession s, Job job, Path dir, int[] count, long[] doneBytes)
             throws IOException, FtpException {
         String name = dir.getFileName().toString();
+        FtpException mkdError = null;
         try {
             s.mkd(name);
-        } catch (FtpException ignored) {
-            // đã tồn tại: dùng lại; lỗi thật thì CWD bên dưới sẽ báo
+        } catch (FtpException e) {
+            mkdError = e;   // đã tồn tại thì dùng lại; lỗi thật thì CWD bên dưới sẽ báo
         }
         try {
             s.cwd(name);
         } catch (FtpException e) {
+            if (mkdError != null && mkdError.getMessage().contains("file:mkdir")) {
+                throw mkdError;   // không có quyền tạo thư mục: báo đúng lý do
+            }
             throw new FtpException(e.code(), "Không vào được thư mục '" + name
                     + "' trên máy chủ: tên này đã tồn tại nhưng là tệp hoặc thư mục bạn không có quyền đọc.");
         }

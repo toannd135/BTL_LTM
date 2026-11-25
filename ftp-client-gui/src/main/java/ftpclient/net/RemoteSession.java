@@ -88,6 +88,11 @@ public interface RemoteSession extends Closeable {
     /** Có nên bật các nút ghi (tải lên, tạo thư mục, đổi tên) — chỉ để hiển thị, server vẫn kiểm tra quyền. */
     boolean canWrite();
 
+    /** Có nên bật nút Tạo thư mục (quyền file:mkdir, chỉ file_manager) — chỉ để hiển thị, server vẫn kiểm tra quyền. */
+    default boolean canMkdir() {
+        return canWrite();
+    }
+
     /** Có nên bật nút Xóa — chỉ để hiển thị, server vẫn kiểm tra quyền. */
     boolean canDelete();
 

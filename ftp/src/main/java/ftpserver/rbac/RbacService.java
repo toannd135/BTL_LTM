@@ -27,7 +27,8 @@ public class RbacService {
     public static final String FILE_MANAGE = "file:manage";
     /** Moi quyen file:* (break-glass cap tat ca). */
     public static final String[] FILE_PERMS = {
-        "file:list", "file:upload", "file:download", "file:rename", "file:delete", "file:share", "file:manage"
+        "file:list", "file:upload", "file:overwrite", "file:mkdir", "file:download", "file:rename", "file:delete",
+        "file:share", "file:manage"
     };
 
     private final Database db;
