@@ -638,4 +638,25 @@ check("ws: auditor xem duoc nhung KHONG ngat duoc", first["can_kill"] is False a
 with db.db() as d:
     d.execute("DELETE FROM ftp_sessions")
 
+# ---------- tu xoa tep cach ly qua han (thay cho scan:purge) ----------
+import file_service
+from datetime import timedelta as _rtd
+config.QUARANTINE.mkdir(parents=True, exist_ok=True)
+_old_q, _new_q = config.QUARANTINE / "9001_old.bin", config.QUARANTINE / "9002_new.bin"
+_old_q.write_text("x"); _new_q.write_text("y")
+with db.db() as d:
+    for path, q, age in (("/ret/old.bin", _old_q, 31), ("/ret/new.bin", _new_q, 5)):
+        d.execute("INSERT INTO files(path,size,mtime,sha256,status,quarantine_path,updated_at) VALUES (?,?,?,?,?,?,?)",
+                  (path, 1, 1, "0" * 64, "QUARANTINED", str(q), db.utc_now(-_rtd(days=age))))
+check("retention=0 thi khong xoa gi", file_service.purge_expired_quarantine(0) == [])
+purged = file_service.purge_expired_quarantine(30)
+with db.db() as d:
+    left = {r[0] for r in d.execute("SELECT path FROM files WHERE path LIKE '/ret/%'")}
+check("retention 30 ngay: chi xoa tep cach ly qua 31 ngay, ca ban ghi lan tep", purged == ["/ret/old.bin"]
+      and left == {"/ret/new.bin"} and not _old_q.exists() and _new_q.exists())
+check("retention ghi audit QUARANTINE_EXPIRED boi system", any(r["event"] == "QUARANTINE_EXPIRED" and r["user"] == "system"
+      and "/ret/old.bin" in r["detail"] for r in auditlog.read_audit(limit=10)))
+with db.db() as d:
+    d.execute("DELETE FROM files WHERE path LIKE '/ret/%'")
+
 print("\nALL ADMIN TESTS PASSED")
