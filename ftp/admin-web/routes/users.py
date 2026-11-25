@@ -53,11 +53,12 @@ def create_user(request: Request, admin: str = Depends(require("user:manage")), 
     with db() as c:
         role_exists = role in all_roles(c)
 
-    valid = (config.USERNAME_RE.match(username) and role_exists and len(password) >= config.MIN_PASSWORD_LEN
+    valid = (config.USERNAME_RE.fullmatch(username) and role_exists
+             and config.MIN_PASSWORD_LEN <= len(password) <= config.MAX_PASSWORD_LEN
              and home is not None and scope is not None)
     if not valid:
-        flash(request, "Dữ liệu chưa hợp lệ: tên đăng nhập 3-32 ký tự (chữ thường, số, _ . -), "
-                       "mật khẩu từ 4 ký tự, vai trò phải có thật", "danger")
+        flash(request, "Dữ liệu chưa hợp lệ: tên 3-32 ký tự thường; mật khẩu 8-128 ký tự; "
+                       "vai trò và đường dẫn phải hợp lệ", "danger")
         return back("/users")
 
     compat_role, read_only = config.ROLE_COMPAT.get(role, ("user", 0))
@@ -192,8 +193,8 @@ def remove_role(username: str, request: Request, admin: str = Depends(require("r
 def reset_password(username: str, request: Request, admin: str = Depends(require("user:manage")),
                    password: str = Form(...), csrf: str = Form(...)):
     check_csrf(request, csrf)
-    if len(password) < config.MIN_PASSWORD_LEN:
-        flash(request, "Mật khẩu phải từ 4 ký tự", "danger")
+    if not config.MIN_PASSWORD_LEN <= len(password) <= config.MAX_PASSWORD_LEN:
+        flash(request, f"Mật khẩu phải từ {config.MIN_PASSWORD_LEN} đến {config.MAX_PASSWORD_LEN} ký tự", "danger")
         return back("/users")
 
     with db() as c:

@@ -72,6 +72,8 @@ ROLE_LABELS = {"system_admin": "Quản trị hệ thống", "security_auditor": 
 # ---------- gioi han nhap lieu ----------
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
 MIN_PASSWORD_LEN = 4
+MAX_PASSWORD_LEN = 128
+MAX_REASON_LENGTH = 500
 BREAKGLASS_MAX_MINUTES = 480
 BREAKGLASS_MIN_REASON = 5
 
