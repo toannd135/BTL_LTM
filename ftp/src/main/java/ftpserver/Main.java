@@ -101,7 +101,6 @@ public final class Main {
     private static Database openDatabase(Config config) throws SQLException, IOException {
         Database database = new Database(config.dbUrl(), config.dbUser(), config.dbPassword());
         int applied = new Migrator(database).migrate();
-        // Bo phan query string/tham so cua URL de khong in mat khau ra log.
         String dbName = config.dbUrl().replaceAll("[?;].*$", "");
         System.out.println("Database PostgreSQL " + dbName + " ready (" + applied + " migration(s) applied)");
         return database;
