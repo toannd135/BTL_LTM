@@ -49,6 +49,16 @@ def roles_of(name):
     with db.db() as d:
         return {(r["role"], r["scope"]) for r in d.execute("SELECT role, scope FROM user_roles WHERE username=?", (name,))}
 
+# Moi template Jinja phai dich duoc (bat som loi cu phap, vd formatter HTML lam mat dau "}}")
+import jinja2
+_bad = []
+for _t in sorted((here / "templates").glob("*.html")):
+    try:
+        web.templates.env.parse(_t.read_text(encoding="utf-8"))
+    except jinja2.TemplateSyntaxError as e:
+        _bad.append(f"{_t.name}:{e.lineno} {e.message}")
+check("moi template Jinja dich duoc" + (": " + "; ".join(_bad) if _bad else ""), not _bad)
+
 c = TestClient(main.app, follow_redirects=False)
 check("chua dang nhap -> chuyen toi /login", c.get("/").headers["location"] == "/login")
 check("POST thieu CSRF bi tu choi", c.post("/login", data={"username": "admin", "password": "admin", "csrf": "x"}).status_code == 403)

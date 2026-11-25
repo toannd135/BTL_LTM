@@ -82,7 +82,7 @@
     var tbody = document.querySelector('#sessTable tbody');
     var countEl = document.getElementById('sessCount'), dot = document.getElementById('liveDot'), liveText = document.getElementById('liveText');
     var resultEl = document.getElementById('sessResult');
-    var canKill = {{ 'true' if can_kill else 'false' }
+    var canKill = {{ 'true' if can_kill else 'false' }};
   };
   var sessions = [], known = null, ws = null, retry = 0;
 
