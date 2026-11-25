@@ -8,3 +8,4 @@ V006__audit_breakglass.sql
 V007__separate_duties.sql
 V008__ftp_sessions.sql
 V009__personal_homes.sql
+V010__permission_split.sql
