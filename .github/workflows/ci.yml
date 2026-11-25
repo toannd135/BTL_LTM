@@ -143,7 +143,9 @@ jobs:
         run: |
           # tag v1.2.3 -> 1.2.3; push main / PR dung 1.0.0
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="1.0.0"; fi
-          # MSI/DMG yêu cầu dạng số X.Y.Z
+          # MSI/DMG yêu cầu dạng số X.Y.Z: bỏ hậu tố pre-release/build (v1.0.1-alpha -> 1.0.1)
+          V="${V%%[-+]*}"
+          if ! [[ "$V" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then echo "Tag không hợp lệ cho installer: $GITHUB_REF_NAME" >&2; exit 1; fi
           echo "v=$V" >> "$GITHUB_OUTPUT"
 
       - name: Import chứng chỉ macOS (tuỳ chọn)
