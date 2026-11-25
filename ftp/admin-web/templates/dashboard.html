@@ -199,7 +199,7 @@
         {% if health.disk %}<a href="#rankPanel" class="meter-link" title="Xem ai đang chiếm dung lượng" onclick="var t=document.querySelector('[data-tab=topStorage]');if(t)t.click()">{{ meter('Ổ đĩa kho tệp', health.disk.pct, fmt_bytes(health.disk.used) ~ ' / ' ~ fmt_bytes(health.disk.total)) }}</a>
         {% if health.disk.pct >= 90 %}<div class="disk-warn mt-2"><span class="dot down pulse"></span>
           <span>Còn {{ fmt_bytes(health.disk.total - health.disk.used) }}. {{ 'Tải lên sẽ lỗi khi hết chỗ.' if health.disk.pct >= 95 else 'Sắp đầy.' }}</span>
-          {% if 'scan:manage' in perms %}<a href="/files?status=QUARANTINED" class="ms-auto text-nowrap">Dọn tệp cách ly →</a>{% endif %}</div>{% endif %}{% endif %}
+          {% if 'scan:purge' in perms %}<a href="/files?status=QUARANTINED" class="ms-auto text-nowrap">Dọn tệp cách ly →</a>{% endif %}</div>{% endif %}{% endif %}
       </div>
     </section>
 

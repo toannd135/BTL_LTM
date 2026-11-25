@@ -49,6 +49,16 @@ def roles_of(name):
     with db.db() as d:
         return {(r["role"], r["scope"]) for r in d.execute("SELECT role, scope FROM user_roles WHERE username=?", (name,))}
 
+# Moi template Jinja phai dich duoc (bat som loi cu phap, vd formatter HTML lam mat dau "}}")
+import jinja2
+_bad = []
+for _t in sorted((here / "templates").glob("*.html")):
+    try:
+        web.templates.env.parse(_t.read_text(encoding="utf-8"))
+    except jinja2.TemplateSyntaxError as e:
+        _bad.append(f"{_t.name}:{e.lineno} {e.message}")
+check("moi template Jinja dich duoc" + (": " + "; ".join(_bad) if _bad else ""), not _bad)
+
 c = TestClient(main.app, follow_redirects=False)
 check("chua dang nhap -> chuyen toi /login", c.get("/").headers["location"] == "/login")
 check("POST thieu CSRF bi tu choi", c.post("/login", data={"username": "admin", "password": "admin", "csrf": "x"}).status_code == 403)
@@ -226,8 +236,18 @@ with db.db() as d:
     check("dong bo khong xoa ban ghi cach ly", d.execute("SELECT status FROM files WHERE id=?", (fid,)).fetchone()[0] == "QUARANTINED")
 c.post(f"/files/{fid}/restore", data={"csrf": t})
 check("khoi phuc ve vi tri cu", (config.ROOT / "sv" / "eicar.txt").exists())
-c.post(f"/files/{fid}/quarantine", data={"csrf": t}); c.post(f"/files/{fid}/delete", data={"csrf": t})
-check("xoa han tep cach ly", not any(config.QUARANTINE.iterdir()))
+c.post(f"/files/{fid}/quarantine", data={"csrf": t})
+fq_admin = c.get("/files?status=QUARANTINED").text
+check("V010: admin thay nut Khoi phuc (scan:restore) nhung khong thay Xoa han (scan:purge)",
+      f"/files/{fid}/restore" in fq_admin and f"/files/{fid}/delete" not in fq_admin)
+check("V010: admin khong co scan:purge -> POST xoa han 403, tep van con",
+      c.post(f"/files/{fid}/delete", data={"csrf": t}).status_code == 403 and any(config.QUARANTINE.iterdir()))
+with db.db() as d:  # quy trinh dac biet: cap tam scan:purge cho system_admin
+    d.execute("INSERT INTO role_permissions(role, permission) VALUES ('system_admin', 'scan:purge')")
+c.post(f"/files/{fid}/delete", data={"csrf": t})
+check("xoa han tep cach ly (khi duoc cap tam scan:purge)", not any(config.QUARANTINE.iterdir()))
+with db.db() as d:
+    d.execute("DELETE FROM role_permissions WHERE role='system_admin' AND permission='scan:purge'")
 (config.ROOT / "sv" / "ok.txt").write_text("doi noi dung!")
 c.post("/files/sync", data={"csrf": t})
 with db.db() as d:
@@ -367,9 +387,16 @@ with db.db() as d:
     n_appr2 = d.execute("SELECT COUNT(*) FROM audit_events WHERE event='ADMIN_FILE_APPROVE'").fetchone()[0]
 check("bulk approve: 2 tep CLEAN, tep thu 3 giu nguyen, audit tung tep", rb.status_code == 303 and st == ["CLEAN", "CLEAN", "PENDING"]
       and n_appr2 - n_appr == 2)
+check("V010: bulk delete khong co scan:purge -> 403",
+      c.post("/files/bulk", data={"csrf": tf, "action": "delete", "ids": [bids[2]]}).status_code == 403)
+with db.db() as d:
+    d.execute("INSERT INTO role_permissions(role, permission) VALUES ('system_admin', 'scan:purge')")
+c.get("/files")  # nap lai perms vao phien
 c.post("/files/bulk", data={"csrf": tf, "action": "delete", "ids": [bids[2]]})
 with db.db() as d:
     check("bulk delete: tep chua cach ly bi bo qua", d.execute("SELECT status FROM files WHERE id=?", (bids[2],)).fetchone()[0] == "PENDING")
+    d.execute("DELETE FROM role_permissions WHERE role='system_admin' AND permission='scan:purge'")
+c.get("/files")
 check("bulk: action la -> 400", c.post("/files/bulk", data={"csrf": tf, "action": "rm", "ids": bids}).status_code == 400)
 check("bulk: thieu CSRF -> 403", c.post("/files/bulk", data={"csrf": "x", "action": "approve", "ids": [bids[2]]}).status_code == 403)
 c.post("/files/bulk", data={"csrf": tf, "action": "approve", "ids": [bids[2]] + list(range(100000, 100000 + files_routes.BULK_MAX))})
@@ -610,5 +637,26 @@ with aud.websocket_connect("/ws/sessions") as w:
 check("ws: auditor xem duoc nhung KHONG ngat duoc", first["can_kill"] is False and res["ok"] is False and flag == 0)
 with db.db() as d:
     d.execute("DELETE FROM ftp_sessions")
+
+# ---------- tu xoa tep cach ly qua han (thay cho scan:purge) ----------
+import file_service
+from datetime import timedelta as _rtd
+config.QUARANTINE.mkdir(parents=True, exist_ok=True)
+_old_q, _new_q = config.QUARANTINE / "9001_old.bin", config.QUARANTINE / "9002_new.bin"
+_old_q.write_text("x"); _new_q.write_text("y")
+with db.db() as d:
+    for path, q, age in (("/ret/old.bin", _old_q, 31), ("/ret/new.bin", _new_q, 5)):
+        d.execute("INSERT INTO files(path,size,mtime,sha256,status,quarantine_path,updated_at) VALUES (?,?,?,?,?,?,?)",
+                  (path, 1, 1, "0" * 64, "QUARANTINED", str(q), db.utc_now(-_rtd(days=age))))
+check("retention=0 thi khong xoa gi", file_service.purge_expired_quarantine(0) == [])
+purged = file_service.purge_expired_quarantine(30)
+with db.db() as d:
+    left = {r[0] for r in d.execute("SELECT path FROM files WHERE path LIKE '/ret/%'")}
+check("retention 30 ngay: chi xoa tep cach ly qua 31 ngay, ca ban ghi lan tep", purged == ["/ret/old.bin"]
+      and left == {"/ret/new.bin"} and not _old_q.exists() and _new_q.exists())
+check("retention ghi audit QUARANTINE_EXPIRED boi system", any(r["event"] == "QUARANTINE_EXPIRED" and r["user"] == "system"
+      and "/ret/old.bin" in r["detail"] for r in auditlog.read_audit(limit=10)))
+with db.db() as d:
+    d.execute("DELETE FROM files WHERE path LIKE '/ret/%'")
 
 print("\nALL ADMIN TESTS PASSED")

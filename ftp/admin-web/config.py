@@ -7,6 +7,7 @@ Bien moi truong chinh:
   FTP_ROOT        thu muc goc kho tep (kho dia cuc bo)
   FTP_AUDIT_LOG   tep audit.log dung chung voi server
   FTP_QUARANTINE  noi chua tep bi cach ly (kho dia cuc bo)
+  FTP_QUARANTINE_RETENTION_DAYS  so ngay giu tep cach ly truoc khi tu xoa vinh vien (mac dinh 30, 0 = tat)
   FTP_CLAMD       "host[:port]" cua clamd (bo trong thi dung clamdscan/clamscan neu co)
   FTPADMIN_SECRET khoa ky cookie phien dang nhap
   FTPADMIN_TRUST_PROXY=1  lay IP that tu header cua proxy (Cloudflare/nginx)
@@ -35,6 +36,9 @@ ROOT = Path(os.environ.get("FTP_ROOT", FTP_HOME / "ftproot")).resolve()
 AUDIT_LOG = Path(os.environ.get("FTP_AUDIT_LOG", FTP_HOME / "logs" / "audit.log"))
 QUARANTINE = Path(os.environ.get("FTP_QUARANTINE", FTP_HOME / "quarantine")).resolve()
 
+# Tep cach ly qua so ngay nay thi tu xoa vinh vien (thay cho quyen scan:purge khong gan cho ai); 0 = khong tu xoa
+QUARANTINE_RETENTION_DAYS = max(0, int(os.environ.get("FTP_QUARANTINE_RETENTION_DAYS", "30") or 0))
+
 # Kho tep: dia cuc bo (FTP_ROOT) hoac SeaweedFS/S3 (khi dat FTP_S3_ENDPOINT)
 STORE = storage.from_env(ROOT, QUARANTINE)
 
@@ -49,13 +53,15 @@ FTP_HEALTH = (os.environ.get("FTP_HEALTH_HOST", "127.0.0.1"), int(os.environ.get
 
 # ---------- quyen ----------
 # Cac quyen cho phep vao trang web (chi tinh vai tro co scope '/')
-WEB_PERMS = {"user:manage", "role:manage", "audit:view", "scan:view", "scan:manage", "breakglass:grant"}
+WEB_PERMS = {"user:manage", "role:manage", "audit:view", "scan:view", "scan:manage", "scan:restore", "scan:purge",
+             "breakglass:grant"}
 # Chi co scan:view (file_manager) thi KHONG du de dang nhap: file_manager lam viec qua FTP, khong qua trang quan tri
 LOGIN_PERMS = WEB_PERMS - {"scan:view"}
 # Duoc thao tac quet thi cung duoc xem danh sach tep
 SCAN_VIEW = ("scan:view", "scan:manage")
 # Quyen "nguy hiem": to mau do trong nhat ky
-PERM_HIGH = {"breakglass:grant", "user:manage", "role:manage", "scan:manage", "config:manage", "file:manage", "file:delete"}
+PERM_HIGH = {"breakglass:grant", "user:manage", "role:manage", "scan:manage", "scan:restore", "scan:purge", "config:manage",
+             "file:manage", "file:delete", "file:overwrite"}
 
 # ---------- vai tro ----------
 # Vai tro RBAC -> gia tri cot cu (users.role, users.read_only) de server doc tai khoan kieu cu van dung
@@ -70,6 +76,8 @@ ROLE_LABELS = {"system_admin": "Quản trị hệ thống", "security_auditor": 
 # ---------- gioi han nhap lieu ----------
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
 MIN_PASSWORD_LEN = 4
+MAX_PASSWORD_LEN = 128
+MAX_REASON_LENGTH = 500
 BREAKGLASS_MAX_MINUTES = 480
 BREAKGLASS_MIN_REASON = 5
 
@@ -94,5 +102,5 @@ EVENT_LABELS = {
     "ADMIN_GRANT_ROLE": "Gán vai trò", "ADMIN_REVOKE_ROLE": "Gỡ vai trò", "ADMIN_FILE_SYNC": "Đồng bộ kho tệp",
     "ADMIN_FILE_SCAN": "Quét lại tệp", "ADMIN_FILE_APPROVE": "Duyệt tệp", "ADMIN_FILE_QUARANTINE": "Cách ly tệp",
     "ADMIN_FILE_RESTORE": "Khôi phục tệp", "ADMIN_FILE_DELETE": "Xóa hẳn tệp",
-    "ADMIN_SESSION_KILL": "Yêu cầu ngắt phiên FTP",
+    "ADMIN_SESSION_KILL": "Yêu cầu ngắt phiên FTP", "QUARANTINE_EXPIRED": "Tự xóa tệp cách ly hết hạn",
 }

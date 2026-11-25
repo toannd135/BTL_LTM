@@ -18,6 +18,8 @@ from fastapi import HTTPException
 import config
 import storage
 from auditlog import audit
+from datetime import timedelta
+
 from db import db, utc_now
 from scanner import scan_file
 from web import sql_like
@@ -177,3 +179,31 @@ def files_filter(status="", q="", ext="", owner="") -> tuple[dict, str, tuple]:
 
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     return {"status": status, "q": q, "ext": ext, "owner": owner}, where, tuple(args)
+
+
+def purge_expired_quarantine(days: int = config.QUARANTINE_RETENTION_DAYS) -> list[str]:
+    """Xoa vinh vien tep cach ly qua `days` ngay (tinh tu updated_at, tuc lan cuoi trang thai thay doi).
+
+    Khong ai giu quyen scan:purge, nen day la cach duy nhat don tep cach ly theo quy trinh thuong. Moi tep xoa
+    ghi mot su kien QUARANTINE_EXPIRED (nguoi thuc hien "system") de kiem toan vien doi chieu.
+    Tra ve danh sach duong dan da xoa; days <= 0 thi khong lam gi.
+    """
+    if days <= 0:
+        return []
+    cutoff = utc_now(-timedelta(days=days))
+    with db() as c:
+        rows = c.execute("SELECT id, path, quarantine_path, updated_at FROM files "
+                         "WHERE status='QUARANTINED' AND updated_at < ? ORDER BY id", (cutoff,)).fetchall()
+    purged = []
+    for row in rows:
+        try:
+            if row["quarantine_path"]:
+                STORE.purge(row["quarantine_path"])
+        except (storage.StorageError, OSError) as e:  # loi kho: bo qua tep nay, lan sau thu lai
+            print(f"purge quarantine failed for {row['path']}: {e}")
+            continue
+        with db() as c:
+            c.execute("DELETE FROM files WHERE id=? AND status='QUARANTINED'", (row["id"],))
+        audit("system", "QUARANTINE_EXPIRED", f"{row['path']} (cach ly tu {row['updated_at']}, qua {days} ngay)")
+        purged.append(row["path"])
+    return purged

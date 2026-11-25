@@ -2,43 +2,88 @@
 {% block title %}Phiên FTP · FTP Admin{% endblock %}
 {% block content %}
 <style>
-  #sessTable tbody tr.is-new { animation: sessNew 2s ease-out; }
-  #sessTable tbody tr.is-killing { opacity: .55; }
-  @keyframes sessNew { from { background: #e8f1ff; } to { background: transparent; } }
-  @media (prefers-reduced-motion: reduce) { #sessTable tbody tr.is-new { animation: none; } }
+  #sessTable tbody tr.is-new {
+    animation: sessNew 2s ease-out;
+  }
+
+  #sessTable tbody tr.is-killing {
+    opacity: .55;
+  }
+
+  @keyframes sessNew {
+    from {
+      background: #e8f1ff;
+    }
+
+    to {
+      background: transparent;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #sessTable tbody tr.is-new {
+      animation: none;
+    }
+  }
 </style>
 
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-  <h3 class="mb-0">Phiên FTP đang kết nối <span class="badge text-bg-secondary align-middle" id="sessCount">{{ sessions | length }}</span></h3>
+  <h3 class="mb-0">Phiên FTP đang kết nối <span class="badge text-bg-secondary align-middle" id="sessCount">{{ sessions
+      | length }}</span></h3>
   <div class="d-flex align-items-center gap-2 small text-muted" aria-live="polite">
     <span class="dot" id="liveDot"></span><span id="liveText">Đang kết nối thời gian thực…</span>
   </div>
 </div>
 <p class="text-muted small">
   Danh sách tự cập nhật qua WebSocket khi có người kết nối hoặc ngắt kết nối, không cần tải lại trang.
-  {% if can_kill %}Bấm <b>Ngắt</b> để yêu cầu FTP server cắt phiên; server xử lý trong khoảng 5 giây và ghi nhật ký.{% else %}
+  {% if can_kill %}Bấm <b>Ngắt</b> để yêu cầu FTP server cắt phiên; server xử lý trong khoảng 5 giây và ghi nhật ký.{%
+  else %}
   Bạn chỉ có quyền xem (ngắt phiên cần quyền quản lý người dùng).{% endif %}
 </p>
 <div id="sessResult" class="alert d-none" role="status"></div>
 
-<div class="card shadow-sm"><div class="table-responsive"><table class="table align-middle mb-0" id="sessTable">
-  <thead><tr><th>Phiên</th><th>Tài khoản</th><th>IP</th><th>Mã hóa</th><th>Kết nối lúc</th><th>Thời lượng</th><th>Hoạt động gần nhất</th>{% if can_kill %}<th></th>{% endif %}</tr></thead>
-  <tbody>
-  {# Ban render san tu server: van xem duoc khi JavaScript tat; JavaScript se ve lai bang tu WebSocket #}
-  {% for s in sessions %}
-    <tr><td><code>{{ s.id }}</code></td><td>{{ s.username or '(chưa đăng nhập)' }}</td><td>{{ s.ip }}</td>
-      <td>{{ '🔒 TLS' if s.tls else 'Không' }}</td><td class="small">{{ s.started_at }}</td><td></td><td class="small">{{ s.last_seen }}</td>
-      {% if can_kill %}<td></td>{% endif %}</tr>
-  {% else %}<tr><td colspan="8" class="text-center text-muted">Không có phiên FTP nào đang kết nối</td></tr>{% endfor %}
-  </tbody>
-</table></div></div>
+<div class="card shadow-sm">
+  <div class="table-responsive">
+    <table class="table align-middle mb-0" id="sessTable">
+      <thead>
+        <tr>
+          <th>Phiên</th>
+          <th>Tài khoản</th>
+          <th>IP</th>
+          <th>Mã hóa</th>
+          <th>Kết nối lúc</th>
+          <th>Thời lượng</th>
+          <th>Hoạt động gần nhất</th>{% if can_kill %}<th></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {# Ban render san tu server: van xem duoc khi JavaScript tat; JavaScript se ve lai bang tu WebSocket #}
+        {% for s in sessions %}
+        <tr>
+          <td><code>{{ s.id }}</code></td>
+          <td>{{ s.username or '(chưa đăng nhập)' }}</td>
+          <td>{{ s.ip }}</td>
+          <td>{{ '🔒 TLS' if s.tls else 'Không' }}</td>
+          <td class="small">{{ s.started_at }}</td>
+          <td></td>
+          <td class="small">{{ s.last_seen }}</td>
+          {% if can_kill %}<td></td>{% endif %}
+        </tr>
+        {% else %}<tr>
+          <td colspan="8" class="text-center text-muted">Không có phiên FTP nào đang kết nối</td>
+        </tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 
 <script>
-(function () {
-  var tbody = document.querySelector('#sessTable tbody');
-  var countEl = document.getElementById('sessCount'), dot = document.getElementById('liveDot'), liveText = document.getElementById('liveText');
-  var resultEl = document.getElementById('sessResult');
-  var canKill = {{ 'true' if can_kill else 'false' }};
+  (function () {
+    var tbody = document.querySelector('#sessTable tbody');
+    var countEl = document.getElementById('sessCount'), dot = document.getElementById('liveDot'), liveText = document.getElementById('liveText');
+    var resultEl = document.getElementById('sessResult');
+    var canKill = {{ 'true' if can_kill else 'false' }};
+  };
   var sessions = [], known = null, ws = null, retry = 0;
 
   function setLive(state, text) { dot.className = 'dot ' + state + (state === 'ok' ? ' pulse' : ''); liveText.textContent = text; }
@@ -119,6 +164,6 @@
   }, 1000);
 
   if ('WebSocket' in window) connect(); else setLive('down', 'Trình duyệt không hỗ trợ WebSocket');
-})();
+}) ();
 </script>
 {% endblock %}

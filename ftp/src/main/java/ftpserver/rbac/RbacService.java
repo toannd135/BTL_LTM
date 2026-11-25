@@ -27,7 +27,8 @@ public class RbacService {
     public static final String FILE_MANAGE = "file:manage";
     /** Moi quyen file:* (break-glass cap tat ca). */
     public static final String[] FILE_PERMS = {
-        "file:list", "file:upload", "file:download", "file:rename", "file:delete", "file:share", "file:manage"
+        "file:list", "file:upload", "file:overwrite", "file:mkdir", "file:download", "file:rename", "file:delete",
+        "file:share", "file:manage"
     };
 
     private final Database db;
@@ -56,7 +57,6 @@ public class RbacService {
             return false;
         }
 
-<<<<<<< HEAD
         /** true neu co scope nam trong vpath, cho phep di qua thu muc cha toi scope duoc cap. */
         public boolean hasDescendant(String permission, String vpath) {
             String prefix = vpath.equals("/") ? "/" : vpath + "/";
@@ -66,11 +66,11 @@ public class RbacService {
                 }
             }
             return false;
-=======
+        }
+
         /** Cac thu muc (scope) ma user co quyen nay, sap xep tang dan; vd file:list -> ["/home/dung/homnaylamgi"]. */
         public List<String> scopesOf(String permission) {
             return scopes.getOrDefault(permission, List.of()).stream().sorted().distinct().toList();
->>>>>>> 7f72a03e89420005abc3db3f649e091925caed65
         }
 
         /** Vai tro (kem scope) cua user, dung de hien thi. */

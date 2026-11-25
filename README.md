@@ -243,7 +243,7 @@ flowchart LR
 | Mục | Nội dung |
 |---|---|
 | Tác nhân | Nhân viên, Quản lý tệp; hệ thống ngoài: ClamAV, kho tệp |
-| Tiền điều kiện | Đã đăng nhập; có quyền `file:upload` và ACL `WRITE` (hoặc là chủ) tại thư mục đích; đã mở kênh dữ liệu (`PASV`/`PORT`) |
+| Tiền điều kiện | Đã đăng nhập; có quyền `file:upload` và ACL `WRITE` (hoặc là chủ) tại thư mục đích (ghi đè tệp có sẵn cần thêm `file:overwrite`); đã mở kênh dữ liệu (`PASV`/`PORT`) |
 | Luồng chính | 1) Gửi `STOR`. 2) Server trả `150`. 3) Nhận dữ liệu vào **bản ghi tạm**. 4) Gửi bản tạm cho clamd. 5) Kết quả sạch: commit vào kho, ghi `files=CLEAN`, ghi chủ sở hữu, audit `UPLOAD`. 6) Trả `226` |
 | Luồng thay thế | A1: Tệp nhiễm: hủy bản tạm, trả `550 WARNING: malware detected`, audit `MALWARE`. A2: Đứt giữa chừng: hủy bản tạm, trả `426`. A3: clamd lỗi: vẫn commit, trạng thái `PENDING`, bị chặn tải khi `enforce`. A4: Không đủ quyền (kể cả tạo mục mới trực tiếp ở `/` hay `/home` với nhân viên có thư mục cá nhân): `550`, audit `DENIED`. A5: Vượt `scan.max_bytes` (khi `enforce`): bỏ bản tạm, trả `552` |
 | Hậu điều kiện | Thành công: tệp có trong kho, có chủ sở hữu, có bản ghi `files`. Thất bại: kho không đổi |
@@ -272,7 +272,7 @@ flowchart LR
 | Mục | Nội dung |
 |---|---|
 | Tác nhân | Quản trị hệ thống |
-| Tiền điều kiện | Có `scan:manage` |
+| Tiền điều kiện | Có `scan:manage` (quét, duyệt, cách ly); `scan:restore` để khôi phục; `scan:purge` để xóa vĩnh viễn |
 | Luồng chính | 1) Dashboard cảnh báo mã độc 24 giờ. 2) Vào mục Tệp, đồng bộ danh sách từ kho. 3) **Quét** lại qua clamd, hoặc **Cách ly** (chuyển sang bucket `<bucket>-quarantine`), hoặc **Duyệt sạch**, **Khôi phục**, **Xóa hẳn**. 4) Mọi thao tác có hộp xác nhận |
 | Hậu điều kiện | Trạng thái `files.status` cập nhật; quản trị viên không đọc nội dung tệp |
 
@@ -434,7 +434,7 @@ BTL_LTM/
 │   │   ├── tls/                 TlsSupport
 │   │   ├── scan/                ScanService, ClamdClient
 │   │   └── db/                  Database, Migrator
-│   ├── src/main/resources/db/migration/V001..V009 + index.txt
+│   ├── src/main/resources/db/migration/V001..V010 + index.txt
 │   ├── src/test/java/ftpserver/ 12 lớp test
 │   ├── scripts/                 smoke, concurrency, pasv_leak, ftps, bench_throughput, gen-keystore.sh
 │   ├── ftproot/                 Thư mục gốc mẫu (docs/sample.txt)
@@ -1081,12 +1081,12 @@ Quyền được kiểm tra **ngay trên FTP server** (không chỉ ẩn nút �
 
 | Vai trò | Quyền | Đọc nội dung tệp? |
 |---|---|---|
-| `system_admin` | `user:manage`, `role:manage`, `config:manage`, `breakglass:grant` (+ `scan:manage` trên web) | **Không** |
+| `system_admin` | `user:manage`, `role:manage`, `config:manage`, `breakglass:grant`, `scan:view`, `scan:manage`, `scan:restore` | **Không** |
 | `security_auditor` | `audit:view`, `scan:view` | **Không** |
-| `file_manager` | `file:list/upload/download/rename/delete` (+ `file:manage` bỏ qua ACL từng tệp) trong scope, `scan:view` | Có, trong scope |
-| `employee` | `file:list/upload/download/rename/share`, theo ACL | Theo ACL |
+| `file_manager` | `file:list/upload/overwrite/mkdir/download/rename/delete/share` (+ `file:manage` bỏ qua ACL từng tệp) trong scope, `scan:view` | Có, trong scope |
+| `employee` | `file:list/upload/download/rename/share`, theo ACL; ghi đè tệp và tạo thư mục **chỉ trong phạm vi của mình** (tệp/thư mục mình sở hữu, vd `/home/<user>`), không được ở vùng chung hay trên tệp người khác | Theo ACL |
 
-Danh sách 13 quyền: `file:list`, `file:upload`, `file:download`, `file:rename`, `file:delete`, `file:share`, `file:manage`, `user:manage`, `role:manage`, `config:manage`, `audit:view`, `scan:view`, `breakglass:grant`.
+Danh sách 18 quyền (chuẩn hóa ở migration `V010`, mỗi quyền chỉ bao một nhóm hành động): `file:list`, `file:upload` (chỉ tệp **mới**), `file:overwrite` (ghi đè, `APPE`, tải tiếp `REST`), `file:mkdir`, `file:download`, `file:rename`, `file:delete`, `file:share`, `file:manage`, `user:manage`, `role:manage`, `config:manage`, `audit:view`, `scan:view`, `scan:manage` (quét lại, duyệt, cách ly), `scan:restore` (khôi phục tệp cách ly), `scan:purge` (xóa vĩnh viễn tệp cách ly — **không gán cho vai trò nào**, tệp cách ly quá `FTP_QUARANTINE_RETENTION_DAYS` ngày — mặc định 30, `0` = tắt — được trang quản trị tự xóa mỗi ngày và ghi audit `QUARANTINE_EXPIRED`; khi thật sự cần xóa sớm thì cấp tạm bằng `INSERT INTO role_permissions` rồi thu hồi), `breakglass:grant`.
 
 Tính **tách biệt nhiệm vụ** (separation of duties, migration `V007`): người quản trị hệ thống không thể đọc dữ liệu người dùng; kiểm toán viên chỉ xem log; người quản lý tệp không quản lý tài khoản.
 
@@ -1191,6 +1191,7 @@ Schema tạo bằng **migration** khi server khởi động (`db/Migrator`, danh
 | `V005__rbac` | `roles`, `permissions`, `role_permissions`, `user_roles` + nạp 4 vai trò, 13 quyền; chuyển tài khoản cũ |
 | `V006__audit_breakglass` | `audit_events` (3 chỉ mục), `breakglass_grants` |
 | `V007__separate_duties` | Tách nhiệm vụ: thêm quyền `scan:manage` cho `system_admin` (kiểm toán viên chỉ xem), thêm tài khoản mẫu `fm` (`file_manager`) và `auditor` (`security_auditor`) |
+| `V010__permission_split` | Chuẩn hóa quyền: tách `file:overwrite`, `file:mkdir` khỏi `file:upload` (chỉ `file_manager` có); tách `scan:restore` (cho `system_admin`) và `scan:purge` (không ai) khỏi `scan:manage`; `system_admin` thêm `scan:view` |
 
 **Các bảng:** `users`, `files`, `file_owner`, `file_acl`, `roles`, `permissions`, `role_permissions`, `user_roles`, `audit_events`, `breakglass_grants`.
 
@@ -1332,7 +1333,7 @@ CI dùng `jpackage` tạo bản cài đặt theo hệ điều hành (Windows MSI
 ### 13.1 Đặc điểm
 
 - Dùng **cùng CSDL, kho tệp, audit log** với server (`FTP_HOME`, `FTP_S3_*`, `FTP_CLAMD`...).
-- Chỉ tài khoản có quyền web (`user:manage`, `role:manage`, `audit:view`, `scan:view`, `scan:manage`, `breakglass:grant`) đăng nhập được; `file_manager` **không** đăng nhập trang quản trị. Menu hiển thị theo quyền.
+- Chỉ tài khoản có quyền web (`user:manage`, `role:manage`, `audit:view`, `scan:view`, `scan:manage`, `scan:restore`, `scan:purge`, `breakglass:grant`) đăng nhập được; `file_manager` **không** đăng nhập trang quản trị. Menu hiển thị theo quyền.
 - Phiên đăng nhập ký bằng `FTPADMIN_SECRET`; mặc định bind `127.0.0.1`; `FTPADMIN_TRUST_PROXY=1` để ghi IP thật khi sau proxy.
 - Có hộp xác nhận cho mọi thao tác nguy hiểm; thông báo tiếng Việt.
 
@@ -1675,7 +1676,7 @@ Ký hiệu: **●** chủ trì (chịu trách nhiệm hoàn thành và giải th
 | 5 | Kho tệp và đường dẫn an toàn | `FileStore`, `LocalFileStore`, `PathResolver` | | | ● | ○ |
 | 6 | Lệnh thư mục và tệp | `CWD`, `CDUP`, `PWD`, `MKD`, `RMD`, `DELE`, `RNFR`, `RNTO` | | | ● | ○ |
 | 7 | Kho đối tượng S3 | `S3FileStore`, cấu hình SeaweedFS, `docker-compose.yml` | | ○ | ● | |
-| 8 | CSDL và migration | `Database`, `Migrator`, `V001`–`V009` (PostgreSQL) | ○ | | | ● |
+| 8 | CSDL và migration | `Database`, `Migrator`, `V001`–`V010` (PostgreSQL) | ○ | | | ● |
 | 9 | Xác thực, tài khoản mẫu | `PasswordHasher`, `UserManager`, `SeedAccounts` | | | | ● |
 | 10 | Mã hóa FTPS phía server | `TlsSupport`, `AUTH`, `PBSZ`, `PROT`, `gen-keystore.sh` | ○ | | | ● |
 | 11 | Phân quyền | `RbacService`, `AclService` (gồm `READ` thư mục cha khi có quyền bên dưới), `Perm`, `ClientSession.canDelete`, thư mục cá nhân `/home/<user>` (`PassCommandHandler`, `isSharedTopLevel`), `migrate_personal_homes.py` | | | ○ | ● |

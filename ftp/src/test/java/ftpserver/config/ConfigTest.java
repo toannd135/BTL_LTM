@@ -33,10 +33,19 @@ class ConfigTest {
     @Test
     void missingRootDir_throwsWithFieldNameInMessage(@TempDir Path tmp) throws Exception {
         Path conf = tmp.resolve("ftpserver.conf");
-        Files.writeString(conf, "control.port=2121\ndata.port.min=50000\ndata.port.max=50100\n");
+        Files.writeString(conf, "control.port=2121\ndata.port.min=50000\ndata.port.max=50100\ndb.url=jdbc:postgresql://db:5432/ftp\n");
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> Config.load(conf));
         assertTrue(ex.getMessage().contains("root.dir"));
+    }
+
+    @Test
+    void missingDbUrl_throwsWithFieldNameInMessage(@TempDir Path tmp) throws Exception {
+        Path conf = tmp.resolve("ftpserver.conf");
+        Files.writeString(conf, "control.port=2121\nroot.dir=" + tmp.resolve("root") + "\ndata.port.min=50000\ndata.port.max=50100\n");
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> Config.load(conf));
+        assertTrue(ex.getMessage().contains("db.url"));
     }
 
     @Test
@@ -47,6 +56,7 @@ class ConfigTest {
                 root.dir=%s
                 data.port.min=50000
                 data.port.max=50100
+                db.url=jdbc:postgresql://db.example:5432/ftp
                 tls.required=true
                 """.formatted(tmp.resolve("root")));
 
@@ -58,6 +68,7 @@ class ConfigTest {
     void scanMaxBytes_onlyWhenEnforced_defaultAndValidation(@TempDir Path tmp) throws Exception {
         Path conf = tmp.resolve("ftpserver.conf");
         String base = "control.port=2121\nroot.dir=" + tmp.resolve("root") + "\ndata.port.min=50000\ndata.port.max=50100\n"
+                + "db.url=jdbc:postgresql://db.example:5432/ftp\n"
                 + "scan.command=true\n";
         Files.writeString(conf, base + "scan.enforce=true\n");
         assertEquals(Config.DEFAULT_SCAN_MAX_BYTES, Config.load(conf).scanMaxBytes());

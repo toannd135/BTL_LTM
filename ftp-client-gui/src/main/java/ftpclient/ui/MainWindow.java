@@ -1,6 +1,5 @@
 package ftpclient.ui;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,8 +11,11 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -32,7 +34,6 @@ import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
-import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
@@ -57,6 +58,8 @@ import javafx.scene.control.SelectionMode;
 import javafx.scene.control.Separator;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
@@ -64,6 +67,7 @@ import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Tooltip;
+import javafx.scene.control.cell.ProgressBarTableCell;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.TransferMode;
@@ -79,6 +83,7 @@ import ftpclient.net.FtpException;
 import ftpclient.net.FtpSession;
 import ftpclient.net.RemoteFile;
 import ftpclient.net.RemoteSession;
+import ftpclient.net.TransferQueue;
 
 /**
  * Cửa sổ chính: bảng tệp máy cục bộ và bảng tệp máy chủ đặt cạnh nhau, thanh kết nối ở trên,
@@ -111,16 +116,29 @@ public class MainWindow {
     private static final String PARENT_DIR = "..";
     private static final String NOT_CONNECTED_TEXT = "(chưa kết nối)";
     private static final int DOUBLE_CLICK = 2;
+    private static final int MIN_USERNAME_LENGTH = 3;
+    private static final int MAX_USERNAME_LENGTH = 32;
 
-    /** Một thread riêng cho toàn bộ giao tiếp với server — control connection là tuần tự,
-     *  hai thread cùng gọi lệnh sẽ làm đáp ứng trả về lẫn lộn. */
+    /** Luồng riêng cho kết nối DUYỆT (browseSession): LIST/CWD/MKD/đổi tên/xóa/ACL. Kênh điều khiển là tuần tự,
+     *  hai luồng cùng gọi lệnh sẽ làm trả lời lẫn lộn. Truyền tệp chạy ở kết nối thứ hai ({@link #transfers}). */
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "ftp-worker");
         t.setDaemon(true);
         return t;
     });
 
+    /** Kết nối duyệt thư mục; luôn sẵn sàng vì không bao giờ bị chiếm bởi việc truyền tệp. */
     private volatile RemoteSession session = newSession();
+    /** Hàng đợi truyền nền trên kết nối thứ hai (transferSession); null khi chưa đăng nhập. */
+    private TransferQueue transfers;
+    /** Mọi mục của hàng đợi (hiện ở tab "Hàng đợi truyền"), cập nhật trên luồng JavaFX. */
+    private final ObservableList<TransferQueue.Job> jobs = FXCollections.observableArrayList();
+    /** Nhãn hiển thị và việc cần làm khi xong của từng mục (theo id). */
+    private final Map<Integer, String> jobLabels = new HashMap<>();
+    private final Map<Integer, Runnable> jobAfterSuccess = new HashMap<>();
+    private final Set<Integer> jobsHandled = new HashSet<>();
+    private TableView<TransferQueue.Job> queueTable;
+    private Tab queueTab;
     private volatile boolean connected;
 
     private TextField hostField;
@@ -137,8 +155,6 @@ public class MainWindow {
     private Button deleteBtn;
     private Button shareBtn;
     private Button cancelBtn;
-    /** Người dùng bấm Hủy: dừng cả tác vụ thư mục/hàng đợi giữa các file (đặt từ luồng giao diện, đọc ở luồng nền). */
-    private volatile boolean cancelRequested;
     private TableView<RemoteFile> remoteTable;
     private TableView<LocalFile> localTable;
     private TextField localPathField;
@@ -157,8 +173,10 @@ public class MainWindow {
     /** Thư mục hiện tại trên máy chủ (ô đường dẫn có thể đang được gõ dở). */
     private String remotePwd = "";
     /** Mục đang kéo giữa hai bảng (cùng tiến trình nên giữ ở đây, không cần serialize). */
-    private LocalFile draggedLocal;
-    private RemoteFile draggedRemote;
+    /** Các mục đang kéo từ bảng cục bộ (có thể chọn nhiều); rỗng khi không kéo. */
+    private List<LocalFile> draggedLocal = List.of();
+    /** Các tệp đang kéo từ bảng máy chủ (có thể chọn nhiều); rỗng khi không kéo. */
+    private List<RemoteFile> draggedRemote = List.of();
     /** Thư mục tạm chứa file máy chủ tải về để mở (tạo khi cần, xóa khi thoát JVM). */
     private Path openCacheDir;
     private Path localDir = Paths.get(System.getProperty("user.home"));
@@ -200,6 +218,7 @@ public class MainWindow {
             s.quit();
         }
         s.close();
+        closeTransfers();
         worker.shutdownNow();
     }
 
@@ -377,6 +396,7 @@ public class MainWindow {
         });
         createRemoteButtons();
         remoteTable.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> updateShareButton());
+        remoteTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);  // Ctrl/Shift+click để tải về nhiều tệp
         remoteTable.setContextMenu(buildRemoteContextMenu());
         HBox remoteButtons = new HBox(downloadBtn, openBtn, deleteBtn, shareBtn);
         remoteButtons.getStyleClass().add("action-bar");
@@ -447,7 +467,7 @@ public class MainWindow {
             RemoteFile sel = selectedRemote();
             downloadItem.setDisable(!connected || sel == null);
             openItem.setDisable(!connected || sel == null || sel.directory());
-            renameItem.setDisable(!connected || sel == null || mkdBtn.isDisable());
+            renameItem.setDisable(!connected || sel == null || uploadBtn.isDisable());
             deleteItem.setDisable(sel == null || deleteBtn.isDisable());
             shareItem.setDisable(shareBtn.isDisable());
             mkdItem.setDisable(!connected || mkdBtn.isDisable());
@@ -458,7 +478,12 @@ public class MainWindow {
 
     /** Phần dưới: thanh tiến trình (kèm nút Hủy) và ô nhật ký giao thức. */
     private VBox buildBottomArea() {
-        return new VBox(4, buildProgressBox(), buildLogBox());
+        queueTab = new Tab("Hàng đợi truyền", buildQueueTable());
+        Tab logTab = new Tab("Nhật ký giao thức", buildLogBox());
+        TabPane tabs = new TabPane(logTab, queueTab);
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        VBox.setVgrow(tabs, Priority.ALWAYS);
+        return new VBox(4, buildProgressBox(), tabs);
     }
 
     private HBox buildProgressBox() {
@@ -475,8 +500,7 @@ public class MainWindow {
         cancelBtn.setOnAction(e -> {
             cancelBtn.setDisable(true);
             progressLabel.setText("Đang hủy…");
-            cancelRequested = true;   // dừng cả tác vụ thư mục/hàng đợi giữa các file
-            session.cancelTransfer();
+            jobs.stream().filter(j -> j.state() == TransferQueue.State.RUNNING).forEach(TransferQueue.Job::cancel);
         });
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -607,6 +631,12 @@ public class MainWindow {
         return sel == null || sel.name().equals(PARENT_DIR) ? null : sel;
     }
 
+    /** Mọi TỆP đang chọn ở bảng server (bỏ dòng ".." và thư mục), theo thứ tự trong bảng. */
+    private List<RemoteFile> selectedRemoteFiles() {
+        return remoteTable.getSelectionModel().getSelectedItems().stream()
+                .filter(f -> f != null && !f.directory() && !f.name().equals(PARENT_DIR)).toList();
+    }
+
     /** Ghi lỗi gốc vào nhật ký và hiện hộp thoại với câu dễ hiểu (không chặn). */
     private void showError(Throwable ex) {
         appendLog("LỖI: " + ex.getMessage());
@@ -638,15 +668,15 @@ public class MainWindow {
      */
     private void connect() {
         String host = hostField.getText().trim();
-        int port;
-        try {
-            port = Integer.parseInt(portField.getText().trim());
-        } catch (NumberFormatException e) {
-            appendLog("Cổng không hợp lệ: " + portField.getText());
-            return;
-        }
+        String portText = portField.getText().trim();
         String user = userField.getText().trim();
         String pass = passField.getText();
+        String validationError = validateConnectionInput(host, portText, user, pass);
+        if (validationError != null) {
+            showInputError(validationError);
+            return;
+        }
+        int port = Integer.parseInt(portText);
         PREFS.put(PREF_HOST, host);
         PREFS.put(PREF_PORT, String.valueOf(port));
         PREFS.put(PREF_USER, user);
@@ -667,7 +697,10 @@ public class MainWindow {
                 String role = s.login(user, pass);
                 List<RemoteFile> files = s.list();
                 String pwd = s.pwd();
+                boolean secure = s.isSecure();
                 Platform.runLater(() -> {
+                    closeTransfers();
+                    transfers = newTransferQueue(host, port, user, pass, secure);
                     setConnected(true, role);
                     showRemote(pwd, files);
                     connectButton.setDisable(false);
@@ -675,6 +708,7 @@ public class MainWindow {
             } catch (Exception ex) {
                 s.close();
                 Platform.runLater(() -> {
+                    passField.clear();
                     appendLog("LỖI KẾT NỐI: " + ex.getMessage());
                     showError(ex);
                     connectButton.setDisable(false);
@@ -683,8 +717,50 @@ public class MainWindow {
         });
     }
 
+    /** Kiểm tra dữ liệu kết nối trước khi mở socket hoặc gửi mật khẩu. */
+    private static String validateConnectionInput(String host, String portText, String user, String pass) {
+                if (host.isEmpty() || host.chars().anyMatch(Character::isWhitespace)) {
+                    return "Máy chủ không được để trống và không được chứa khoảng trắng.";
+                }
+                int port;
+                try {
+                    port = Integer.parseInt(portText);
+                } catch (NumberFormatException e) {
+                    return "Cổng phải là số nguyên từ 1 đến 65535.";
+                }
+                if (port < 1 || port > 65535) {
+                    return "Cổng phải nằm trong khoảng 1 đến 65535.";
+                }
+                if (user.isEmpty()) {
+                    return "Vui lòng nhập tên tài khoản.";
+                }
+                if (!user.equals("anonymous")
+                        && (user.length() < MIN_USERNAME_LENGTH || user.length() > MAX_USERNAME_LENGTH
+                        || !user.matches("[A-Za-z0-9][A-Za-z0-9._-]*"))) {
+                    return "Tên tài khoản dài 3-32 ký tự, bắt đầu bằng chữ/số và chỉ dùng chữ, số, '.', '_' hoặc '-'.";
+                }
+                if (pass.isEmpty()) {
+                    return "Vui lòng nhập mật khẩu.";
+                }
+                return null;
+            }
+
+        /** Hiện lỗi nhập liệu và đưa con trỏ về trường cần sửa. */
+        private void showInputError(String message) {
+            appendLog("DỮ LIỆU KẾT NỐI: " + message);
+            Alert a = new Alert(Alert.AlertType.WARNING, message, ButtonType.CLOSE);
+            a.setHeaderText("Kiểm tra thông tin đăng nhập");
+            a.setResizable(true);
+            if (remoteTable.getScene() != null) {
+                a.initOwner(remoteTable.getScene().getWindow());
+            }
+            AppIcon.apply(a);
+            a.show();
+        }
+
     /** QUIT + đóng socket trên luồng nền, sau đó đưa giao diện về trạng thái chưa kết nối. */
     private void disconnect() {
+        closeTransfers();
         RemoteSession s = session;
         worker.submit(() -> {
             s.quit();
@@ -729,8 +805,10 @@ public class MainWindow {
         cancelBtn.setDisable(true);
         if (isConnected) {
             RemoteSession s = session;
-            progressLabel.setText("Đã đăng nhập — " + (s.isSecure() ? "🔒 Mã hóa TLS" : "⚠ Chưa mã hóa"));
-            mkdBtn.setDisable(!s.canWrite());
+            String roleText = role == null || role.isBlank() ? "chưa xác định quyền" : "vai trò: " + role;
+            progressLabel.setText("Đã đăng nhập — " + roleText + " — "
+                    + (s.isSecure() ? "🔒 Mã hóa TLS" : "⚠ Chưa mã hóa"));
+            mkdBtn.setDisable(!s.canMkdir());
             uploadBtn.setDisable(!s.canWrite());
             deleteBtn.setDisable(!s.canDelete());
         } else {
@@ -966,87 +1044,11 @@ public class MainWindow {
         });
     }
 
-    /** Tải lên đệ quy: tạo thư mục tương ứng trên server (đã có thì dùng lại) rồi tải từng file; xong trở về thư mục ban đầu. */
+    /** Xếp hàng tải lên từng thư mục (đệ quy) vào thư mục máy chủ đang xem. */
     private void uploadDirectories(List<Path> dirs) {
-        RemoteSession s = session;
-        Task<String> task = new Task<>() {
-            private int count;
-            private long totalBytes;
-            private long doneBytes;
-
-            @Override
-            protected String call() throws Exception {
-                totalBytes = Math.max(totalFileSize(dirs), 1);
-                updateProgress(0, totalBytes);
-                // mỗi uploadTree tự cwd vào rồi cdup ra, nên kết thúc là về đúng thư mục ban đầu
-                // (không cwd về pwd: với user có home riêng pwd là "/" và CWD "/" bị từ chối)
-                for (Path d : dirs) {
-                    uploadTree(d);
-                }
-                return count + " file";
-            }
-
-            /** MKD (bỏ qua nếu đã có) + CWD vào thư mục, tải từng mục bên trong, rồi CDUP ra (cả khi lỗi). */
-            private void uploadTree(Path dir) throws Exception {
-                String name = dir.getFileName().toString();
-                try {
-                    s.mkd(name);
-                } catch (FtpException ignored) {
-                    // đã tồn tại: dùng lại; nếu lỗi thật thì cwd bên dưới sẽ báo
-                }
-                try {
-                    s.cwd(name);
-                } catch (FtpException e) {
-                    throw new FtpException(e.code(), "Không vào được thư mục '" + name
-                            + "' trên máy chủ: tên này đã tồn tại nhưng là tệp hoặc thư mục của người khác "
-                            + "(bạn không có quyền đọc). Hãy đổi tên thư mục rồi tải lại.");
-                }
-                try (var stream = Files.list(dir)) {
-                    for (Path p : stream.sorted().toList()) {
-                        if (cancelRequested) {
-                            throw new RemoteSession.CancelledException("Đã hủy tải thư mục");
-                        }
-                        if (Files.isDirectory(p)) {
-                            uploadTree(p);
-                        } else if (Files.isRegularFile(p)) {
-                            updateMessage(p.getFileName().toString());
-                            long base = doneBytes;
-                            s.upload(p.getFileName().toString(), p, (done, total) -> updateProgress(base + done, totalBytes));
-                            doneBytes = base + Files.size(p);
-                            count++;
-                        }
-                    }
-                } catch (Exception e) {
-                    try {
-                        s.cdup();
-                    } catch (Exception ignored) {
-                        // giữ lỗi gốc, không để lỗi dọn dẹp che mất
-                    }
-                    throw e;
-                }
-                s.cdup();
-            }
-        };
-        task.messageProperty().addListener((o, a, b) -> progressLabel.setText("Tải lên " + b));
-        String label = "Tải thư mục " + dirs.get(0).getFileName() + (dirs.size() > 1 ? " +" + (dirs.size() - 1) : "");
-        runTransfer(task, label, this::refreshRemoteTable);
-    }
-
-    /** Tổng kích thước các tệp thường trong các cây thư mục (tệp không đọc được kích thước tính là 0). */
-    private static long totalFileSize(List<Path> dirs) throws IOException {
-        long total = 0;
         for (Path d : dirs) {
-            try (var walk = Files.walk(d)) {
-                total += walk.filter(Files::isRegularFile).mapToLong(f -> {
-                    try {
-                        return Files.size(f);
-                    } catch (IOException ex) {
-                        return 0;
-                    }
-                }).sum();
-            }
+            enqueue(transfers.uploadDirectory(remotePwd, d), "Tải thư mục " + d.getFileName(), null);
         }
-        return total;
     }
 
     /** Hỏi tên rồi MKD trên máy chủ. */
@@ -1085,24 +1087,21 @@ public class MainWindow {
         });
     }
 
+    /** Tải về mọi tệp đang chọn (mỗi tệp một mục hàng đợi); thư mục được bỏ qua vì chưa hỗ trợ tải đệ quy. */
     private void onDownloadClicked() {
-        RemoteFile sel = selectedRemote();
-        if (sel == null || sel.directory()) {
+        List<RemoteFile> files = selectedRemoteFiles();
+        if (files.isEmpty()) {
+            if (selectedRemote() != null) {
+                appendLog("Chưa hỗ trợ tải về cả thư mục: hãy mở thư mục và chọn các tệp bên trong.");
+            }
             return;
         }
-        downloadFile(sel);
+        files.forEach(this::downloadFile);
     }
 
     private void downloadFile(RemoteFile sel) {
-        Path dest = localDir.resolve(sel.name());
-        RemoteSession s = session;
-        Task<String> task = new Task<>() {
-            @Override
-            protected String call() throws Exception {
-                return s.download(sel.name(), dest, sel.size(), this::updateProgress);
-            }
-        };
-        runTransfer(task, "Tải về " + sel.name(), this::refreshLocalTable);
+        enqueue(transfers.download(remotePwd, sel.name(), localDir.resolve(sel.name()), sel.size()),
+                "Tải về " + sel.name(), null);
     }
 
     /** Tải file máy chủ vào thư mục tạm (không đụng thư mục cục bộ đang xem) rồi mở. */
@@ -1118,15 +1117,13 @@ public class MainWindow {
             showError(ex);
             return;
         }
-        RemoteSession s = session;
-        Task<String> task = new Task<>() {
-            @Override
-            protected String call() throws Exception {
-                Files.deleteIfExists(dest);   // luôn lấy bản mới nhất, không resume từ bản mở lần trước
-                return s.download(sel.name(), dest, sel.size(), this::updateProgress);
-            }
-        };
-        runTransfer(task, "Mở " + sel.name(), () -> {
+        try {
+            Files.deleteIfExists(dest);   // luôn lấy bản mới nhất, không dùng bản mở lần trước
+        } catch (IOException ex) {
+            showError(ex);
+            return;
+        }
+        enqueue(transfers.download(remotePwd, sel.name(), dest, sel.size()), "Mở " + sel.name(), () -> {
             dest.toFile().deleteOnExit();
             if (Files.isRegularFile(dest)) {
                 openLocal(dest);
@@ -1145,94 +1142,216 @@ public class MainWindow {
 
     /** Tải lên các mục đang chọn ở bảng cục bộ: có thư mục thì chỉ tải thư mục, không thì tải lần lượt các tệp. */
     private void onUploadClicked() {
-        List<Path> files = localTable.getSelectionModel().getSelectedItems().stream()
-                .filter(f -> !f.directory()).map(f -> localDir.resolve(f.name())).toList();
-        List<Path> dirs = localTable.getSelectionModel().getSelectedItems().stream()
-                .filter(f -> f.directory() && !f.name().equals(PARENT_DIR)).map(f -> localDir.resolve(f.name())).toList();
-        if (!dirs.isEmpty()) {
-            uploadDirectories(dirs);   // file lẻ được chọn cùng lúc: tải riêng sau bằng lần bấm tiếp theo
-        } else if (!files.isEmpty()) {
-            uploadQueue(files);
-        }
-    }
-
-    private void uploadFile(Path src) {
-        uploadFile(src, this::refreshRemoteTable);
-    }
-
-    private void uploadFile(Path src, Runnable afterSuccess) {
-        String name = src.getFileName().toString();
-        RemoteSession s = session;
-        Task<String> task = new Task<>() {
-            @Override
-            protected String call() throws Exception {
-                return s.upload(name, src, this::updateProgress);
-            }
-        };
-        runTransfer(task, "Tải lên " + name, afterSuccess);
-    }
-
-    /** Tải lên lần lượt từng file (mỗi lần một tác vụ vì thanh tiến trình chỉ theo dõi được một). */
-    private void uploadQueue(List<Path> files) {
-        if (files.isEmpty()) {
-            refreshRemoteTable();
-            return;
-        }
-        List<Path> rest = files.subList(1, files.size());
-        uploadFile(files.get(0), () -> uploadQueue(rest));
+        uploadPaths(localTable.getSelectionModel().getSelectedItems().stream()
+                .filter(f -> !f.name().equals(PARENT_DIR)).map(f -> localDir.resolve(f.name())).toList());
     }
 
     /**
-     * Gắn tiến trình, nút Hủy và xử lý kết quả cho một tác vụ truyền file rồi đưa vào hàng đợi luồng nền.
-     * {@code afterSuccess} chạy trên luồng JavaFX khi tác vụ thành công (dùng để nối hàng đợi tải lên).
+     * Xếp hàng tải lên mọi mục (từ nút Tải lên hoặc kéo thả, chọn nhiều): mỗi tệp một mục, mỗi thư mục một mục
+     * tải đệ quy. Thứ tự giữ nguyên như lúc chọn.
      */
-    private void runTransfer(Task<String> task, String label, Runnable afterSuccess) {
-        cancelRequested = false;
-        progressLabel.setText(label);
-        // không bind trực tiếp: Task báo -1 (thanh chạy vô định) tới khi có byte đầu tiên; ép về 0% cho rõ ràng
-        progressBar.setProgress(0);
-        percentLabel.setText("0%");
-        task.progressProperty().addListener((o, a, b) -> showProgress(task));
-        cancelBtn.setDisable(false);
-        task.setOnSucceeded(e -> {
-            progressBar.setProgress(1);
-            percentLabel.setText("100%");
-            cancelBtn.setDisable(true);
-            progressLabel.setText("Xong: " + label + " — " + task.getValue());
-            appendLog(label + ": " + task.getValue());
-            afterSuccess.run();
-        });
-        task.setOnFailed(e -> onTransferFailed(label, task.getException()));
-        worker.submit(task);
-    }
-
-    /** Cập nhật thanh tiến trình và nhãn "x% (đã truyền / tổng)" theo tác vụ. */
-    private void showProgress(Task<?> task) {
-        double p = task.getProgress();
-        double total = task.getTotalWork();
-        progressBar.setProgress(p < 0 ? 0 : p);
-        percentLabel.setText(p < 0 ? "0%" : (int) Math.round(p * 100) + "%"
-                + (total > 1 ? "  (" + Formats.humanSize((long) task.getWorkDone()) + " / "
-                        + Formats.humanSize((long) total) + ")" : ""));
-    }
-
-    /** Tác vụ truyền lỗi: bị hủy thì chỉ nạp lại hai bảng, lỗi khác thì hiện hộp thoại. */
-    private void onTransferFailed(String label, Throwable ex) {
-        percentLabel.setText("");
-        cancelBtn.setDisable(true);
-        progressLabel.setText("Lỗi: " + label);
-        if (ex instanceof RemoteSession.CancelledException) {
-            // dừng cả hàng đợi (không gọi afterSuccess), chỉ nạp lại hai bảng
-            appendLog(ex.getMessage());
-            progressLabel.setText(ErrorText.of(ex));
-            progressBar.setProgress(0);
-            refreshLocalTable();
-            if (connected) {
-                refreshRemoteTable();
-            }
-        } else {
-            showError(ex);
+    private void uploadPaths(List<Path> paths) {
+        List<Path> files = paths.stream().filter(Files::isRegularFile).toList();
+        List<Path> dirs = paths.stream().filter(Files::isDirectory).toList();
+        if (!dirs.isEmpty() && !session.canMkdir()) {
+            Alert a = new Alert(Alert.AlertType.INFORMATION,
+                    "Tài khoản của bạn tải tệp lên được nhưng không có quyền tạo thư mục trên máy chủ, "
+                            + "nên các thư mục sẽ bị bỏ qua. Hãy chọn các tệp bên trong để tải lên.");
+            a.setHeaderText("Không tải được thư mục");
+            AppIcon.apply(a);
+            a.showAndWait();
+            dirs = List.of();
         }
+        if (!files.isEmpty()) {
+            uploadQueue(files);
+        }
+        if (!dirs.isEmpty()) {
+            uploadDirectories(dirs);
+        }
+    }
+
+
+    /** Xếp hàng tải lên từng tệp vào thư mục máy chủ đang xem; mỗi tệp là một mục riêng trong hàng đợi. */
+    private void uploadQueue(List<Path> files) {
+        for (Path f : files) {
+            enqueue(transfers.upload(remotePwd, f), "Tải lên " + f.getFileName(), null);
+        }
+    }
+
+    // ---------------- hàng đợi truyền (kết nối thứ hai) ----------------
+
+    /**
+     * Hàng đợi truyền cho tài khoản vừa đăng nhập. Kết nối truyền chỉ mở khi có mục đầu tiên, dùng lại máy chủ và
+     * tài khoản của kết nối duyệt; kết nối duyệt có TLS thì kết nối truyền cũng bắt buộc có TLS.
+     */
+    private TransferQueue newTransferQueue(String host, int port, String user, String pass, boolean requireTls) {
+        return new TransferQueue(() -> {
+            RemoteSession t = new FtpSession();
+            t.setLogListener((dir, line) -> Platform.runLater(() ->
+                    appendLog("[truyền] " + (dir.equals("SEND") ? "> " : "< ") + line)));
+            t.connect(host, port);
+            if (requireTls && !t.isSecure()) {
+                t.close();
+                throw new IOException("Kết nối truyền tệp không được mã hóa TLS, trong khi kết nối duyệt có mã hóa");
+            }
+            t.login(user, pass);
+            return t;
+        }, job -> Platform.runLater(() -> onJobChanged(job)));
+    }
+
+    private void closeTransfers() {
+        if (transfers != null) {
+            transfers.close();
+            transfers = null;
+        }
+    }
+
+    /** Ghi nhận mục vừa xếp hàng; {@code afterSuccess} (có thể null) chạy trên luồng JavaFX khi mục xong. */
+    private void enqueue(TransferQueue.Job job, String label, Runnable afterSuccess) {
+        jobLabels.put(job.id(), label);
+        if (afterSuccess != null) {
+            jobAfterSuccess.put(job.id(), afterSuccess);
+        }
+        if (!jobs.contains(job)) {
+            jobs.add(job);
+        }
+        appendLog("Xếp hàng: " + label);
+        updateStatusBar();
+    }
+
+    private String labelOf(TransferQueue.Job job) {
+        return jobLabels.getOrDefault(job.id(), job.kind() + " " + job.remoteName());
+    }
+
+    /** Mục đổi trạng thái/tiến độ (đã về luồng JavaFX): cập nhật bảng, thanh trạng thái; xong thì xử lý một lần. */
+    private void onJobChanged(TransferQueue.Job job) {
+        if (!jobs.contains(job)) {
+            jobs.add(job);
+        }
+        queueTable.refresh();
+        updateStatusBar();
+        if (job.finished() && jobsHandled.add(job.id())) {
+            onJobFinished(job);
+        }
+    }
+
+    private void onJobFinished(TransferQueue.Job job) {
+        String label = labelOf(job);
+        Runnable after = jobAfterSuccess.remove(job.id());
+        switch (job.state()) {
+            case DONE -> {
+                appendLog(label + ": xong — " + job.result());
+                if (after != null) {
+                    after.run();
+                }
+            }
+            case CANCELLED -> appendLog(label + ": đã hủy");
+            default -> {
+                appendLog("LỖI " + label + ": " + ErrorText.of(job.error()));
+                showError(job.error());
+            }
+        }
+        // nạp lại bảng đang xem nếu mục vừa xong đụng tới đúng thư mục đó
+        if (job.kind() == TransferQueue.Kind.DOWNLOAD) {
+            Path parent = job.localPath().getParent();
+            if (parent != null && parent.equals(localDir)) {
+                refreshLocalTable();
+            }
+        } else if (connected && job.remoteDir().equals(remotePwd)) {
+            refreshRemoteTable();
+        }
+    }
+
+    /** Thanh trạng thái theo mục đang chạy: nhãn, phần trăm, số mục còn chờ, nút Hủy. */
+    private void updateStatusBar() {
+        TransferQueue.Job running = null;
+        int waiting = 0;
+        for (TransferQueue.Job j : jobs) {
+            if (j.state() == TransferQueue.State.RUNNING) {
+                running = j;
+            } else if (j.state() == TransferQueue.State.QUEUED) {
+                waiting++;
+            }
+        }
+        long active = jobs.stream().filter(j -> !j.finished()).count();
+        queueTab.setText(active == 0 ? "Hàng đợi truyền" : "Hàng đợi truyền (" + active + ")");
+        cancelBtn.setDisable(running == null);
+        if (running == null) {
+            if (waiting == 0) {
+                percentLabel.setText("");
+            }
+            return;
+        }
+        String cur = running.current().isEmpty() ? "" : " — " + running.current();
+        progressLabel.setText(labelOf(running) + cur + (waiting > 0 ? "  (còn " + waiting + " mục chờ)" : ""));
+        double p = fraction(running);
+        progressBar.setProgress(p);
+        percentLabel.setText((int) Math.round(p * 100) + "%  (" + Formats.humanSize(running.done()) + " / "
+                + Formats.humanSize(running.total()) + ")");
+    }
+
+    private static double fraction(TransferQueue.Job j) {
+        if (j.state() == TransferQueue.State.DONE) {
+            return 1;
+        }
+        return j.total() > 0 ? Math.min(1, (double) j.done() / j.total()) : 0;
+    }
+
+    private static String stateText(TransferQueue.Job j) {
+        return switch (j.state()) {
+            case QUEUED -> "Đang chờ";
+            case RUNNING -> "Đang truyền " + (int) Math.round(fraction(j) * 100) + "%";
+            case DONE -> "Xong";
+            case FAILED -> "Lỗi: " + ErrorText.of(j.error());
+            case CANCELLED -> "Đã hủy";
+        };
+    }
+
+    /** Tốc độ trung bình của mục (đang chạy hoặc đã xong). */
+    private static String speedText(TransferQueue.Job j) {
+        long ms = j.elapsedMillis();
+        if (ms <= 0 || j.done() <= 0) {
+            return "";
+        }
+        return Formats.humanSize(j.done() * 1000 / ms) + "/s";
+    }
+
+    private TableView<TransferQueue.Job> buildQueueTable() {
+        queueTable = new TableView<>(jobs);
+        queueTable.setPlaceholder(new Label("Chưa có tệp nào trong hàng đợi"));
+        queueTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+        queueTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        TableColumn<TransferQueue.Job, String> item = new TableColumn<>("Mục");
+        item.setCellValueFactory(c -> new SimpleStringProperty(labelOf(c.getValue())));
+        item.setPrefWidth(280);
+        TableColumn<TransferQueue.Job, String> dir = new TableColumn<>("Thư mục máy chủ");
+        dir.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().remoteDir()));
+        dir.setPrefWidth(160);
+        TableColumn<TransferQueue.Job, Double> progress = new TableColumn<>("Tiến độ");
+        progress.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(fraction(c.getValue())));
+        progress.setCellFactory(ProgressBarTableCell.forTableColumn());
+        progress.setPrefWidth(140);
+        TableColumn<TransferQueue.Job, String> size = new TableColumn<>("Kích thước");
+        size.setCellValueFactory(c -> new SimpleStringProperty(Formats.humanSize(c.getValue().total())));
+        size.setPrefWidth(90);
+        TableColumn<TransferQueue.Job, String> speed = new TableColumn<>("Tốc độ");
+        speed.setCellValueFactory(c -> new SimpleStringProperty(speedText(c.getValue())));
+        speed.setPrefWidth(90);
+        TableColumn<TransferQueue.Job, String> state = new TableColumn<>("Trạng thái");
+        state.setCellValueFactory(c -> new SimpleStringProperty(stateText(c.getValue())));
+        state.setPrefWidth(200);
+        queueTable.getColumns().setAll(List.of(item, dir, progress, size, speed, state));
+        queueTable.setContextMenu(new ContextMenu(
+                menuItem("Hủy mục đã chọn", "cancel",
+                        () -> List.copyOf(queueTable.getSelectionModel().getSelectedItems())
+                                .forEach(TransferQueue.Job::cancel)),
+                menuItem("Hủy tất cả", "cancel", () -> List.copyOf(jobs).forEach(TransferQueue.Job::cancel)),
+                new SeparatorMenuItem(),
+                menuItem("Xóa các mục đã xong khỏi danh sách", "delete", () -> {
+                    jobs.removeIf(TransferQueue.Job::finished);
+                    updateStatusBar();
+                })));
+        return queueTable;
     }
 
     /** Đọc lại thư mục cục bộ hiện tại (đồng bộ, trên luồng JavaFX) và nạp vào bảng. */
@@ -1395,70 +1514,65 @@ public class MainWindow {
     /** Kéo file từ bảng cục bộ sang bảng máy chủ = tải lên. */
     private void setupLocalDrag() {
         localTable.setOnDragDetected(e -> {
-            LocalFile sel = localTable.getSelectionModel().getSelectedItem();
-            if (sel == null || sel.directory() || !connected || !session.canWrite()) {
+            List<LocalFile> sel = localTable.getSelectionModel().getSelectedItems().stream()
+                    .filter(f -> f != null && !f.name().equals(PARENT_DIR)).toList();
+            if (sel.isEmpty() || !connected || !session.canWrite()) {
                 return;
             }
-            draggedLocal = sel;
+            draggedLocal = List.copyOf(sel);
             ClipboardContent content = new ClipboardContent();
-            content.putString(sel.name());
+            content.putString(sel.size() == 1 ? sel.get(0).name() : sel.size() + " mục");
             localTable.startDragAndDrop(TransferMode.COPY).setContent(content);
             e.consume();
         });
-        localTable.setOnDragDone(e -> draggedLocal = null);
+        localTable.setOnDragDone(e -> draggedLocal = List.of());
         // kéo file từ bảng máy chủ thả vào đây = tải về
         localTable.setOnDragOver(e -> {
-            if (draggedRemote != null) {
+            if (!draggedRemote.isEmpty()) {
                 e.acceptTransferModes(TransferMode.COPY);
             }
             e.consume();
         });
         localTable.setOnDragDropped(e -> {
-            RemoteFile f = draggedRemote;
-            e.setDropCompleted(f != null);
+            List<RemoteFile> files = draggedRemote;
+            e.setDropCompleted(!files.isEmpty());
             e.consume();
-            if (f != null) {
-                downloadFile(f);
-            }
+            files.forEach(this::downloadFile);
         });
     }
 
     /** Bảng máy chủ nhận file kéo từ bảng cục bộ hoặc từ trình quản lý file của hệ điều hành. */
     private void setupRemoteDrop() {
         remoteTable.setOnDragDetected(e -> {
-            RemoteFile sel = selectedRemote();
-            if (sel == null || sel.directory() || !connected) {
+            List<RemoteFile> sel = selectedRemoteFiles();
+            if (sel.isEmpty() || !connected) {
                 return;
             }
-            draggedRemote = sel;
+            draggedRemote = List.copyOf(sel);
             ClipboardContent content = new ClipboardContent();
-            content.putString(sel.name());
+            content.putString(sel.size() == 1 ? sel.get(0).name() : sel.size() + " tệp");
             remoteTable.startDragAndDrop(TransferMode.COPY).setContent(content);
             e.consume();
         });
-        remoteTable.setOnDragDone(e -> draggedRemote = null);
+        remoteTable.setOnDragDone(e -> draggedRemote = List.of());
         remoteTable.setOnDragOver(e -> {
             boolean canUpload = connected && session.canWrite();
-            if (canUpload && (draggedLocal != null || e.getDragboard().hasFiles())) {
+            if (canUpload && (!draggedLocal.isEmpty() || e.getDragboard().hasFiles())) {
                 e.acceptTransferModes(TransferMode.COPY);
             }
             e.consume();
         });
         remoteTable.setOnDragDropped(e -> {
-            List<Path> files = new ArrayList<>();
-            if (draggedLocal != null) {
-                files.add(localDir.resolve(draggedLocal.name()));
+            List<Path> paths = new ArrayList<>();
+            if (!draggedLocal.isEmpty()) {
+                draggedLocal.forEach(f -> paths.add(localDir.resolve(f.name())));
             } else if (e.getDragboard().hasFiles()) {
-                for (File f : e.getDragboard().getFiles()) {
-                    if (f.isFile()) {
-                        files.add(f.toPath());
-                    }
-                }
+                e.getDragboard().getFiles().forEach(f -> paths.add(f.toPath()));
             }
-            e.setDropCompleted(!files.isEmpty());
+            e.setDropCompleted(!paths.isEmpty());
             e.consume();
-            if (!files.isEmpty()) {
-                uploadQueue(files);
+            if (!paths.isEmpty()) {
+                uploadPaths(paths);
             }
         });
     }

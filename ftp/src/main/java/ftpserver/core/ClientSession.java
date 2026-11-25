@@ -458,6 +458,32 @@ public class ClientSession implements Runnable {
         return grants != null && grants.has("file:upload", key) && acl.isOwner(user, key);
     }
 
+    /**
+     * Ghi de tep da ton tai (STOR trung ten, APPE, tai tiep REST): file:overwrite + ACL WRITE tren chinh tep,
+     * HOAC chu so huu tep (hay thu muc cha, vd /home/&lt;user&gt;) co file:upload — giong quy tac xoa: chu so huu da
+     * xoa duoc tep cua minh thi chan ghi de chi them phien ma khong an toan hon.
+     */
+    public boolean canOverwrite(Path real) {
+        return canDo("file:overwrite", real, Perm.WRITE) || ownsWithUpload(aclPath(real));
+    }
+
+    /**
+     * Tao thu muc con trong {@code parent}: file:mkdir + ACL WRITE tren thu muc cha, HOAC thu muc cha thuoc so huu
+     * cua user (co file:upload). Vung chung "/" va "/home" khong bao gio tinh la cua rieng ai.
+     */
+    public boolean canMkdir(Path parent) {
+        if (canDo("file:mkdir", parent, Perm.WRITE)) {
+            return true;
+        }
+        String key = aclPath(parent);
+        return !isSharedTopLevel(key) && !key.equals("/") && !key.equals(PERSONAL_HOMES) && ownsWithUpload(key);
+    }
+
+    /** User co file:upload tai {@code key} va la chu so huu muc do (hoac mot thu muc cha cua no). */
+    private boolean ownsWithUpload(String key) {
+        return user != null && grants != null && grants.has("file:upload", key) && acl.isOwner(user, key);
+    }
+
     /** Chia se tep: chu so huu co file:share, hoac nguoi quan ly. */
     public boolean canShare(Path real) {
         String key = aclPath(real);
