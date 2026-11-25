@@ -57,6 +57,17 @@ public class RbacService {
             return false;
         }
 
+        /** true neu co scope nam trong vpath, cho phep di qua thu muc cha toi scope duoc cap. */
+        public boolean hasDescendant(String permission, String vpath) {
+            String prefix = vpath.equals("/") ? "/" : vpath + "/";
+            for (String scope : scopes.getOrDefault(permission, List.of())) {
+                if (!scope.equals(vpath) && scope.startsWith(prefix)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /** Cac thu muc (scope) ma user co quyen nay, sap xep tang dan; vd file:list -> ["/home/dung/homnaylamgi"]. */
         public List<String> scopesOf(String permission) {
             return scopes.getOrDefault(permission, List.of()).stream().sorted().distinct().toList();

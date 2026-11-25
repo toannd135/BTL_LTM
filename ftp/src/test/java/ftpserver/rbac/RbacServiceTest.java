@@ -80,6 +80,17 @@ class RbacServiceTest {
     }
 
     @Test
+    void scopedFileManagerCanTraverseToAssignedFolder() throws Exception {
+        addUser("hrfm", "user");
+        assign("hrfm", "file_manager", "/home/dung/homnaylamgi");
+        var g = rbac.load(u("hrfm"));
+        assertTrue(g.hasDescendant("file:list", "/"));
+        assertTrue(g.hasDescendant("file:list", "/home"));
+        assertTrue(g.has("file:list", "/home/dung/homnaylamgi"));
+        assertFalse(g.hasDescendant("file:list", "/finance"));
+    }
+
+    @Test
     void employeeCanUploadDownloadButNotDelete() throws Exception {
         addUser("emp", "user");
         assign("emp", "employee", "/");
