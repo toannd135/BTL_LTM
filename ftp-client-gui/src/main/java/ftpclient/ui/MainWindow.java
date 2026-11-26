@@ -424,6 +424,9 @@ public class MainWindow {
 
     /** Nhấp đúp bảng máy chủ: CWD/CDUP vào thư mục hoặc tải tệp về thư mục tạm rồi mở. */
     private void onRemoteDoubleClick() {
+        if (!connected) {
+            return;
+        }
         RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
         if (sel != null && sel.directory()) {
             if (sel.name().equals(PARENT_DIR)) {
@@ -647,6 +650,9 @@ public class MainWindow {
     /** Ghi lỗi gốc vào nhật ký và hiện hộp thoại với câu dễ hiểu (không chặn). */
     private void showError(Throwable ex) {
         appendLog("LỖI: " + ex.getMessage());
+        if (connected && ErrorText.isConnectionLost(ex)) {
+            disconnect();
+        }
         boolean malware = ErrorText.isMalware(ex);
         // Có nút CLOSE (CANCEL_CLOSE) thì nút X / Esc mới đóng được hộp thoại (chỉ có OK thì JavaFX bỏ qua X)
         Alert a = new Alert(malware ? Alert.AlertType.WARNING : Alert.AlertType.ERROR, ErrorText.of(ex), ButtonType.CLOSE);
@@ -1133,6 +1139,9 @@ public class MainWindow {
 
     /** Tải file máy chủ vào thư mục tạm (không đụng thư mục cục bộ đang xem) rồi mở. */
     private void openRemote(RemoteFile sel) {
+        if (!connected || transfers == null) {
+            return;
+        }
         Path dest;
         try {
             if (openCacheDir == null) {

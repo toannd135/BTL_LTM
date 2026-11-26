@@ -45,6 +45,7 @@ public class FtpSession implements RemoteSession {
     private static final Pattern ROLES_PATTERN = Pattern.compile("\\(roles:\\s*([^)]*)\\)");
 
     private static final int CONNECT_TIMEOUT_MS = 5000;
+    private static final int CONTROL_READ_TIMEOUT_MS = 10000;
     private static final int TRANSFER_BUFFER_SIZE = 8192;
     /** Vai trò trả về từ {@link #login} khi máy chủ không báo vai trò. */
     private static final String DEFAULT_ROLE = "ftp";
@@ -73,6 +74,7 @@ public class FtpSession implements RemoteSession {
         this.tls = null;
         control = new Socket();
         control.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+        control.setSoTimeout(CONTROL_READ_TIMEOUT_MS);
         attachStreams(control);
         readReply(); // 220 greeting
         negotiateTls(host, port);
@@ -91,6 +93,7 @@ public class FtpSession implements RemoteSession {
         try {
             TlsClient client = new TlsClient(host, port);
             control = client.wrap(control, host, port);
+            control.setSoTimeout(CONTROL_READ_TIMEOUT_MS);
             attachStreams(control);
             tls = client;
             logListener.onLine("INFO", (client.firstUse() ? "Tin chứng chỉ máy chủ lần đầu, " : "Chứng chỉ khớp lần trước, ")
@@ -232,6 +235,11 @@ public class FtpSession implements RemoteSession {
     @Override
     public void cdup() throws IOException, FtpException {
         requireOk(sendAndRead("CDUP"), 250);
+    }
+
+    @Override
+    public void noop() throws IOException, FtpException {
+        requireOk(sendAndRead("NOOP"), 200);
     }
 
     @Override

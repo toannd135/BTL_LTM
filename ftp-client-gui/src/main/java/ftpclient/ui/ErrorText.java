@@ -18,6 +18,29 @@ final class ErrorText {
         return ex != null && ex.getMessage() != null && ex.getMessage().toLowerCase(Locale.ROOT).contains("malware");
     }
 
+    /** Kiểm tra xem lỗi có phải do mất kết nối hoặc máy chủ đóng kết nối (421, EOFException, SocketException...) không. */
+    static boolean isConnectionLost(Throwable ex) {
+        if (ex == null) {
+            return false;
+        }
+        if (ex instanceof FtpException fe && fe.code() == 421) {
+            return true;
+        }
+        if (ex instanceof java.io.EOFException || ex instanceof java.net.SocketException
+                || ex instanceof java.net.SocketTimeoutException) {
+            return true;
+        }
+        String msg = ex.getMessage();
+        if (msg != null) {
+            String lower = msg.toLowerCase(Locale.ROOT);
+            if (lower.contains("server da dong ket noi") || lower.contains("connection reset")
+                    || lower.contains("broken pipe") || lower.contains("socket closed")) {
+                return true;
+            }
+        }
+        return ex.getCause() != null && isConnectionLost(ex.getCause());
+    }
+
     /** Câu thông báo cho người dùng; không nhận ra lỗi thì trả nguyên thông điệp gốc. */
     static String of(Throwable ex) {
         String raw = ex == null ? null : ex.getMessage();
