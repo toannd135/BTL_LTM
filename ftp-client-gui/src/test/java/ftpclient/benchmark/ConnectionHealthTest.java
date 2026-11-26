@@ -64,6 +64,14 @@ class ConnectionHealthTest {
     }
 
     @Test
+    void reply421_meansServerClosedTheSession() throws Exception {
+        FtpSession s = login();
+        server.closeWith421(true);
+        ConnectionLostException e = assertThrows(ConnectionLostException.class, s::pwd);
+        assertTrue(e.getMessage().contains("Idle timeout"), e.getMessage());
+    }
+
+    @Test
     void noop_keepsSessionAlive_andResetsIdleTime() throws Exception {
         FtpSession s = login();
         Thread.sleep(200);

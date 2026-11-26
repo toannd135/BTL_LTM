@@ -447,6 +447,9 @@ public class MainWindow {
 
     /** Nhấp đúp bảng máy chủ: CWD/CDUP vào thư mục hoặc tải tệp về thư mục tạm rồi mở. */
     private void onRemoteDoubleClick() {
+        if (!isConnected()) {
+            return;
+        }
         RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
         if (sel != null && sel.directory()) {
             if (sel.name().equals(PARENT_DIR)) {
@@ -1213,6 +1216,9 @@ public class MainWindow {
 
     /** Tải file máy chủ vào thư mục tạm (không đụng thư mục cục bộ đang xem) rồi mở. */
     private void openRemote(RemoteFile sel) {
+        if (!isConnected() || transfers == null) {
+            return;
+        }
         Path dest;
         try {
             if (openCacheDir == null) {

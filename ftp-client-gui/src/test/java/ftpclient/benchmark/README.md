@@ -11,7 +11,7 @@ Mọi test đều chạy với một **FTP server giả lập** nằm ngay trong
 | `FakeFtpServer.java` | FTP server giả lập. Có hai núm chỉnh để giống mạng thật: giới hạn băng thông và độ trễ mỗi trả lời (RTT). Nội dung tệp được sinh theo công thức cố định nên kiểm tra được từng byte tải về. |
 | `BenchStats.java` | Tiện ích tính phân vị (p50, p95), in bảng ra console và ghi CSV. |
 | `TransferQueueTest.java` | **Test chức năng** (7 test, khoảng 3 giây): tải về đúng nội dung, tải lên đúng thư mục, tải cả thư mục, hủy mục đang chờ, hủy mục đang chạy, tự kết nối lại khi server ngắt, và duyệt thư mục không bị chặn khi đang truyền. |
-| `ConnectionHealthTest.java` | **Test chức năng** (5 test, khoảng 2 giây): server không trả lời thì báo mất kết nối sau đúng thời gian chờ (không treo), server đóng kết nối, NOOP giữ kết nối, kết nối lại bằng phiên mới, và server trả "226" chậm sau khi tải lên không bị hiểu nhầm là mất kết nối. |
+| `ConnectionHealthTest.java` | **Test chức năng** (6 test, khoảng 2 giây): server không trả lời thì báo mất kết nối sau đúng thời gian chờ (không treo), server đóng kết nối hoặc trả "421", NOOP giữ kết nối, kết nối lại bằng phiên mới, và server trả "226" chậm sau khi tải lên không bị hiểu nhầm là mất kết nối. |
 | `BrowseLatencyBenchmark.java` | **Benchmark 1:** đo độ trễ duyệt thư mục trong lúc tải tệp lớn, so sánh kiến trúc 1 kết nối (cũ) với 2 kết nối (mới). |
 | `ThroughputBenchmark.java` | **Benchmark 2:** đo thông lượng. Một là tải tệp lớn trực tiếp so với qua hàng đợi. Hai là tải lên nhiều tệp nhỏ. |
 
