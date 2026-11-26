@@ -83,14 +83,20 @@ public final class StorCommandHandler implements CommandHandler {
     }
 
     /**
-     * Ghi de tep co san can WRITE tren tep; tao tep moi can WRITE tren thu muc chua no (va thu muc do phai ton tai).
+     * Tao tep moi can file:upload + WRITE tren thu muc chua no (va thu muc do phai ton tai); ghi de tep co san
+     * (ke ca APPE va tai tiep REST) can file:overwrite + WRITE tren chinh tep.
      *
      * @return false neu da tra loi 550 cho client
      */
     private static boolean checkWriteAccess(ClientSession session, FileStore store, Path target, boolean isNew,
                                             String cmd, String arg) {
+        if (!isNew && !session.canOverwrite(target)) {
+            session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied: file exists and overwriting needs file:overwrite");
+            session.audit("UPLOAD", cmd + " " + arg + " (denied: no overwrite permission)", false);
+            return false;
+        }
         Path guarded = isNew ? target.getParent() : target;
-        if (guarded == null || !session.can(guarded, Perm.WRITE)) {
+        if (guarded == null || (isNew && !session.can(guarded, Perm.WRITE))) {
             session.reply(FtpReply.FILE_UNAVAILABLE, "Permission denied");
             session.audit("UPLOAD", cmd + " " + arg + " (denied: no write permission)", false);
             return false;
@@ -133,6 +139,8 @@ public final class StorCommandHandler implements CommandHandler {
             out.flush();
         } catch (IOException | RuntimeException e) {
             transferOk = false;
+            // ghi lai loi goc: khong co dong nay thi chi thay "426 Transfer aborted" ma khong biet vi sao
+            System.err.println("[" + session.sessionId() + "] STOR receive failed after " + received + " bytes: " + e);
         } finally {
             session.getDataConnection().close();
             session.setState(SessionState.AUTHENTICATED);

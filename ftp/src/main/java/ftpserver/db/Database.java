@@ -22,6 +22,7 @@ public class Database {
     private final String user;
     private final String password;
 
+    /** url dang jdbc:postgresql://host:port/db; user/password co the null (lay tu URL). */
     public Database(String url, String user, String password) {
         if (!url.startsWith("jdbc:postgresql:")) {
             throw new IllegalArgumentException("Unsupported db.url (expected jdbc:postgresql:): " + url);

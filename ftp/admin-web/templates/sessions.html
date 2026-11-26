@@ -34,20 +34,11 @@
 </table></div></div>
 
 <script>
-<<<<<<< HEAD
-  (function () {
-    var tbody = document.querySelector('#sessTable tbody');
-    var countEl = document.getElementById('sessCount'), dot = document.getElementById('liveDot'), liveText = document.getElementById('liveText');
-    var resultEl = document.getElementById('sessResult');
-    var canKill = {{ 'true' if can_kill else 'false' }
-  };
-=======
 (function () {
   var tbody = document.querySelector('#sessTable tbody');
   var countEl = document.getElementById('sessCount'), dot = document.getElementById('liveDot'), liveText = document.getElementById('liveText');
   var resultEl = document.getElementById('sessResult');
   var canKill = {{ 'true' if can_kill else 'false' }};
->>>>>>> dddecb181dbc70dfe2a4351fbc99ddd119963d88
   var sessions = [], known = null, ws = null, retry = 0;
 
   function setLive(state, text) { dot.className = 'dot ' + state + (state === 'ok' ? ' pulse' : ''); liveText.textContent = text; }

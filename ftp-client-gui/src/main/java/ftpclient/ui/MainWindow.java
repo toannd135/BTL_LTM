@@ -22,6 +22,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -116,6 +118,10 @@ public class MainWindow {
     private static final String PARENT_DIR = "..";
     private static final String NOT_CONNECTED_TEXT = "(chưa kết nối)";
     private static final int DOUBLE_CLICK = 2;
+    /** Kết nối duyệt rảnh quá chừng này giây thì gửi NOOP (server ngắt phiên rảnh sau 300 giây). */
+    private static final long HEARTBEAT_IDLE_SECONDS = 45;
+    /** Bao lâu kiểm tra độ rảnh một lần. */
+    private static final long HEARTBEAT_CHECK_SECONDS = 15;
     private static final int MIN_USERNAME_LENGTH = 3;
     private static final int MAX_USERNAME_LENGTH = 32;
 
@@ -141,7 +147,17 @@ public class MainWindow {
     private final Set<Integer> jobsHandled = new HashSet<>();
     private TableView<TransferQueue.Job> queueTable;
     private Tab queueTab;
-    private volatile boolean connected;
+    /** Trạng thái kết nối duyệt; chỉ luồng JavaFX ghi (qua {@link #setState}), luồng nền chỉ đọc. */
+    private volatile ConnectionState state = ConnectionState.DISCONNECTED;
+    /**
+     * Heartbeat: định kỳ xem kết nối duyệt đã rảnh lâu chưa; rảnh quá {@link #HEARTBEAT_IDLE_SECONDS} giây thì gửi NOOP
+     * qua chính {@link #worker} (dùng chung hàng lệnh tuần tự, không chen ngang lệnh khác).
+     */
+    private final ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "ftp-heartbeat");
+        t.setDaemon(true);
+        return t;
+    });
 
     private TextField hostField;
     private TextField portField;
@@ -183,6 +199,10 @@ public class MainWindow {
     private Path openCacheDir;
     private Path localDir = Paths.get(System.getProperty("user.home"));
 
+    private boolean isConnected() {
+        return state == ConnectionState.CONNECTED;
+    }
+
     /** Dựng toàn bộ cảnh (gọi một lần, trên luồng JavaFX) và nạp bảng cục bộ ban đầu. */
     public Scene buildScene() {
         BorderPane root = new BorderPane();
@@ -198,7 +218,9 @@ public class MainWindow {
         root.setCenter(vertical);
 
         refreshLocalTable();
-        setConnected(false, "");
+        setState(ConnectionState.DISCONNECTED, "");
+        heartbeat.scheduleWithFixedDelay(this::heartbeatTick, HEARTBEAT_CHECK_SECONDS, HEARTBEAT_CHECK_SECONDS,
+                TimeUnit.SECONDS);
 
         Scene scene = new Scene(root, WINDOW_WIDTH, WINDOW_HEIGHT);
         scene.getStylesheets().add(MainWindow.class.getResource("app.css").toExternalForm());
@@ -216,11 +238,12 @@ public class MainWindow {
     /** Gọi khi đóng cửa sổ: gửi QUIT nếu đang kết nối, đóng socket và dừng luồng nền. */
     public void shutdown() {
         RemoteSession s = session;
-        if (connected) {
+        if (isConnected()) {
             s.quit();
         }
         s.close();
         closeTransfers();
+        heartbeat.shutdownNow();
         worker.shutdownNow();
     }
 
@@ -275,7 +298,7 @@ public class MainWindow {
         refreshBtn.setTooltip(new Tooltip("Làm mới cả hai bảng"));
         refreshBtn.setOnAction(e -> {
             refreshLocalTable();
-            if (connected) {
+            if (isConnected()) {
                 refreshRemoteTable();
             }
         });
@@ -424,7 +447,7 @@ public class MainWindow {
 
     /** Nhấp đúp bảng máy chủ: CWD/CDUP vào thư mục hoặc tải tệp về thư mục tạm rồi mở. */
     private void onRemoteDoubleClick() {
-        if (!connected) {
+        if (!isConnected()) {
             return;
         }
         RemoteFile sel = remoteTable.getSelectionModel().getSelectedItem();
@@ -470,13 +493,13 @@ public class MainWindow {
                 new SeparatorMenuItem(), mkdItem, refreshItem);
         remoteMenu.setOnShowing(e -> {
             RemoteFile sel = selectedRemote();
-            downloadItem.setDisable(!connected || sel == null);
-            openItem.setDisable(!connected || sel == null || sel.directory());
-            renameItem.setDisable(!connected || sel == null || uploadBtn.isDisable());
+            downloadItem.setDisable(!isConnected() || sel == null);
+            openItem.setDisable(!isConnected() || sel == null || sel.directory());
+            renameItem.setDisable(!isConnected() || sel == null || uploadBtn.isDisable());
             deleteItem.setDisable(sel == null || deleteBtn.isDisable());
             shareItem.setDisable(shareBtn.isDisable());
-            mkdItem.setDisable(!connected || mkdBtn.isDisable());
-            refreshItem.setDisable(!connected);
+            mkdItem.setDisable(!isConnected() || mkdBtn.isDisable());
+            refreshItem.setDisable(!isConnected());
         });
         return remoteMenu;
     }
@@ -597,15 +620,15 @@ public class MainWindow {
     /** Ô đường dẫn máy chủ: CWD tới đường dẫn gõ vào (chưa kết nối hoặc rỗng thì khôi phục nội dung ô). */
     private void goRemote(String text) {
         String path = text.trim();
-        if (!connected || path.isEmpty()) {
-            remotePathField.setText(connected ? remotePwd : NOT_CONNECTED_TEXT);
+        if (!isConnected() || path.isEmpty()) {
+            remotePathField.setText(isConnected() ? remotePwd : NOT_CONNECTED_TEXT);
             return;
         }
         runRemote(() -> session.cwd(path));
     }
 
     private void goRemoteUp() {
-        if (connected && !remotePwd.isEmpty() && !remotePwd.equals("/")) {
+        if (isConnected() && !remotePwd.isEmpty() && !remotePwd.equals("/")) {
             runRemote(() -> session.cdup());
         }
     }
@@ -623,7 +646,7 @@ public class MainWindow {
         boolean showHidden = showHiddenBox.isSelected();
         ObservableList<RemoteFile> items = FXCollections.observableArrayList();
         String pwd = remotePwd;
-        if (connected && !pwd.isEmpty() && !pwd.equals("/")) {
+        if (isConnected() && !pwd.isEmpty() && !pwd.equals("/")) {
             items.add(new RemoteFile(PARENT_DIR, 0, "", true));
         }
         remoteAll.stream().filter(f -> showHidden || !f.name().startsWith(".")).forEach(items::add);
@@ -649,10 +672,11 @@ public class MainWindow {
 
     /** Ghi lỗi gốc vào nhật ký và hiện hộp thoại với câu dễ hiểu (không chặn). */
     private void showError(Throwable ex) {
-        appendLog("LỖI: " + ex.getMessage());
-        if (connected && ErrorText.isConnectionLost(ex)) {
-            disconnect();
+        if (ex instanceof RemoteSession.ConnectionLostException && isConnected()) {
+            onConnectionLost(ex);   // mọi nơi gặp lỗi mất kết nối đều đi qua đây
+            return;
         }
+        appendLog("LỖI: " + ex.getMessage());
         boolean malware = ErrorText.isMalware(ex);
         // Có nút CLOSE (CANCEL_CLOSE) thì nút X / Esc mới đóng được hộp thoại (chỉ có OK thì JavaFX bỏ qua X)
         Alert a = new Alert(malware ? Alert.AlertType.WARNING : Alert.AlertType.ERROR, ErrorText.of(ex), ButtonType.CLOSE);
@@ -666,13 +690,46 @@ public class MainWindow {
         a.show();
     }
 
-    /** Nút Kết nối / Ngắt kết nối. */
+    /** Nút Kết nối / Ngắt kết nối / Kết nối lại (khi đang CONNECTING thì nút bị khóa). */
     private void onConnectClicked() {
-        if (!connected) {
-            connect();
-        } else {
+        if (isConnected()) {
             disconnect();
+        } else {
+            connect();
         }
+    }
+
+    /**
+     * Kết nối duyệt chết ngoài ý muốn (timeout, socket đứt, heartbeat lỗi): giải phóng phiên cũ và hàng đợi truyền,
+     * chuyển sang CONNECTION_LOST để người dùng bấm "Kết nối lại". Gọi trên luồng JavaFX.
+     */
+    private void onConnectionLost(Throwable ex) {
+        if (!isConnected()) {
+            return;   // đã xử lý (vd heartbeat và một lệnh cùng phát hiện)
+        }
+        closeTransfers();
+        session.close();
+        setState(ConnectionState.CONNECTION_LOST, "");
+        appendLog("MẤT KẾT NỐI: " + ex.getMessage());
+        showError(ex);   // lúc này không còn CONNECTED nên hiện hộp thoại bình thường
+    }
+
+    /** Chạy định kỳ trên luồng heartbeat: kết nối duyệt rảnh lâu thì xếp một NOOP vào worker. */
+    private void heartbeatTick() {
+        RemoteSession s = session;
+        if (!isConnected() || s.idleMillis() < HEARTBEAT_IDLE_SECONDS * 1000) {
+            return;
+        }
+        worker.submit(() -> {
+            if (s != session || s.idleMillis() < HEARTBEAT_IDLE_SECONDS * 1000) {
+                return;   // phiên đã đổi, hoặc vừa có lệnh khác chạy trong lúc chờ
+            }
+            try {
+                s.noop();
+            } catch (Exception ex) {
+                Platform.runLater(() -> showError(ex));
+            }
+        });
     }
 
     /**
@@ -693,9 +750,10 @@ public class MainWindow {
         PREFS.put(PREF_HOST, host);
         PREFS.put(PREF_PORT, String.valueOf(port));
         PREFS.put(PREF_USER, user);
+        releaseSession();
         session = newSession();
         RemoteSession s = session;
-        connectButton.setDisable(true);
+        setState(ConnectionState.CONNECTING, "");
         worker.submit(() -> {
             try {
                 s.connect(host, port);
@@ -703,7 +761,7 @@ public class MainWindow {
                     s.close();
                     Platform.runLater(() -> {
                         appendLog("Đã hủy: máy chủ không hỗ trợ mã hóa TLS.");
-                        connectButton.setDisable(false);
+                        setState(ConnectionState.DISCONNECTED, "");
                     });
                     return;
                 }
@@ -714,17 +772,16 @@ public class MainWindow {
                 Platform.runLater(() -> {
                     closeTransfers();
                     transfers = newTransferQueue(host, port, user, pass, secure);
-                    setConnected(true, role);
+                    setState(ConnectionState.CONNECTED, role);
                     showRemote(pwd, files);
-                    connectButton.setDisable(false);
                 });
             } catch (Exception ex) {
                 s.close();
                 Platform.runLater(() -> {
                     passField.clear();
+                    setState(ConnectionState.DISCONNECTED, "");
                     appendLog("LỖI KẾT NỐI: " + ex.getMessage());
                     showError(ex);
-                    connectButton.setDisable(false);
                 });
             }
         });
@@ -771,6 +828,15 @@ public class MainWindow {
             a.show();
         }
 
+    /**
+     * Giải phóng phiên cũ trước khi tạo phiên mới (kết nối lại sau khi mất kết nối): đóng hàng đợi truyền và
+     * socket của phiên cũ để không rò kết nối. Gọi trên luồng JavaFX.
+     */
+    private void releaseSession() {
+        closeTransfers();
+        session.close();
+    }
+
     /** QUIT + đóng socket trên luồng nền, sau đó đưa giao diện về trạng thái chưa kết nối. */
     private void disconnect() {
         closeTransfers();
@@ -778,7 +844,7 @@ public class MainWindow {
         worker.submit(() -> {
             s.quit();
             s.close();
-            Platform.runLater(() -> setConnected(false, ""));
+            Platform.runLater(() -> setState(ConnectionState.DISCONNECTED, ""));
         });
     }
 
@@ -804,20 +870,28 @@ public class MainWindow {
         return a.showAndWait().orElse(ButtonType.NO) == ButtonType.YES;
     }
 
-    /** Bật/tắt các ô và nút theo trạng thái kết nối và quyền của tài khoản. */
-    private void setConnected(boolean isConnected, String role) {
-        connected = isConnected;
-        connectButton.setText(isConnected ? "Ngắt kết nối" : "Kết nối");
+    /** Đổi trạng thái kết nối rồi bật/tắt các ô và nút cho khớp (và theo quyền của tài khoản khi đã đăng nhập). */
+    private void setState(ConnectionState newState, String role) {
+        state = newState;
+        boolean isConnected = newState == ConnectionState.CONNECTED;
+        connectButton.setText(switch (newState) {
+            case CONNECTED -> "Ngắt kết nối";
+            case CONNECTING -> "Đang kết nối…";
+            case CONNECTION_LOST -> "Kết nối lại";
+            case DISCONNECTED -> "Kết nối";
+        });
+        connectButton.setDisable(newState == ConnectionState.CONNECTING);
         connectButton.getStyleClass().remove(isConnected ? "primary" : "danger");
         if (!connectButton.getStyleClass().contains(isConnected ? "danger" : "primary")) {
             connectButton.getStyleClass().add(isConnected ? "danger" : "primary");
         }
         connectButton.setDefaultButton(!isConnected);
         ((Label) remoteTable.getPlaceholder()).setText(isConnected ? "Thư mục rỗng" : "Chưa kết nối đến máy chủ");
-        hostField.setDisable(isConnected);
-        portField.setDisable(isConnected);
-        userField.setDisable(isConnected);
-        passField.setDisable(isConnected);
+        boolean fieldsLocked = isConnected || newState == ConnectionState.CONNECTING;
+        hostField.setDisable(fieldsLocked);
+        portField.setDisable(fieldsLocked);
+        userField.setDisable(fieldsLocked);
+        passField.setDisable(fieldsLocked);
         downloadBtn.setDisable(!isConnected);
         openBtn.setDisable(!isConnected);
         cancelBtn.setDisable(true);
@@ -837,6 +911,9 @@ public class MainWindow {
             remoteTable.getItems().clear();
             remotePwd = "";
             remotePathField.setText(NOT_CONNECTED_TEXT);
+            if (newState == ConnectionState.CONNECTION_LOST) {
+                progressLabel.setText("⚠ Mất kết nối tới máy chủ — bấm \"Kết nối lại\"");
+            }
         }
         updateShareButton();
     }
@@ -850,7 +927,7 @@ public class MainWindow {
 
     private void updateShareButton() {
         RemoteFile sel = selectedRemote();
-        shareBtn.setDisable(!connected || sel == null || !canShare());
+        shareBtn.setDisable(!isConnected() || sel == null || !canShare());
     }
 
     /**
@@ -1139,7 +1216,7 @@ public class MainWindow {
 
     /** Tải file máy chủ vào thư mục tạm (không đụng thư mục cục bộ đang xem) rồi mở. */
     private void openRemote(RemoteFile sel) {
-        if (!connected || transfers == null) {
+        if (!isConnected() || transfers == null) {
             return;
         }
         Path dest;
@@ -1311,7 +1388,7 @@ public class MainWindow {
             if (parent != null && parent.equals(localDir)) {
                 refreshLocalTable();
             }
-        } else if (connected && job.remoteDir().equals(remotePwd)) {
+        } else if (isConnected() && job.remoteDir().equals(remotePwd)) {
             refreshRemoteTable();
         }
     }
@@ -1575,7 +1652,7 @@ public class MainWindow {
     private void setupLocalDrag() {
         localTable.setOnDragDetected(e -> {
             List<LocalFile> sel = selectedLocalItems();
-            if (sel.isEmpty() || !connected || !session.canWrite()) {
+            if (sel.isEmpty() || !isConnected() || !session.canWrite()) {
                 return;
             }
             draggedLocal = List.copyOf(sel);
@@ -1604,7 +1681,7 @@ public class MainWindow {
     private void setupRemoteDrop() {
         remoteTable.setOnDragDetected(e -> {
             List<RemoteFile> sel = selectedRemoteFiles();
-            if (sel.isEmpty() || !connected) {
+            if (sel.isEmpty() || !isConnected()) {
                 return;
             }
             draggedRemote = List.copyOf(sel);
@@ -1615,7 +1692,7 @@ public class MainWindow {
         });
         remoteTable.setOnDragDone(e -> draggedRemote = List.of());
         remoteTable.setOnDragOver(e -> {
-            boolean canUpload = connected && session.canWrite();
+            boolean canUpload = isConnected() && session.canWrite();
             if (canUpload && (!draggedLocal.isEmpty() || e.getDragboard().hasFiles())) {
                 e.acceptTransferModes(TransferMode.COPY);
             }

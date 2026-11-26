@@ -46,6 +46,12 @@ public final class FakeFtpServer implements AutoCloseable {
     private volatile long rateBytesPerSec;
     private volatile long rttMs;
     private volatile int listingSize = 50;
+    /** true: vẫn nhận lệnh nhưng không trả lời (giả lập server treo / mạng nghẽn). */
+    private volatile boolean silent;
+    /** true: lệnh kế tiếp nhận "421" rồi server đóng kết nối (giả lập server ngắt phiên rảnh). */
+    private volatile boolean closeWith421;
+    /** Trễ trước khi trả "226" sau STOR (giả lập server quét mã độc lâu). */
+    private volatile long storEndDelayMs;
 
     public FakeFtpServer() throws IOException {
         listener = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
@@ -63,6 +69,21 @@ public final class FakeFtpServer implements AutoCloseable {
 
     public FakeFtpServer rtt(long ms) {
         this.rttMs = ms;
+        return this;
+    }
+
+    public FakeFtpServer silent(boolean on) {
+        this.silent = on;
+        return this;
+    }
+
+    public FakeFtpServer closeWith421(boolean on) {
+        this.closeWith421 = on;
+        return this;
+    }
+
+    public FakeFtpServer storEndDelay(long ms) {
+        this.storEndDelayMs = ms;
         return this;
     }
 
@@ -155,6 +176,9 @@ public final class FakeFtpServer implements AutoCloseable {
         }
 
         private void reply(String line) {
+            if (silent) {
+                return;
+            }
             if (rttMs > 0) {
                 try {
                     Thread.sleep(rttMs);
@@ -173,6 +197,10 @@ public final class FakeFtpServer implements AutoCloseable {
                 int sp = line.indexOf(' ');
                 String cmd = (sp < 0 ? line : line.substring(0, sp)).toUpperCase();
                 String arg = sp < 0 ? "" : line.substring(sp + 1);
+                if (closeWith421) {
+                    reply("421 Idle timeout, closing control connection");
+                    return;
+                }
                 switch (cmd) {
                     case "USER" -> reply("331 password please");
                     case "PASS" -> reply("230 Logged in (roles: employee@/)");
@@ -309,8 +337,17 @@ public final class FakeFtpServer implements AutoCloseable {
             }
             if (ok) {
                 uploads.put(resolve(name), got);
+                sleepQuietly(storEndDelayMs);
             }
             reply(ok ? "226 Transfer complete" : "426 Transfer aborted");
+        }
+
+        private void sleepQuietly(long ms) {
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         /** Ngủ cho tới khi tốc độ trung bình không vượt quá rateBytesPerSec. */

@@ -34,6 +34,16 @@ public interface RemoteSession extends Closeable {
         }
     }
 
+    /**
+     * Kênh điều khiển đã chết (hết thời gian chờ, socket bị ngắt, máy chủ đóng kết nối). Phiên đã tự đóng socket;
+     * muốn làm tiếp phải tạo phiên mới và đăng nhập lại.
+     */
+    class ConnectionLostException extends IOException {
+        public ConnectionLostException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     void setLogListener(LogListener listener);
 
     /** Mở kênh điều khiển, đọc lời chào 220 và nâng lên TLS nếu máy chủ hỗ trợ (xem {@link #isSecure()}). */
@@ -53,9 +63,6 @@ public interface RemoteSession extends Closeable {
     void cwd(String path) throws IOException, FtpException;
 
     void cdup() throws IOException, FtpException;
-
-    /** Gửi lệnh NOOP để kiểm tra và giữ kết nối không bị idle timeout. */
-    void noop() throws IOException, FtpException;
 
     void mkd(String name) throws IOException, FtpException;
 
@@ -78,6 +85,12 @@ public interface RemoteSession extends Closeable {
 
     /** Tải {@code src} lên thành tệp {@code name} trong thư mục hiện tại; trả về ghi chú như {@link #download}. */
     String upload(String name, Path src, Progress progress) throws IOException, FtpException;
+
+    /** Gửi NOOP để giữ kết nối và kiểm tra máy chủ còn trả lời (heartbeat). */
+    void noop() throws IOException, FtpException;
+
+    /** Số mili-giây kể từ lần cuối kênh điều khiển gửi/nhận (để heartbeat chỉ chạy khi đang rảnh). */
+    long idleMillis();
 
     /** Gửi QUIT, bỏ qua lỗi (dùng khi ngắt kết nối hoặc đóng cửa sổ). */
     void quit();
