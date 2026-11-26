@@ -139,6 +139,8 @@ public final class StorCommandHandler implements CommandHandler {
             out.flush();
         } catch (IOException | RuntimeException e) {
             transferOk = false;
+            // ghi lai loi goc: khong co dong nay thi chi thay "426 Transfer aborted" ma khong biet vi sao
+            System.err.println("[" + session.sessionId() + "] STOR receive failed after " + received + " bytes: " + e);
         } finally {
             session.getDataConnection().close();
             session.setState(SessionState.AUTHENTICATED);
