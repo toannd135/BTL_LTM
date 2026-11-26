@@ -10,6 +10,8 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
@@ -45,12 +47,23 @@ public class FtpSession implements RemoteSession {
     private static final Pattern ROLES_PATTERN = Pattern.compile("\\(roles:\\s*([^)]*)\\)");
 
     private static final int CONNECT_TIMEOUT_MS = 5000;
+    /** Chờ tối đa cho một trả lời trên kênh điều khiển; quá hạn coi như mất kết nối (readLine không treo mãi). */
+    private static final int DEFAULT_CONTROL_TIMEOUT_MS = 10_000;
+    /**
+     * Riêng trả lời cuối của lần truyền ("226"): máy chủ còn quét mã độc/ghi kho sau khi nhận xong dữ liệu,
+     * tệp lớn có thể mất cả phút, nên chờ lâu hơn để không báo nhầm mất kết nối.
+     */
+    private static final int TRANSFER_END_TIMEOUT_MS = 180_000;
     private static final int TRANSFER_BUFFER_SIZE = 8192;
     /** Vai trò trả về từ {@link #login} khi máy chủ không báo vai trò. */
     private static final String DEFAULT_ROLE = "ftp";
 
     private List<String> roles = new ArrayList<>();
+    /** Thời gian chờ mỗi trả lời trên kênh điều khiển (ms). */
+    private final int controlTimeoutMs;
     private Socket control;
+    /** Thời điểm (nanoTime) kênh điều khiển gửi/nhận lần cuối; đọc từ luồng heartbeat. */
+    private volatile long lastActivityNs = System.nanoTime();
     /** Socket data của lần truyền đang chạy (để nút Hủy cắt được từ luồng giao diện). */
     private volatile Socket activeData;
     private volatile boolean cancelled;
@@ -61,6 +74,15 @@ public class FtpSession implements RemoteSession {
     private PrintWriter writer;
     private LogListener logListener = (dir, line) -> {
     };
+
+    public FtpSession() {
+        this(DEFAULT_CONTROL_TIMEOUT_MS);
+    }
+
+    /** @param controlTimeoutMs chờ tối đa mỗi trả lời trên kênh điều khiển; test dùng giá trị nhỏ để chạy nhanh */
+    public FtpSession(int controlTimeoutMs) {
+        this.controlTimeoutMs = controlTimeoutMs;
+    }
 
     @Override
     public void setLogListener(LogListener listener) {
@@ -73,6 +95,7 @@ public class FtpSession implements RemoteSession {
         this.tls = null;
         control = new Socket();
         control.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+        control.setSoTimeout(controlTimeoutMs);
         attachStreams(control);
         readReply(); // 220 greeting
         negotiateTls(host, port);
@@ -91,6 +114,7 @@ public class FtpSession implements RemoteSession {
         try {
             TlsClient client = new TlsClient(host, port);
             control = client.wrap(control, host, port);
+            control.setSoTimeout(controlTimeoutMs);
             attachStreams(control);
             tls = client;
             logListener.onLine("INFO", (client.firstUse() ? "Tin chứng chỉ máy chủ lần đầu, " : "Chứng chỉ khớp lần trước, ")
@@ -119,20 +143,14 @@ public class FtpSession implements RemoteSession {
      * khi đó trả về cả khối (nối bằng '\n'), dòng đầu giữ mã.
      */
     private String readReply() throws IOException {
-        String line = reader.readLine();
-        if (line == null) {
-            throw new EOFException("Server da dong ket noi");
-        }
+        String line = readControlLine();
         logListener.onLine("RECV", line);
         if (line.length() >= 4 && line.charAt(3) == '-') {
             String end = line.substring(0, 3) + " ";
             StringBuilder sb = new StringBuilder(line);
             String next;
             do {
-                next = reader.readLine();
-                if (next == null) {
-                    throw new EOFException("Server da dong ket noi");
-                }
+                next = readControlLine();
                 logListener.onLine("RECV", next);
                 sb.append('\n').append(next);
             } while (!next.startsWith(end));
@@ -141,12 +159,54 @@ public class FtpSession implements RemoteSession {
         return line;
     }
 
+    /** Như {@link #readReply()} nhưng chờ tối đa {@code timeoutMs} (dùng cho "226" sau khi truyền xong). */
+    private String readReply(int timeoutMs) throws IOException {
+        control.setSoTimeout(timeoutMs);
+        try {
+            return readReply();
+        } finally {
+            if (!control.isClosed()) {
+                control.setSoTimeout(controlTimeoutMs);
+            }
+        }
+    }
+
+    /**
+     * Đọc một dòng của kênh điều khiển. Mọi lỗi I/O ở đây (hết giờ, socket đứt, máy chủ đóng) đều nghĩa là kênh
+     * điều khiển không còn dùng được: đóng socket và báo một loại lỗi duy nhất {@link ConnectionLostException}.
+     */
+    private String readControlLine() throws IOException {
+        String line;
+        try {
+            line = reader.readLine();
+        } catch (IOException e) {
+            throw connectionLost(e);
+        }
+        if (line == null) {
+            throw connectionLost(new EOFException("Máy chủ đã đóng kết nối"));
+        }
+        lastActivityNs = System.nanoTime();
+        return line;
+    }
+
+    private ConnectionLostException connectionLost(IOException cause) {
+        close();
+        String why = cause instanceof SocketTimeoutException
+                ? "Máy chủ không trả lời quá " + controlTimeoutMs / 1000 + " giây"
+                : cause.getMessage();
+        return new ConnectionLostException("Mất kết nối tới máy chủ: " + why, cause);
+    }
+
     /** Gửi một lệnh (kết thúc CRLF) và đọc trả lời; mật khẩu được che trong nhật ký. */
     private String sendAndRead(String command) throws IOException {
         String logged = command.startsWith("PASS") ? "PASS ****" : command;
         logListener.onLine("SEND", logged);
         writer.print(command + "\r\n");
         writer.flush();
+        if (writer.checkError()) {   // PrintWriter nuốt lỗi ghi: phải tự hỏi
+            throw connectionLost(new SocketException("không gửi được lệnh"));
+        }
+        lastActivityNs = System.nanoTime();
         return readReply();
     }
 
@@ -321,7 +381,7 @@ public class FtpSession implements RemoteSession {
         requireOk(sendAndRead("RETR " + remoteName), 150, 125);
         data = secureData(data);
         pump(data, data.getInputStream(), out, onBytes);
-        requireOk(readReply(), 226);
+        requireOk(readReply(TRANSFER_END_TIMEOUT_MS), 226);
     }
 
     /** STOR: gửi nội dung {@code in} lên tệp {@code remoteName}; {@code onBytes} nhận tổng số byte đã gửi. */
@@ -330,7 +390,7 @@ public class FtpSession implements RemoteSession {
         requireOk(sendAndRead("STOR " + remoteName), 150, 125);
         data = secureData(data);
         pump(data, in, data.getOutputStream(), onBytes);
-        requireOk(readReply(), 226);
+        requireOk(readReply(TRANSFER_END_TIMEOUT_MS), 226);
     }
 
     /**
@@ -359,9 +419,19 @@ public class FtpSession implements RemoteSession {
             data.close();
         }
         if (cancelled) {
-            readReply(); // 426 Transfer aborted (hoặc 226 nếu vừa kịp xong)
+            readReply(TRANSFER_END_TIMEOUT_MS); // 426 Transfer aborted (hoặc 226 nếu vừa kịp xong)
             throw new CancelledException("Đã hủy truyền");
         }
+    }
+
+    @Override
+    public void noop() throws IOException, FtpException {
+        requireOk(sendAndRead("NOOP"), 200);
+    }
+
+    @Override
+    public long idleMillis() {
+        return (System.nanoTime() - lastActivityNs) / 1_000_000;
     }
 
     @Override
