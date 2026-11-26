@@ -54,6 +54,9 @@ public interface RemoteSession extends Closeable {
 
     void cdup() throws IOException, FtpException;
 
+    /** Gửi lệnh NOOP để kiểm tra và giữ kết nối không bị idle timeout. */
+    void noop() throws IOException, FtpException;
+
     void mkd(String name) throws IOException, FtpException;
 
     void rmd(String name) throws IOException, FtpException;
