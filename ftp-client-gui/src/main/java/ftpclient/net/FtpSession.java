@@ -380,7 +380,7 @@ public class FtpSession implements RemoteSession {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("RETR " + remoteName), 150, 125);
         data = secureData(data);
-        pump(data, data.getInputStream(), out, onBytes);
+        pump(data, data.getInputStream(), out, onBytes, false);
         requireOk(readReply(TRANSFER_END_TIMEOUT_MS), 226);
     }
 
@@ -389,7 +389,7 @@ public class FtpSession implements RemoteSession {
         Socket data = openPassiveDataSocket();
         requireOk(sendAndRead("STOR " + remoteName), 150, 125);
         data = secureData(data);
-        pump(data, in, data.getOutputStream(), onBytes);
+        pump(data, in, data.getOutputStream(), onBytes, true);
         requireOk(readReply(TRANSFER_END_TIMEOUT_MS), 226);
     }
 
@@ -397,7 +397,8 @@ public class FtpSession implements RemoteSession {
      * Chép dữ liệu qua kết nối data. Bị {@link #cancelTransfer()} thì socket đã bị cắt (RST): đọc nốt
      * reply 426 của server cho đồng bộ kênh điều khiển rồi ném CancelledException. Server tự xóa tệp tải lên dở.
      */
-    private void pump(Socket data, InputStream in, OutputStream out, LongConsumer onBytes) throws IOException {
+    private void pump(Socket data, InputStream in, OutputStream out, LongConsumer onBytes, boolean sending)
+            throws IOException {
         cancelled = false;
         activeData = data;
         try {
@@ -410,6 +411,9 @@ public class FtpSession implements RemoteSession {
                 onBytes.accept(total);
             }
             out.flush();
+            if (sending && !cancelled) {
+                finishSending(data);
+            }
         } catch (IOException e) {
             if (!cancelled) {
                 throw e;
@@ -421,6 +425,24 @@ public class FtpSession implements RemoteSession {
         if (cancelled) {
             readReply(TRANSFER_END_TIMEOUT_MS); // 426 Transfer aborted (hoặc 226 nếu vừa kịp xong)
             throw new CancelledException("Đã hủy truyền");
+        }
+    }
+
+    /**
+     * Đóng chiều gửi một cách lịch sự sau khi tải lên: báo hết dữ liệu (shutdownOutput; với TLS là close_notify)
+     * rồi đọc bỏ những gì server còn gửi (vd TLS session ticket) cho tới khi server đóng.
+     *
+     * <p>Không làm vậy mà đóng socket ngay khi còn dữ liệu chưa đọc thì hệ điều hành gửi RST thay cho FIN; RST hủy
+     * luôn phần cuối của tệp còn đang trên đường đi, server nhận thiếu và trả "426 Transfer aborted". Trên
+     * localhost không thấy lỗi vì dữ liệu tới ngay; qua mạng có độ trễ (vd lên Azure) thì tệp vài chục KB hỏng.
+     */
+    private static void finishSending(Socket data) throws IOException {
+        data.shutdownOutput();
+        data.setSoTimeout(TRANSFER_END_TIMEOUT_MS);
+        InputStream drain = data.getInputStream();
+        byte[] skip = new byte[1024];
+        while (drain.read(skip) != -1) {
+            // bỏ qua: chỉ chờ server đóng kết nối dữ liệu
         }
     }
 
