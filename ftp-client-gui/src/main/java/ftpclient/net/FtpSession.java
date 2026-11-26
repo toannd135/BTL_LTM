@@ -49,6 +49,8 @@ public class FtpSession implements RemoteSession {
     private static final int CONNECT_TIMEOUT_MS = 5000;
     /** Chờ tối đa cho một trả lời trên kênh điều khiển; quá hạn coi như mất kết nối (readLine không treo mãi). */
     private static final int DEFAULT_CONTROL_TIMEOUT_MS = 10_000;
+    /** Mã trả lời "421 Service not available, closing control connection". */
+    private static final String SERVICE_CLOSING = "421";
     /**
      * Riêng trả lời cuối của lần truyền ("226"): máy chủ còn quét mã độc/ghi kho sau khi nhận xong dữ liệu,
      * tệp lớn có thể mất cả phút, nên chờ lâu hơn để không báo nhầm mất kết nối.
@@ -143,6 +145,17 @@ public class FtpSession implements RemoteSession {
      * khi đó trả về cả khối (nối bằng '\n'), dòng đầu giữ mã.
      */
     private String readReply() throws IOException {
+        String reply = readFullReply();
+        if (reply.startsWith(SERVICE_CLOSING + " ")) {
+            // 421: máy chủ chủ động đóng kết nối (vd quá thời gian rảnh, quá nhiều lần đăng nhập sai)
+            close();
+            throw new ConnectionLostException("Máy chủ đã đóng kết nối: " + replyText(reply), null);
+        }
+        return reply;
+    }
+
+    /** Đọc nguyên một trả lời (gộp các dòng "xxx-..." của trả lời nhiều dòng), chưa xét mã. */
+    private String readFullReply() throws IOException {
         String line = readControlLine();
         logListener.onLine("RECV", line);
         if (line.length() >= 4 && line.charAt(3) == '-') {
